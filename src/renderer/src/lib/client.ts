@@ -2,6 +2,7 @@ import {
   type AgentInfo,
   type AgentKind,
   type AgentRun,
+  type DeviceCandidate,
   type DeviceInfo,
   type DispatchInput,
   type HostSettings,
@@ -9,6 +10,10 @@ import {
   type HostToClient,
   newId,
   type Project,
+  type RemoteDevice,
+  type RemoteDeviceInput,
+  type RemoteDevicePatch,
+  type RemoteDirListing,
   type RunEvent,
   type Task,
   type TaskInput,
@@ -40,9 +45,15 @@ export interface ClientHandle {
   runEvents(runId: string, after?: number): Promise<RunEvent[]>;
   cancelRun(runId: string): Promise<void>;
   replyRun(runId: string, text: string): Promise<AgentRun>;
-  addProject(input: { path: string; name?: string; defaultAgent?: AgentKind | null }): Promise<Project>;
+  addProject(input: { path: string; name?: string; defaultAgent?: AgentKind | null; deviceId?: string | null }): Promise<Project>;
   updateProject(id: string, patch: { name?: string; defaultAgent?: AgentKind | null }): Promise<Project>;
   removeProject(id: string): Promise<void>;
+  addRemoteDevice(input: RemoteDeviceInput): Promise<RemoteDevice>;
+  updateRemoteDevice(id: string, patch: RemoteDevicePatch): Promise<RemoteDevice>;
+  removeRemoteDevice(id: string): Promise<void>;
+  checkRemoteDevice(id: string): Promise<RemoteDevice>;
+  discoverRemoteDevices(): Promise<DeviceCandidate[]>;
+  listRemoteDirectory(id: string, path: string): Promise<RemoteDirListing>;
   refreshAgents(): Promise<AgentInfo[]>;
   updateSettings(patch: Partial<HostSettings>): Promise<HostSettings>;
   refreshInvite(): Promise<void>;
@@ -227,6 +238,12 @@ export async function connectClient(
     addProject: (input) => post("/api/projects", input),
     updateProject: (id, body) => patch(`/api/projects/${encodeURIComponent(id)}`, body),
     removeProject: (id) => remove(`/api/projects/${encodeURIComponent(id)}`),
+    addRemoteDevice: (input) => post("/api/remote-devices", input),
+    updateRemoteDevice: (id, body) => patch(`/api/remote-devices/${encodeURIComponent(id)}`, body),
+    removeRemoteDevice: (id) => remove(`/api/remote-devices/${encodeURIComponent(id)}`),
+    checkRemoteDevice: (id) => post(`/api/remote-devices/${encodeURIComponent(id)}/check`),
+    discoverRemoteDevices: async () => (await post<{ candidates: DeviceCandidate[] }>("/api/remote-devices/discover")).candidates,
+    listRemoteDirectory: (id, path) => post(`/api/remote-devices/${encodeURIComponent(id)}/ls`, { path }),
     refreshAgents: async () => (await post<{ agents: AgentInfo[] }>("/api/agents/refresh")).agents,
     updateSettings: (body) => post("/api/settings", body),
     refreshInvite: () => post("/api/invite").then(() => undefined),

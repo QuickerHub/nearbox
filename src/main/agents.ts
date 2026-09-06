@@ -7,6 +7,7 @@ import { type ResolvedCommand, versionKey } from "./agent-output";
 
 export {
   buildInvocation,
+  buildShellCommandLine,
   createOutputParser,
   quoteForCmd,
   truncate,
@@ -15,12 +16,13 @@ export {
   type OutputParser,
   type ParseResult,
   type ResolvedCommand,
+  type ShellCommandLine,
 } from "./agent-output";
 
 const IS_WINDOWS = process.platform === "win32";
 
 /** Names each agent is installed under, in preference order. */
-const COMMAND_NAMES: Record<AgentKind, string[]> = {
+export const COMMAND_NAMES: Record<AgentKind, string[]> = {
   cursor: ["cursor-agent", "agent"],
   codex: ["codex"],
   grok: ["grok"],

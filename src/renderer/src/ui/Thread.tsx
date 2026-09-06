@@ -213,16 +213,20 @@ export function Thread({ snapshot, client, task, onDeleted, children }: ThreadPr
             </button>
           )}
 
-          {task.notes.map((note) => (
-            <ThreadItem
-              key={note.id}
-              note={note}
-              run={note.runId ? runsById.get(note.runId) : undefined}
-              client={client}
-              mine={note.from.id === client.self.id}
-              newest={note.id === lastRunNoteId}
-            />
-          ))}
+          {task.notes.map((note) => {
+            const run = note.runId ? runsById.get(note.runId) : undefined;
+            return (
+              <ThreadItem
+                key={note.id}
+                note={note}
+                run={run}
+                projectName={run ? snapshot.projects.find((item) => item.id === run.projectId)?.name : undefined}
+                client={client}
+                mine={note.from.id === client.self.id}
+                newest={note.id === lastRunNoteId}
+              />
+            );
+          })}
         </div>
       </div>
 
@@ -234,12 +238,14 @@ export function Thread({ snapshot, client, task, onDeleted, children }: ThreadPr
 function ThreadItem({
   note,
   run,
+  projectName,
   client,
   mine,
   newest,
 }: {
   note: TaskNote;
   run?: AgentRun;
+  projectName?: string;
   client: ClientHandle;
   mine: boolean;
   newest: boolean;
@@ -263,7 +269,16 @@ function ThreadItem({
         </div>
       );
     }
-    return <RunBlock run={run} client={client} onStop={(runId) => void client.cancelRun(runId)} initiallyOpen={newest && run.status !== "succeeded"} />;
+    return (
+      <RunBlock
+        run={run}
+        client={client}
+        opensConversation={!run.resumedFromRunId}
+        projectName={projectName}
+        onStop={(runId) => void client.cancelRun(runId)}
+        initiallyOpen={newest && run.status !== "succeeded"}
+      />
+    );
   }
   const fileUrl = note.file ? client.fileUrl(note.file.id) : undefined;
   const image = note.file && /^image\//.test(note.file.mediaType) && fileUrl;

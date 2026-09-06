@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AGENT_LABELS, type AgentAccess, type AgentKind, type HostSnapshot, isRunActive, type Task } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
-import { planSend, type SendAction } from "../lib/plan";
+import { planSend, type SendAction, type SendPlan } from "../lib/plan";
 import { Icon, type IconName } from "./Icons";
 import { Menu, MenuDivider, MenuHeading, MenuItem } from "./Menu";
 
@@ -17,9 +17,12 @@ interface ChatComposerProps {
   task?: Task;
   chips: ComposerChips;
   onChips(patch: Partial<ComposerChips>): void;
-  onSend(action: SendAction, text: string): Promise<void>;
+  onSend(plan: SendPlan, text: string): Promise<void>;
   onFiles(files: File[]): Promise<void>;
   onStop?(): void;
+  /** The next message opens a new agent session instead of continuing the task's conversation. */
+  fresh: boolean;
+  onFresh(value: boolean): void;
   /** Short confirmation from the parent ("已记录…"), shown in place of the hint. */
   notice?: string | null;
   variant: "hero" | "dock";
@@ -29,10 +32,10 @@ interface ChatComposerProps {
 const SEND_ICON: Record<SendAction, IconName> = {
   capture: "send",
   note: "send",
-  reply: "reply",
+  reply: "send",
   run: "play",
-  "note-run": "play",
-  "create-run": "play",
+  "note-run": "send",
+  "create-run": "send",
 };
 
 /**
@@ -48,6 +51,8 @@ export function ChatComposer({
   onSend,
   onFiles,
   onStop,
+  fresh,
+  onFresh,
   notice,
   variant,
   autoFocus,
@@ -73,9 +78,9 @@ export function ChatComposer({
     agentInfo,
     projectId: project ? project.id : "",
     projectName: project?.name ?? "",
+    runs: snapshot.runs,
     latestRun,
-    activeRun,
-    activeAgentLabel: activeRun ? AGENT_LABELS[activeRun.agent] : undefined,
+    fresh,
   });
 
   useEffect(() => {
@@ -98,7 +103,7 @@ export function ChatComposer({
     setBusy(true);
     setError(null);
     try {
-      await onSend(plan.action, draft.trim());
+      await onSend(plan, draft.trim());
       setDraft("");
       requestAnimationFrame(resize);
     } catch (err) {
@@ -125,11 +130,13 @@ export function ChatComposer({
   };
 
   const placeholder = task
-    ? activeRun
-      ? "Agent 正在工作…想到什么先记下来，下次运行会带上"
-      : chips.agent
-        ? "补充说明、追加要求，或者直接点右边运行…"
-        : "补充说明、贴截图…"
+    ? !chips.agent
+      ? "补充说明、贴截图…"
+      : plan.action === "reply"
+        ? activeRun
+          ? "Agent 正在工作…现在输入的会排在这一轮之后发给它"
+          : `接着和 ${AGENT_LABELS[chips.agent]} 说…`
+        : "补充说明、追加要求，或者直接点右边运行…"
     : chips.agent
       ? "想让 Agent 做什么？一句话说清楚，回车就开跑"
       : "记一条想法、bug、要做的事…";
@@ -207,7 +214,19 @@ export function ChatComposer({
         </div>
       </form>
       <p className={`composer__hint${error ? " composer__hint--error" : notice ? " composer__hint--notice" : ""}`}>
-        {error ?? notice ?? plan.hint}
+        <span className="composer__hint-text">
+          {error ?? notice ?? plan.hint}
+          {!error && !notice && plan.continuing ? (
+            <button type="button" className="link-btn link-btn--muted composer__hint-link" onClick={() => onFresh(true)}>
+              改为新会话
+            </button>
+          ) : null}
+          {!error && !notice && plan.canContinue ? (
+            <button type="button" className="link-btn link-btn--muted composer__hint-link" onClick={() => onFresh(false)}>
+              接着上次会话
+            </button>
+          ) : null}
+        </span>
         {desktop && !error && !notice ? <span className="composer__keys">Enter 发送 · Shift+Enter 换行</span> : null}
       </p>
     </div>

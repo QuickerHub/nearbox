@@ -5,9 +5,12 @@ import {
   type AgentRun,
   DEFAULT_SETTINGS,
   type DeviceInfo,
+  type FileMeta,
   type HostSettings,
   type Project,
+  type RemoteDevice,
   type Task,
+  type TaskNote,
 } from "@shared/protocol";
 
 export interface PairedSession {
@@ -19,6 +22,8 @@ export interface StoredFile {
   path: string;
   name: string;
   mediaType: string;
+  /** Missing on files stored before uploads were separated from messages. */
+  byteLength?: number;
 }
 
 export interface PersistedState {
@@ -27,6 +32,7 @@ export interface PersistedState {
   projects: Project[];
   runs: AgentRun[];
   sessions: PairedSession[];
+  remoteDevices: RemoteDevice[];
   files: Record<string, StoredFile>;
   settings: HostSettings;
 }
@@ -40,6 +46,7 @@ function emptyState(): PersistedState {
     projects: [],
     runs: [],
     sessions: [],
+    remoteDevices: [],
     files: {},
     settings: { ...DEFAULT_SETTINGS, agents: {} },
   };
@@ -74,6 +81,7 @@ export class Store {
         projects: Array.isArray(raw.projects) ? raw.projects : base.projects,
         runs: Array.isArray(raw.runs) ? raw.runs.map(normalizeRun) : base.runs,
         sessions: Array.isArray(raw.sessions) ? raw.sessions : base.sessions,
+        remoteDevices: Array.isArray(raw.remoteDevices) ? raw.remoteDevices.map(normalizeDevice) : base.remoteDevices,
         files: raw.files && typeof raw.files === "object" ? raw.files : base.files,
         settings: {
           ...base.settings,
@@ -129,7 +137,27 @@ function normalizeTask(task: Task): Task {
     ...task,
     details: task.details ?? "",
     priority: task.priority ?? "normal",
-    notes: Array.isArray(task.notes) ? task.notes : [],
+    notes: Array.isArray(task.notes) ? task.notes.map(normalizeNote) : [],
+  };
+}
+
+/** Notes written before messages could carry several files had a single `file`. */
+function normalizeNote(note: TaskNote & { file?: FileMeta }): TaskNote {
+  const { file, ...rest } = note;
+  if (!file) {
+    return rest;
+  }
+  return { ...rest, files: Array.isArray(rest.files) && rest.files.length ? rest.files : [file] };
+}
+
+function normalizeDevice(device: RemoteDevice): RemoteDevice {
+  // Whether it is reachable is re-established on demand; what it reported last time is still useful.
+  return {
+    ...device,
+    platform: device.platform ?? "unknown",
+    status: "unknown",
+    error: undefined,
+    agents: Array.isArray(device.agents) ? device.agents : [],
   };
 }
 

@@ -49,6 +49,18 @@ test("resume reuses the previous session id", () => {
   assert.ok(buildInvocation("claude", direct(), resumed).args.includes("-r"));
 });
 
+test("codex gets each image as its own -i, before the flags and the stdin marker", () => {
+  const images = ["D:\\inbox\\a.png", "D:\\inbox\\b.jpg"];
+  const fresh = buildInvocation("codex", direct(), { ...request, images }).args;
+  assert.deepEqual(fresh.slice(0, 5), ["exec", "-i", images[0], "-i", images[1]]);
+  assert.equal(fresh.at(-1), "-");
+  const resumed = buildInvocation("codex", direct(), { ...request, images, resumeSessionId: "sess-9" }).args;
+  assert.deepEqual(resumed.slice(0, 7), ["exec", "resume", "sess-9", "-i", images[0], "-i", images[1]]);
+  // Other CLIs take the paths from the prompt text instead.
+  assert.ok(!buildInvocation("claude", direct(), { ...request, images }).args.includes("-i"));
+  assert.ok(!buildInvocation("cursor", direct(), { ...request, images }).args.includes(images[0]!));
+});
+
 test("cmd.exe fallback never puts the prompt on the command line", () => {
   const inv = buildInvocation("cursor", { file: "cmd.exe", prefixArgs: ["C:\\bin\\cursor-agent.cmd"], display: "", viaCmd: true }, request);
   assert.equal(inv.windowsVerbatimArguments, true);

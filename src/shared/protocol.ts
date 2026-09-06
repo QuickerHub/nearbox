@@ -55,12 +55,18 @@ export type TaskPriority = "normal" | "high";
 
 export type NoteKind = "note" | "status" | "run";
 
+/**
+ * One message in a task's thread. A note carries text, files, or both: what
+ * the user sent together stays together, so the thread shows a screenshot and
+ * the sentence about it as one bubble.
+ */
 export interface TaskNote {
   id: string;
   kind: NoteKind;
   from: Actor;
   text?: string;
-  file?: FileMeta;
+  /** Images and other files sent with this message, in the order they were attached. */
+  files?: FileMeta[];
   runId?: string;
   createdAt: string;
 }
@@ -88,9 +94,17 @@ export interface TaskInput {
   priority?: TaskPriority;
   projectId?: string | null;
   agent?: AgentKind | null;
+  /** Files uploaded beforehand (`POST /api/files`) that become the task's first message. */
+  fileIds?: string[];
 }
 
-export type TaskPatch = Partial<TaskInput>;
+export type TaskPatch = Partial<Omit<TaskInput, "fileIds">>;
+
+export interface NoteInput {
+  text?: string;
+  /** Files uploaded beforehand (`POST /api/files`) to send with this message. */
+  fileIds?: string[];
+}
 
 // ---------------------------------------------------------------------------
 // Projects
@@ -99,11 +113,96 @@ export type TaskPatch = Partial<TaskInput>;
 export interface Project {
   id: string;
   name: string;
+  /** Absolute path on the device the project lives on (this PC when `deviceId` is unset). */
   path: string;
+  /** Remote computer the directory is on; undefined means this PC. */
+  deviceId?: string;
   defaultAgent?: AgentKind;
   createdAt: string;
   lastUsedAt?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Remote devices (other computers reached over SSH)
+// ---------------------------------------------------------------------------
+
+export type DevicePlatform = "windows" | "linux" | "macos" | "unknown";
+
+export type RemoteDeviceStatus = "unknown" | "checking" | "online" | "offline";
+
+/**
+ * Another computer on the LAN that agents can run on. Nearbox reaches it with
+ * the local `ssh` client, so whatever works for `ssh <host>` in a terminal
+ * (config aliases, keys, agents) works here too.
+ */
+export interface RemoteDevice {
+  id: string;
+  /** What the user sees; defaults to the ssh alias or the hostname the device reports. */
+  name: string;
+  /** ssh destination: an alias from ~/.ssh/config, a hostname or an IP. */
+  host: string;
+  user?: string;
+  port?: number;
+  identityFile?: string;
+  platform: DevicePlatform;
+  /** Hostname the device reported about itself. */
+  hostName?: string;
+  /** Home directory on the device; prompt files and pid files go under <home>/.nearbox. */
+  home?: string;
+  status: RemoteDeviceStatus;
+  /** Why the last check failed (ssh stderr, first line). */
+  error?: string;
+  lastCheckedAt?: string;
+  /** Agent CLIs found on the device during the last check. */
+  agents: AgentInfo[];
+  createdAt: string;
+}
+
+export interface RemoteDeviceInput {
+  host: string;
+  user?: string;
+  port?: number;
+  identityFile?: string;
+  name?: string;
+}
+
+export type RemoteDevicePatch = Partial<RemoteDeviceInput>;
+
+/** Something on the network that looks like it could be added as a device. */
+export interface DeviceCandidate {
+  /** What to put in the `host` field. */
+  host: string;
+  /** Resolved address when `host` is an alias. */
+  address?: string;
+  user?: string;
+  port?: number;
+  /** Hostname learned from DNS or the ssh config comment. */
+  label?: string;
+  /** Guess from the SSH banner ("OpenSSH_for_Windows"). */
+  platform?: DevicePlatform;
+  source: "ssh-config" | "lan-scan";
+  /** Port 22 answered during discovery. */
+  reachable?: boolean;
+  /** Already added as a device. */
+  deviceId?: string;
+}
+
+export interface RemoteDirListing {
+  path: string;
+  parent?: string;
+  entries: { name: string; path: string }[];
+  /** Windows drive roots, only when listing the top level. */
+  roots?: string[];
+  /** The user's home directory, offered as a shortcut at the top level. */
+  home?: string;
+}
+
+export const PLATFORM_LABELS: Record<DevicePlatform, string> = {
+  windows: "Windows",
+  linux: "Linux",
+  macos: "macOS",
+  unknown: "未知系统",
+};
 
 // ---------------------------------------------------------------------------
 // Agents
@@ -144,8 +243,15 @@ export interface AgentRun {
   model?: string;
   /** Model the CLI reported it actually used. */
   modelLabel?: string;
+  /** Exactly what the agent was given. For a follow-up this is `message` plus a section listing `attachments`. */
   prompt: string;
+  /** The user's own words for this turn, when the turn was typed in the composer rather than generated from the task. */
+  message?: string;
+  /** Files sent with this turn; the prompt names their paths and CLIs that take images natively get them directly. */
+  attachments?: FileMeta[];
   cwd: string;
+  /** Remote computer the agent ran on; undefined means this PC. */
+  deviceId?: string;
   status: RunStatus;
   requestedBy: Actor;
   createdAt: string;
@@ -220,6 +326,8 @@ export interface DispatchInput {
   agent: AgentKind;
   projectId: string;
   prompt?: string;
+  /** Files uploaded beforehand (`POST /api/files`) to send with `prompt`. */
+  fileIds?: string[];
   access?: AgentAccess;
   model?: string;
   /** Continue the conversation of this earlier run (same task, same agent). */
@@ -332,6 +440,7 @@ export interface HostSnapshot {
   port: number;
   invite: InviteInfo | null;
   devices: DeviceInfo[];
+  remoteDevices: RemoteDevice[];
   tasks: Task[];
   projects: Project[];
   runs: AgentRun[];
@@ -399,6 +508,13 @@ export function isImageMediaType(mediaType: string | undefined): boolean {
   return IMAGE_TYPES.includes(value as (typeof IMAGE_TYPES)[number]);
 }
 
+export function isImageFile(file: Pick<FileMeta, "mediaType">): boolean {
+  return isImageMediaType(file.mediaType);
+}
+
+/** How many files one message may carry. */
+export const MAX_FILES_PER_MESSAGE = 8;
+
 export function newId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -431,6 +547,47 @@ export function isRunActive(run: Pick<AgentRun, "status">): boolean {
 }
 
 export { canContinueRun, sessionIdAlongChain } from "./conversation";
+
+/**
+ * Agents that can run in `project`: the ones installed on the device the
+ * project lives on. A remote device that has never been checked (or is
+ * offline) contributes whatever it reported last time, so the user can still
+ * queue work for it.
+ */
+export function agentsForProject(
+  snapshot: Pick<HostSnapshot, "agents" | "remoteDevices">,
+  project: Pick<Project, "deviceId"> | undefined,
+): AgentInfo[] {
+  if (!project?.deviceId) {
+    return snapshot.agents;
+  }
+  const device = snapshot.remoteDevices.find((item) => item.id === project.deviceId);
+  if (!device) {
+    return [];
+  }
+  return AGENT_KINDS.map(
+    (kind) =>
+      device.agents.find((item) => item.kind === kind) ?? {
+        kind,
+        label: AGENT_LABELS[kind],
+        available: false,
+        detail: device.status === "online" ? `${device.name} 上没有找到` : "设备尚未检测",
+        supportsResume: true,
+      },
+  );
+}
+
+/** "laptop-2 / nearbox" for a remote project, just the name for a local one. */
+export function projectDisplayName(
+  project: Pick<Project, "name" | "deviceId">,
+  remoteDevices: readonly Pick<RemoteDevice, "id" | "name">[],
+): string {
+  if (!project.deviceId) {
+    return project.name;
+  }
+  const device = remoteDevices.find((item) => item.id === project.deviceId);
+  return `${device?.name ?? "远程电脑"} / ${project.name}`;
+}
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {
   inbox: "收集箱",

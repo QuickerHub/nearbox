@@ -26,6 +26,12 @@ export interface InvocationRequest {
   resumeSessionId?: string;
   /** Absolute path of a file the prompt has been written to (for CLIs that prefer files). */
   promptFile: string;
+  /**
+   * Images sent with this turn, as paths on the machine the agent runs on. The
+   * prompt already names them; CLIs that accept images as arguments also get
+   * them here so the model sees the pixels, not just a path.
+   */
+  images?: string[];
 }
 
 export interface Invocation {
@@ -42,22 +48,41 @@ const PROMPT_TOKEN = "\u0000PROMPT\u0000";
  * a file, or directly to an .exe/node argv, which Node quotes correctly.
  */
 export function buildInvocation(kind: AgentKind, command: ResolvedCommand, request: InvocationRequest): Invocation {
-  const built = agentArgs(kind, request);
   if (command.viaCmd) {
-    // cmd.exe cannot carry newlines or arbitrary quoting, so the prompt stays in
-    // a file and the agent is pointed at it instead.
-    const pointer = `请先完整阅读文件 ${request.promptFile} ，然后按其中的任务说明执行。`;
-    const userArgs = built.args.map((arg) => (arg === PROMPT_TOKEN ? pointer : arg));
-    const commandLine = [command.prefixArgs[0]!, ...userArgs].map(quoteForCmd).join(" ");
+    const built = buildShellCommandLine(kind, command.prefixArgs[0]!, request, quoteForCmd);
     return {
       file: command.file,
-      args: ["/d", "/s", "/c", `"${commandLine}"`],
+      args: ["/d", "/s", "/c", `"${built.commandLine}"`],
       stdin: built.stdin,
       windowsVerbatimArguments: true,
     };
   }
+  const built = agentArgs(kind, request);
   const args = built.args.map((arg) => (arg === PROMPT_TOKEN ? request.prompt : arg));
   return { file: command.file, args: [...command.prefixArgs, ...args], stdin: built.stdin };
+}
+
+export interface ShellCommandLine {
+  commandLine: string;
+  stdin?: string;
+}
+
+/**
+ * One line for a shell (cmd.exe locally or on a remote Windows box, sh on a
+ * remote POSIX box). Shells cannot carry newlines or arbitrary quoting, so the
+ * prompt never appears here: it stays in `request.promptFile` and the agent is
+ * pointed at it, or it goes over stdin for CLIs that read it there.
+ */
+export function buildShellCommandLine(
+  kind: AgentKind,
+  executable: string,
+  request: InvocationRequest,
+  quote: (value: string) => string,
+): ShellCommandLine {
+  const built = agentArgs(kind, request);
+  const pointer = `请先完整阅读文件 ${request.promptFile} ，然后按其中的任务说明执行。`;
+  const userArgs = built.args.map((arg) => (arg === PROMPT_TOKEN ? pointer : arg));
+  return { commandLine: [executable, ...userArgs].map(quote).join(" "), stdin: built.stdin };
 }
 
 function agentArgs(kind: AgentKind, request: InvocationRequest): { args: string[]; stdin?: string } {
@@ -81,6 +106,10 @@ function agentArgs(kind: AgentKind, request: InvocationRequest): { args: string[
       const args = ["exec"];
       if (resumeSessionId) {
         args.push("resume", resumeSessionId);
+      }
+      // One `-i` per image: `exec` takes a variadic list, `exec resume` a single value, and this form suits both.
+      for (const image of request.images ?? []) {
+        args.push("-i", image);
       }
       args.push("--json", "--skip-git-repo-check");
       if (!resumeSessionId) {

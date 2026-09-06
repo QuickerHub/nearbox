@@ -19,7 +19,7 @@ import { TaskHub } from "./hub";
 import { LanServer } from "./lan-server";
 import { createInputInjector } from "./input-win";
 import { RemoteControlHub } from "./remote";
-import { captureScreen, primaryDisplaySize } from "./screen";
+import { ScreenSource, primaryDisplaySize } from "./screen";
 
 const isDev = import.meta.env.DEV;
 
@@ -31,6 +31,8 @@ let quitting = false;
 let trayHintShown = false;
 // Letting the launcher pin the secret makes local API testing possible; the default is per-process random.
 const desktopSecret = process.env.NEARBOX_DESKTOP_SECRET || randomBytes(24).toString("base64url");
+// A second copy (different --user-data-dir) can be run next to the real one for testing by picking another port.
+const lanPort = Number(process.env.NEARBOX_PORT) || DEFAULT_PORT;
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -213,7 +215,7 @@ async function startHost(): Promise<void> {
   const nextHub = new TaskHub(join(userData, "data"));
   await nextHub.init();
   const remote = new RemoteControlHub({
-    capture: captureScreen,
+    source: new ScreenSource({ dir: userData }),
     input: createInputInjector(),
     getEnabled: () => nextHub.settings.remoteControlEnabled,
     getDisplay: primaryDisplaySize,
@@ -234,7 +236,7 @@ async function startHost(): Promise<void> {
     appVersion: app.getVersion(),
     apkPath: resolveApkPath(),
     remote,
-    port: DEFAULT_PORT,
+    port: lanPort,
   });
   await next.start();
   next.on("snapshot", () => refreshTrayMenu());

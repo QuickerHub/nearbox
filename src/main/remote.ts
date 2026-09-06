@@ -12,8 +12,19 @@ export interface RemoteFrame {
   height: number;
 }
 
+/**
+ * Produces screen frames on demand. The hub starts the source when the first
+ * viewer connects and stops it once the last one leaves; frames arrive through
+ * the `onFrame` callback at whatever cadence the source manages internally.
+ */
+export interface FrameSource {
+  start(quality: RemoteQuality, onFrame: (frame: RemoteFrame) => void): void;
+  setQuality(quality: RemoteQuality): void;
+  stop(): void;
+}
+
 export interface RemoteControlHubOptions {
-  capture(quality: RemoteQuality): Promise<RemoteFrame | null>;
+  source: FrameSource;
   input: InputSink;
   getEnabled(): boolean;
   getDisplay(): RemoteDisplay;
@@ -29,16 +40,14 @@ interface RemoteClient {
 
 /**
  * Streams the primary screen to connected viewers and feeds their pointer /
- * keyboard messages into the platform input sink. One capture per tick is fanned
- * out to every viewer whose socket is not already backed up.
+ * keyboard messages into the platform input sink. Frames pushed by the source
+ * are fanned out to every viewer whose socket is not already backed up.
  */
 export class RemoteControlHub {
   private readonly options: RemoteControlHubOptions;
   private readonly clients = new Set<RemoteClient>();
   private quality: RemoteQuality = { ...DEFAULT_REMOTE_QUALITY };
-  private timer: NodeJS.Timeout | null = null;
-  private capturing = false;
-  private captureFailed = false;
+  private sourceRunning = false;
 
   constructor(options: RemoteControlHubOptions) {
     this.options = options;
@@ -92,7 +101,7 @@ export class RemoteControlHub {
 
     this.broadcastPeers();
     this.options.onControllersChanged?.(this.clients.size, { id: device.id, name: device.name });
-    this.ensureLoop();
+    this.ensureSource();
   }
 
   private detach(client: RemoteClient): void {
@@ -102,7 +111,7 @@ export class RemoteControlHub {
     this.broadcastPeers();
     this.options.onControllersChanged?.(this.clients.size);
     if (this.clients.size === 0) {
-      this.stopLoop();
+      this.stopSource();
     }
   }
 
@@ -123,14 +132,12 @@ export class RemoteControlHub {
       return;
     }
     if (msg.t === "config") {
-      const previousFps = this.quality.fps;
       this.quality = clampQuality(msg, this.quality);
+      if (this.sourceRunning) {
+        this.options.source.setQuality(this.quality);
+      }
       for (const item of this.clients) {
         sendJson(item.socket, { t: "config", quality: this.quality });
-      }
-      if (this.quality.fps !== previousFps && this.timer) {
-        this.stopLoop();
-        this.ensureLoop();
       }
       return;
     }
@@ -143,47 +150,36 @@ export class RemoteControlHub {
     }
   }
 
-  private ensureLoop(): void {
-    if (this.timer || this.clients.size === 0) {
+  private ensureSource(): void {
+    if (this.sourceRunning || this.clients.size === 0) {
       return;
     }
-    const interval = Math.max(33, Math.round(1000 / this.quality.fps));
-    this.timer = setInterval(() => void this.tick(), interval);
-  }
-
-  private stopLoop(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
-  }
-
-  private async tick(): Promise<void> {
-    if (!this.options.getEnabled()) {
-      this.kickAll("这台电脑已关闭远程控制。");
-      return;
-    }
-    if (this.capturing || this.clients.size === 0) {
-      return;
-    }
-    this.capturing = true;
+    this.sourceRunning = true;
     try {
-      const frame = await this.options.capture(this.quality);
-      if (frame) {
-        this.captureFailed = false;
-        this.broadcastFrame(frame);
-      }
+      this.options.source.start(this.quality, (frame) => this.broadcastFrame(frame));
     } catch (error) {
-      if (!this.captureFailed) {
-        this.captureFailed = true;
-        this.options.log?.(`屏幕采集失败：${error instanceof Error ? error.message : String(error)}`);
-      }
-    } finally {
-      this.capturing = false;
+      this.sourceRunning = false;
+      this.options.log?.(`屏幕采集启动失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private stopSource(): void {
+    if (!this.sourceRunning) {
+      return;
+    }
+    this.sourceRunning = false;
+    try {
+      this.options.source.stop();
+    } catch {
+      /* ignore */
     }
   }
 
   private broadcastFrame(frame: RemoteFrame): void {
+    if (!this.options.getEnabled()) {
+      this.kickAll("这台电脑已关闭远程控制。");
+      return;
+    }
     for (const client of this.clients) {
       const socket = client.socket;
       if (socket.readyState === WS_OPEN && shouldSendFrame(socket.bufferedAmount)) {
@@ -212,7 +208,7 @@ export class RemoteControlHub {
       }
       this.clients.delete(client);
     }
-    this.stopLoop();
+    this.stopSource();
     this.options.onControllersChanged?.(0);
   }
 

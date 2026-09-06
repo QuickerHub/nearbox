@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { existsSync, statSync } from "node:fs";
-import { basename, join, resolve as resolvePath } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import {
   AGENT_KINDS,
   AGENT_LABELS,
@@ -9,13 +9,21 @@ import {
   type AgentInfo,
   type AgentKind,
   type AgentRun,
+  agentsForProject,
   canContinueRun,
+  type DeviceCandidate,
   type DispatchInput,
   type FileMeta,
   type HostSettings,
   isRunActive,
+  MAX_FILES_PER_MESSAGE,
   newId,
+  type NoteInput,
   type Project,
+  type RemoteDevice,
+  type RemoteDeviceInput,
+  type RemoteDevicePatch,
+  type RemoteDirListing,
   type RunEvent,
   splitCapture,
   type Task,
@@ -26,7 +34,10 @@ import {
   type TaskStatus,
 } from "@shared/protocol";
 import { detectAgents } from "./agents";
-import { RunManager } from "./runner";
+import { discoverDevices } from "./lan-discover";
+import { attachmentSection, buildTurnPrompt, imagePaths, type PromptAttachment } from "./prompt";
+import { type RunAttachment, RunManager } from "./runner";
+import { assertSafeRemotePath, directoryExists, listDirectory, probeDevice, remoteAttachmentPath } from "./ssh";
 import { Store, type StoredFile } from "./store";
 
 function fail(message: string, code = "BAD_REQUEST"): never {
@@ -41,6 +52,7 @@ export class TaskHub extends EventEmitter {
   readonly store: Store;
   readonly runner: RunManager;
   readonly dataDir: string;
+  private readonly deviceChecks = new Map<string, Promise<RemoteDevice>>();
   agents: AgentInfo[] = AGENT_KINDS.map((kind) => ({
     kind,
     label: AGENT_LABELS[kind],
@@ -56,6 +68,9 @@ export class TaskHub extends EventEmitter {
       runsDir: join(dataDir, "runs"),
       getSettings: () => this.store.state.settings,
       listRuns: () => this.store.state.runs,
+      resolveDevice: (deviceId) => this.resolveDevice(deviceId),
+      attachmentsFor: (run) => this.attachmentsFor(run),
+      imagesFor: (run) => imagePaths(this.promptAttachments(run.attachments ?? [], run.deviceId)),
       onRunChanged: (run) => {
         this.touchTaskForRun(run);
         this.store.save();
@@ -96,6 +111,10 @@ export class TaskHub extends EventEmitter {
     return this.store.state.runs;
   }
 
+  get remoteDevices(): RemoteDevice[] {
+    return this.store.state.remoteDevices;
+  }
+
   // ---------------------------------------------------------------- agents
 
   async refreshAgents(): Promise<AgentInfo[]> {
@@ -128,6 +147,7 @@ export class TaskHub extends EventEmitter {
     if (!title) {
       fail("标题不能为空。", "EMPTY");
     }
+    const files = this.resolveFiles(input.fileIds);
     const now = new Date().toISOString();
     const task: Task = {
       id,
@@ -142,6 +162,10 @@ export class TaskHub extends EventEmitter {
       updatedAt: now,
       notes: [],
     };
+    if (files.length) {
+      // The screenshots that came with the words: the title/details carry the text, this first message carries the files.
+      task.notes.push({ ...this.note(from, "note", undefined), files });
+    }
     this.tasks.push(task);
     this.store.save();
     this.changed();
@@ -202,13 +226,18 @@ export class TaskHub extends EventEmitter {
     this.changed();
   }
 
-  addNote(from: Actor, taskId: string, text: string): TaskNote {
+  /** One message: words, files, or both. */
+  addNote(from: Actor, taskId: string, input: NoteInput): TaskNote {
     const task = this.requireTask(taskId);
-    const trimmed = text.replace(/\r\n/g, "\n").trim();
-    if (!trimmed) {
+    const text = String(input.text ?? "").replace(/\r\n/g, "\n").trim();
+    const files = this.resolveFiles(input.fileIds);
+    if (!text && !files.length) {
       fail("备注不能为空。", "EMPTY");
     }
-    const note = this.note(from, "note", trimmed);
+    const note = this.note(from, "note", text || undefined);
+    if (files.length) {
+      note.files = files;
+    }
     task.notes.push(note);
     task.updatedAt = note.createdAt;
     this.store.save();
@@ -216,36 +245,96 @@ export class TaskHub extends EventEmitter {
     return note;
   }
 
-  attachFile(from: Actor, taskId: string | null, file: FileMeta, stored: StoredFile): { task: Task; note: TaskNote } {
-    this.store.state.files[file.id] = stored;
-    const task = taskId ? this.requireTask(taskId) : this.createTask(from, { title: file.name, status: "inbox" });
-    const note: TaskNote = { ...this.note(from, "note", undefined), file };
-    task.notes.push(note);
-    task.updatedAt = note.createdAt;
+  /**
+   * Make an uploaded file addressable. It is not shown anywhere until a task,
+   * note or run refers to it by id, which the client does right after the
+   * upload finishes.
+   */
+  registerFile(file: FileMeta, stored: StoredFile): FileMeta {
+    this.store.state.files[file.id] = { ...stored, byteLength: file.byteLength };
     this.store.save();
-    this.changed();
-    return { task, note };
+    return file;
+  }
+
+  /** A file dropped straight onto a task (or onto nothing, which makes a task out of it). */
+  attachFile(from: Actor, taskId: string | null, file: FileMeta, stored: StoredFile): { task: Task; note: TaskNote } {
+    this.registerFile(file, stored);
+    if (taskId) {
+      const task = this.requireTask(taskId);
+      return { task, note: this.addNote(from, taskId, { fileIds: [file.id] }) };
+    }
+    const task = this.createTask(from, { title: file.name, status: "inbox", fileIds: [file.id] });
+    return { task, note: task.notes[0]! };
   }
 
   fileById(fileId: string): StoredFile | undefined {
     return this.store.state.files[fileId];
   }
 
+  /** Ids from a client request back to the metadata the thread shows; unknown ids are a client bug, not silently dropped. */
+  private resolveFiles(fileIds: readonly string[] | undefined): FileMeta[] {
+    if (!fileIds?.length) {
+      return [];
+    }
+    const unique = [...new Set(fileIds.map((id) => String(id)))];
+    if (unique.length > MAX_FILES_PER_MESSAGE) {
+      fail(`一条消息最多带 ${MAX_FILES_PER_MESSAGE} 个文件。`);
+    }
+    return unique.map((id) => {
+      const stored = this.fileById(id);
+      if (!stored) {
+        fail("附件不存在或已过期，请重新添加。", "NOT_FOUND");
+      }
+      return { id, name: stored.name, mediaType: stored.mediaType, byteLength: stored.byteLength ?? 0 };
+    });
+  }
+
+  /** Where the agent will find each file: on this PC, or on the device the run happens on. */
+  private promptAttachments(files: readonly FileMeta[], deviceId: string | undefined): PromptAttachment[] {
+    const device = deviceId ? this.remoteDevices.find((item) => item.id === deviceId) : undefined;
+    const out: PromptAttachment[] = [];
+    for (const file of files) {
+      const stored = this.fileById(file.id);
+      if (!stored) {
+        continue;
+      }
+      out.push({
+        name: file.name,
+        mediaType: file.mediaType,
+        path: device ? remoteAttachmentPath(device, file.id, file.name) : stored.path,
+      });
+    }
+    return out;
+  }
+
   // -------------------------------------------------------------- projects
 
-  addProject(input: { path: string; name?: string; defaultAgent?: AgentKind | null }): Project {
-    const path = resolvePath(String(input.path ?? "").trim());
-    if (!path || !existsSync(path) || !statSync(path).isDirectory()) {
-      fail("目录不存在，请填写电脑上真实存在的文件夹。");
+  async addProject(input: { path: string; name?: string; defaultAgent?: AgentKind | null; deviceId?: string | null }): Promise<Project> {
+    const rawPath = String(input.path ?? "").trim();
+    const device = input.deviceId ? this.requireDevice(input.deviceId) : undefined;
+    let path: string;
+    if (device) {
+      assertSafeRemotePath(rawPath);
+      path = rawPath.replace(/[\\/]+$/, "") || rawPath;
+      const online = await this.resolveDevice(device.id);
+      if (!(await directoryExists(online, path))) {
+        fail(`${device.name} 上没有这个目录，请填写那台电脑上真实存在的文件夹。`);
+      }
+    } else {
+      path = resolvePath(rawPath);
+      if (!rawPath || !existsSync(path) || !statSync(path).isDirectory()) {
+        fail("目录不存在，请填写电脑上真实存在的文件夹。");
+      }
     }
-    const existing = this.projects.find((project) => samePath(project.path, path));
+    const existing = this.projects.find((project) => (project.deviceId ?? "") === (device?.id ?? "") && samePath(project.path, path));
     if (existing) {
       return existing;
     }
     const project: Project = {
       id: newId(),
-      name: String(input.name ?? "").trim() || basename(path) || path,
+      name: String(input.name ?? "").trim() || remoteBasename(path) || path,
       path,
+      deviceId: device?.id,
       defaultAgent: agentOrUndefined(input.defaultAgent),
       createdAt: new Date().toISOString(),
     };
@@ -286,6 +375,184 @@ export class TaskHub extends EventEmitter {
     this.changed();
   }
 
+  // -------------------------------------------------------- remote devices
+
+  async addDevice(input: RemoteDeviceInput): Promise<RemoteDevice> {
+    const host = String(input.host ?? "").trim();
+    if (!host || !/^[A-Za-z0-9._:%-]+$/.test(host)) {
+      fail("请填写主机名、IP 地址，或 ~/.ssh/config 里的别名。");
+    }
+    const user = String(input.user ?? "").trim() || undefined;
+    const port = normalizePort(input.port);
+    const identityFile = String(input.identityFile ?? "").trim() || undefined;
+    const existing = this.remoteDevices.find(
+      (device) => device.host.toLowerCase() === host.toLowerCase() && (device.user ?? "") === (user ?? "") && (device.port ?? 22) === (port ?? 22),
+    );
+    if (existing) {
+      void this.checkDevice(existing.id);
+      return existing;
+    }
+    const device: RemoteDevice = {
+      id: newId(),
+      name: String(input.name ?? "").trim() || host,
+      host,
+      user,
+      port,
+      identityFile,
+      platform: "unknown",
+      status: "unknown",
+      agents: [],
+      createdAt: new Date().toISOString(),
+    };
+    this.remoteDevices.push(device);
+    this.store.save();
+    this.changed();
+    return this.checkDevice(device.id);
+  }
+
+  updateDevice(id: string, patch: RemoteDevicePatch): RemoteDevice {
+    const device = this.requireDevice(id);
+    let reconnect = false;
+    if (patch.name !== undefined) {
+      device.name = String(patch.name).trim() || device.name;
+    }
+    if (patch.host !== undefined) {
+      const host = String(patch.host).trim();
+      if (!host || !/^[A-Za-z0-9._:%-]+$/.test(host)) {
+        fail("主机地址不合法。");
+      }
+      reconnect = reconnect || host !== device.host;
+      device.host = host;
+    }
+    if (patch.user !== undefined) {
+      const user = String(patch.user ?? "").trim() || undefined;
+      reconnect = reconnect || user !== device.user;
+      device.user = user;
+    }
+    if (patch.port !== undefined) {
+      const port = normalizePort(patch.port);
+      reconnect = reconnect || port !== device.port;
+      device.port = port;
+    }
+    if (patch.identityFile !== undefined) {
+      const identityFile = String(patch.identityFile ?? "").trim() || undefined;
+      reconnect = reconnect || identityFile !== device.identityFile;
+      device.identityFile = identityFile;
+    }
+    this.store.save();
+    this.changed();
+    if (reconnect) {
+      void this.checkDevice(device.id);
+    }
+    return device;
+  }
+
+  removeDevice(id: string): void {
+    const index = this.remoteDevices.findIndex((device) => device.id === id);
+    if (index === -1) {
+      fail("设备不存在。", "NOT_FOUND");
+    }
+    if (this.runs.some((run) => run.deviceId === id && isRunActive(run))) {
+      fail("这台电脑上还有正在运行的 Agent，先停止再移除。");
+    }
+    this.remoteDevices.splice(index, 1);
+    // Its projects cannot be reached anymore; tasks keep everything else.
+    const orphaned = new Set(this.projects.filter((project) => project.deviceId === id).map((project) => project.id));
+    this.store.state.projects = this.projects.filter((project) => !orphaned.has(project.id));
+    for (const task of this.tasks) {
+      if (task.projectId && orphaned.has(task.projectId)) {
+        task.projectId = undefined;
+      }
+    }
+    this.store.save();
+    this.changed();
+  }
+
+  /** Connect, identify the OS and list agent CLIs; the result is kept on the device record. */
+  async checkDevice(id: string): Promise<RemoteDevice> {
+    const device = this.requireDevice(id);
+    const pending = this.deviceChecks.get(id);
+    if (pending) {
+      return pending;
+    }
+    device.status = "checking";
+    device.error = undefined;
+    this.changed();
+    const check = (async () => {
+      try {
+        const probe = await probeDevice(device);
+        device.platform = probe.platform;
+        device.hostName = probe.hostName || undefined;
+        device.home = probe.home || device.home;
+        device.agents = probe.agents;
+        device.status = "online";
+        device.error = undefined;
+        if (!device.user && probe.user) {
+          device.user = probe.user;
+        }
+      } catch (error) {
+        device.status = "offline";
+        device.error = error instanceof Error ? error.message : String(error);
+      } finally {
+        device.lastCheckedAt = new Date().toISOString();
+        this.deviceChecks.delete(id);
+        this.store.save();
+        this.changed();
+      }
+      return device;
+    })();
+    this.deviceChecks.set(id, check);
+    return check;
+  }
+
+  /** A device ready to run on; checks it first when it has never been reached or last looked offline. */
+  async resolveDevice(id: string): Promise<RemoteDevice> {
+    const device = this.requireDevice(id);
+    if (device.status === "online" && device.home) {
+      return device;
+    }
+    const checked = await this.checkDevice(id);
+    if (checked.status !== "online") {
+      fail(checked.error ?? `连不上 ${checked.name}。`);
+    }
+    return checked;
+  }
+
+  async listRemoteDirectory(id: string, path: string): Promise<RemoteDirListing> {
+    const device = await this.resolveDevice(id);
+    return listDirectory(device, String(path ?? "").trim());
+  }
+
+  /** ssh config aliases and LAN hosts with sshd, flagged when already added. */
+  async discoverDevices(): Promise<DeviceCandidate[]> {
+    const candidates = await discoverDevices();
+    return candidates.map((candidate) => {
+      const match = this.remoteDevices.find((device) => {
+        const target = device.host.toLowerCase();
+        return target === candidate.host.toLowerCase() || (candidate.address && target === candidate.address.toLowerCase());
+      });
+      return match ? { ...candidate, deviceId: match.id } : candidate;
+    });
+  }
+
+  private attachmentsFor(run: AgentRun): RunAttachment[] {
+    const device = run.deviceId ? this.remoteDevices.find((item) => item.id === run.deviceId) : undefined;
+    const task = this.tasks.find((item) => item.id === run.taskId);
+    if (!device || !task) {
+      return [];
+    }
+    const out: RunAttachment[] = [];
+    const seen = new Set<string>();
+    for (const file of [...task.notes.flatMap((note) => note.files ?? []), ...(run.attachments ?? [])]) {
+      const stored = this.fileById(file.id);
+      if (stored && !seen.has(file.id)) {
+        seen.add(file.id);
+        out.push({ local: stored.path, remote: remoteAttachmentPath(device, file.id, file.name) });
+      }
+    }
+    return out;
+  }
+
   // ------------------------------------------------------------------ runs
 
   defaultPrompt(taskId: string, projectId?: string): string {
@@ -299,10 +566,9 @@ export class TaskHub extends EventEmitter {
     if (notes.length) {
       lines.push("## 补充说明", ...notes.map((note) => `- ${note.text}`), "");
     }
-    const files = task.notes.filter((note) => note.file).map((note) => this.fileById(note.file!.id)?.path).filter(Boolean);
-    if (files.length) {
-      lines.push("## 附件（本机路径，可直接读取）", ...files.map((path) => `- ${path}`), "");
-    }
+    // Remote runs copy the files over before the agent starts, so the prompt names their destination.
+    const files = task.notes.flatMap((note) => note.files ?? []);
+    lines.push(...attachmentSection(this.promptAttachments(files, project?.deviceId), Boolean(project?.deviceId)));
     lines.push(
       "## 要求",
       project ? `- 当前工作目录就是项目「${project.name}」（${project.path}），只改这个项目里的文件。` : "- 只改当前工作目录里的文件。",
@@ -319,13 +585,19 @@ export class TaskHub extends EventEmitter {
     if (!agent) {
       fail("请选择一个 Agent。");
     }
-    const info = this.agents.find((item) => item.kind === agent);
-    if (!info?.available) {
-      fail(`${AGENT_LABELS[agent]} 还没有在这台电脑上安装，无法派发。`);
+    const device = project.deviceId ? this.remoteDevices.find((item) => item.id === project.deviceId) : undefined;
+    if (project.deviceId && !device) {
+      fail("这个项目所在的电脑已经被移除了。");
+    }
+    const info = agentsForProject({ agents: this.agents, remoteDevices: this.remoteDevices }, project).find((item) => item.kind === agent);
+    // A device that has never been checked gets the benefit of the doubt; the run itself will check it.
+    if (!info?.available && !(device && device.status !== "online" && device.agents.length === 0)) {
+      fail(device ? `${device.name} 上没有检测到 ${AGENT_LABELS[agent]}，无法派发。` : `${AGENT_LABELS[agent]} 还没有在这台电脑上安装，无法派发。`);
     }
     const agentSettings = this.settings.agents[agent];
     const access: AgentAccess = input.access === "full" || input.access === "safe" ? input.access : agentSettings?.access ?? "safe";
-    const prompt = String(input.prompt ?? "").trim() || this.defaultPrompt(task.id, project.id);
+    const message = String(input.prompt ?? "").replace(/\r\n/g, "\n").trim();
+    const attachments = this.resolveFiles(input.fileIds);
     const now = new Date().toISOString();
     const run: AgentRun = {
       id: newId(),
@@ -334,8 +606,9 @@ export class TaskHub extends EventEmitter {
       agent,
       access,
       model: String(input.model ?? agentSettings?.model ?? "").trim() || undefined,
-      prompt,
+      prompt: "",
       cwd: project.path,
+      deviceId: device?.id,
       status: "queued",
       requestedBy: from,
       createdAt: now,
@@ -356,6 +629,19 @@ export class TaskHub extends EventEmitter {
       }
       run.resumedFromRunId = previous.id;
       run.cwd = previous.cwd;
+      // The session being continued lives wherever the previous turn ran.
+      run.deviceId = previous.deviceId;
+    }
+    if (message || attachments.length) {
+      // What the user typed (and attached) is this turn. The thread shows `message` with the
+      // thumbnails; the agent gets the words plus where the files are.
+      run.message = message;
+      if (attachments.length) {
+        run.attachments = attachments;
+      }
+      run.prompt = buildTurnPrompt(message, this.promptAttachments(attachments, run.deviceId), Boolean(run.deviceId));
+    } else {
+      run.prompt = this.defaultPrompt(task.id, project.id);
     }
     this.runs.push(run);
     task.latestRunId = run.id;
@@ -471,6 +757,14 @@ export class TaskHub extends EventEmitter {
     return project;
   }
 
+  private requireDevice(id: string): RemoteDevice {
+    const device = this.remoteDevices.find((item) => item.id === id);
+    if (!device) {
+      fail("设备不存在。", "NOT_FOUND");
+    }
+    return device;
+  }
+
   private projectIdOrUndefined(value: string | null | undefined): string | undefined {
     if (!value) {
       return undefined;
@@ -496,6 +790,24 @@ function statusLabel(status: TaskStatus): string {
 }
 
 function samePath(a: string, b: string): boolean {
-  const normalize = (value: string) => resolvePath(value).replace(/[\\/]+$/, "").toLowerCase();
+  const normalize = (value: string) => value.replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
   return normalize(a) === normalize(b);
+}
+
+/** Last segment of a path in either separator style; remote paths must not go through node:path. */
+function remoteBasename(path: string): string {
+  const trimmed = path.replace(/[\\/]+$/, "");
+  const index = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  return index >= 0 ? trimmed.slice(index + 1) : trimmed;
+}
+
+function normalizePort(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    fail("端口不合法。");
+  }
+  return port === 22 ? undefined : port;
 }

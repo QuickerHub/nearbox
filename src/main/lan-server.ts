@@ -24,6 +24,8 @@ import {
   isImageMediaType,
   newId,
   PROTOCOL_VERSION,
+  type RemoteDeviceInput,
+  type RemoteDevicePatch,
   type RunEvent,
   type ShareLimits,
   type TaskInput,
@@ -231,6 +233,7 @@ export class LanServer extends EventEmitter {
       port: this.port,
       invite: this.invite,
       devices: [...this.devices.values()],
+      remoteDevices: this.hub.remoteDevices,
       tasks: this.hub.tasks,
       projects: this.hub.projects,
       runs: this.hub.runs.slice(-120),
@@ -493,9 +496,9 @@ export class LanServer extends EventEmitter {
         return;
       }
       if (tail === "notes" && method === "POST") {
-        const body = await readJson<{ text?: string }>(req);
+        const body = await readJson<NoteInput>(req);
         this.assertTextLength(String(body.text ?? ""));
-        this.writeJson(res, this.hub.addNote(actor, taskId, String(body.text ?? "")));
+        this.writeJson(res, this.hub.addNote(actor, taskId, { text: body.text, fileIds: stringList(body.fileIds) }));
         return;
       }
       if (tail === "prompt" && method === "GET") {
@@ -510,29 +513,18 @@ export class LanServer extends EventEmitter {
     }
 
     // ----- uploads / files
+    if (path === "/api/files" && method === "POST") {
+      // Step one of sending a message with files: the body is the file, the answer is its id.
+      // The client then names that id in the task / note / dispatch request that follows.
+      const { file, stored } = await this.receiveFile(req, url, session);
+      this.writeJson(res, this.hub.registerFile(file, stored));
+      return;
+    }
     if (path === "/api/upload" && method === "POST") {
-      const fileName = decodeURIComponent(url.searchParams.get("name") ?? "file");
+      // One-shot form kept for scripts: the file becomes a message on `taskId`, or a new task.
       const taskId = url.searchParams.get("taskId") || null;
-      const mediaType = req.headers["content-type"] || "application/octet-stream";
-      const kind = isImageMediaType(mediaType) ? "image" : "file";
-      const maxBytes = kind === "image" ? this.limits.maxImageBytes : this.limits.maxFileBytes;
-      const deviceDir = join(this.inboxDir, safeSegment(session.device.name));
-      const saved = await receiveToInbox({
-        request: req,
-        inboxDir: deviceDir,
-        stagingDir: this.stagingDir,
-        fileName,
-        mediaType,
-        maxBytes,
-      });
-      const fileId = newId();
-      const result = this.hub.attachFile(
-        actor,
-        taskId,
-        { id: fileId, name: saved.storedName, mediaType: saved.mediaType, byteLength: saved.byteLength },
-        { path: join(deviceDir, saved.storedName), name: saved.storedName, mediaType: saved.mediaType },
-      );
-      this.writeJson(res, result);
+      const { file, stored } = await this.receiveFile(req, url, session);
+      this.writeJson(res, this.hub.attachFile(actor, taskId, file, stored));
       return;
     }
     if (segments[1] === "files" && segments[2] && method === "GET") {
@@ -554,9 +546,43 @@ export class LanServer extends EventEmitter {
 
     // ----- projects
     if (path === "/api/projects" && method === "POST") {
-      const body = await readJson<{ path: string; name?: string; defaultAgent?: AgentKind | null }>(req);
-      this.writeJson(res, this.hub.addProject(body));
+      const body = await readJson<{ path: string; name?: string; defaultAgent?: AgentKind | null; deviceId?: string | null }>(req);
+      this.writeJson(res, await this.hub.addProject(body));
       return;
+    }
+
+    // ----- remote devices (other computers reached over ssh)
+    if (path === "/api/remote-devices" && method === "POST") {
+      const body = await readJson<RemoteDeviceInput>(req);
+      this.writeJson(res, await this.hub.addDevice(body));
+      return;
+    }
+    if (path === "/api/remote-devices/discover" && method === "POST") {
+      this.writeJson(res, { candidates: await this.hub.discoverDevices() });
+      return;
+    }
+    if (segments[1] === "remote-devices" && segments[2]) {
+      const deviceId = decodeURIComponent(segments[2]);
+      const tail = segments[3];
+      if (!tail && method === "PATCH") {
+        const body = await readJson<RemoteDevicePatch>(req);
+        this.writeJson(res, this.hub.updateDevice(deviceId, body));
+        return;
+      }
+      if (!tail && method === "DELETE") {
+        this.hub.removeDevice(deviceId);
+        this.writeJson(res, { ok: true });
+        return;
+      }
+      if (tail === "check" && method === "POST") {
+        this.writeJson(res, await this.hub.checkDevice(deviceId));
+        return;
+      }
+      if (tail === "ls" && method === "POST") {
+        const body = await readJson<{ path?: string }>(req);
+        this.writeJson(res, await this.hub.listRemoteDirectory(deviceId, String(body.path ?? "")));
+        return;
+      }
     }
     if (segments[1] === "projects" && segments[2]) {
       const projectId = decodeURIComponent(segments[2]);
@@ -613,6 +639,26 @@ export class LanServer extends EventEmitter {
     if (text.length > this.limits.maxTextChars) {
       throw Object.assign(new Error("文字太长了。"), { code: "TEXT_TOO_LONG" });
     }
+  }
+
+  /** Stream the request body into the sender's inbox folder. */
+  private async receiveFile(req: http.IncomingMessage, url: URL, session: PairedSession): Promise<{ file: FileMeta; stored: StoredFile }> {
+    const fileName = decodeURIComponent(url.searchParams.get("name") ?? "file");
+    const mediaType = req.headers["content-type"] || "application/octet-stream";
+    const maxBytes = isImageMediaType(mediaType) ? this.limits.maxImageBytes : this.limits.maxFileBytes;
+    const deviceDir = join(this.inboxDir, safeSegment(session.device.name));
+    const saved = await receiveToInbox({
+      request: req,
+      inboxDir: deviceDir,
+      stagingDir: this.stagingDir,
+      fileName,
+      mediaType,
+      maxBytes,
+    });
+    return {
+      file: { id: newId(), name: saved.storedName, mediaType: saved.mediaType, byteLength: saved.byteLength },
+      stored: { path: join(deviceDir, saved.storedName), name: saved.storedName, mediaType: saved.mediaType, byteLength: saved.byteLength },
+    };
   }
 
   private async serveApk(res: http.ServerResponse): Promise<void> {

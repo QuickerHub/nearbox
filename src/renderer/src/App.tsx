@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AGENT_LABELS, type AgentAccess, type AgentKind, type HostSnapshot, isRunActive, splitCapture, type Task } from "@shared/protocol";
 import { connectClient, pairWithPin, type ClientHandle } from "./lib/client";
-import type { SendAction } from "./lib/plan";
+import type { SendPlan } from "./lib/plan";
 import { useRoute } from "./lib/router";
 import { applyTheme, cycleTheme, readThemeMode, themeLabel, type ThemeMode } from "./theme";
 import { ChatComposer, type ComposerChips } from "./ui/ChatComposer";
@@ -46,6 +46,8 @@ export function App(): JSX.Element {
   const [accessOverride, setAccessOverride] = useState<{ agent: AgentKind; access: AgentAccess } | null>(null);
   // Chip picks on an open task are patched to the server; this keeps the chip on the new value until the snapshot catches up.
   const [taskOverride, setTaskOverride] = useState<{ taskId: string; agent?: AgentKind | ""; projectId?: string } | null>(null);
+  // "改为新会话" on a task: the next message starts a fresh agent session instead of resuming. Cleared once sent.
+  const [freshFor, setFreshFor] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const noticeTimer = useRef<number | null>(null);
   const isDesktop = Boolean(window.nearboxDesktop);
@@ -208,12 +210,12 @@ export function App(): JSX.Element {
     }
   };
 
-  const send = async (action: SendAction, text: string) => {
+  const send = async (plan: SendPlan, text: string) => {
     if (!client) {
       return;
     }
     const dispatchInput = { agent: chips.agent as AgentKind, projectId: chips.projectId, access: chips.access };
-    switch (action) {
+    switch (plan.action) {
       case "capture": {
         const { title, details } = splitCapture(text);
         const created = await client.createTask({ title, details, status: "inbox", projectId: chips.projectId || null });
@@ -235,13 +237,16 @@ export function App(): JSX.Element {
         return;
       case "run":
         await client.dispatch(task!.id, dispatchInput);
+        setFreshFor(null);
         return;
       case "note-run":
         await client.addNote(task!.id, text);
         await client.dispatch(task!.id, dispatchInput);
+        setFreshFor(null);
         return;
       case "reply":
-        await client.replyRun(task!.latestRunId!, text);
+        // The hub queues this behind the running turn if there is one and resolves the session when it starts.
+        await client.dispatch(task!.id, { ...dispatchInput, prompt: text, resumeRunId: plan.resumeRunId });
         return;
     }
   };
@@ -331,6 +336,8 @@ export function App(): JSX.Element {
       onSend={send}
       onFiles={uploadFiles}
       onStop={activeRun ? () => void client.cancelRun(activeRun.id) : undefined}
+      fresh={Boolean(task) && freshFor === task!.id}
+      onFresh={(value) => setFreshFor(value && task ? task.id : null)}
       notice={notice}
       variant={variant}
       autoFocus={isDesktop}

@@ -8,6 +8,7 @@ import {
   AGENT_LABELS,
   type AgentRun,
   type HostSettings,
+  type RemoteDevice,
   type RunEvent,
   type RunEventKind,
   sessionIdAlongChain,
@@ -15,12 +16,26 @@ import {
 } from "@shared/protocol";
 import {
   buildInvocation,
+  buildShellCommandLine,
   createOutputParser,
   type OutputParser,
+  quoteForCmd,
   resolveAgentCommand,
   spawnEnv,
   truncate,
 } from "./agents";
+import {
+  buildLauncher,
+  directoryExists,
+  isWindowsDevice,
+  killLocal,
+  killRemoteRun,
+  remoteRunPaths,
+  SSH_FAILURE_EXIT,
+  shQuote,
+  sshSpawn,
+  uploadFile,
+} from "./ssh";
 
 const MAX_RUN_MINUTES = 180;
 const MAX_STDERR_LINES = 400;
@@ -39,12 +54,27 @@ interface ActiveRun {
   result?: string;
   isError?: boolean;
   timer: NodeJS.Timeout | null;
+  /** Set while the agent runs on another computer; `child` is then the local ssh client. */
+  remote?: { device: RemoteDevice; pidFile: string };
+}
+
+export interface RunAttachment {
+  /** Where the file is on this PC. */
+  local: string;
+  /** Where the prompt says it is on the device. */
+  remote: string;
 }
 
 export interface RunManagerOptions {
   runsDir: string;
   getSettings(): HostSettings;
   listRuns(): AgentRun[];
+  /** Look up a remote device, checking it first if it has never been reached. Throws when unusable. */
+  resolveDevice(deviceId: string): Promise<RemoteDevice>;
+  /** Files the run's prompt refers to that must exist on the device before the agent starts. */
+  attachmentsFor(run: AgentRun): RunAttachment[];
+  /** Images sent with this turn, as paths where the agent runs, for CLIs that take images as arguments. */
+  imagesFor(run: AgentRun): string[];
   onRunChanged(run: AgentRun): void;
   onRunFinished(run: AgentRun): void;
   onEvent(runId: string, event: RunEvent): void;
@@ -105,7 +135,13 @@ export class RunManager extends EventEmitter {
     }
     active.cancelled = true;
     this.append(run, "status", `${reason}，正在停止进程…`);
-    killTree(active.child);
+    if (active.remote) {
+      // Dropping the ssh connection alone leaves the agent running on the device.
+      const { device, pidFile } = active.remote;
+      void killRemoteRun(device, pidFile).finally(() => killLocal(active.child));
+      return true;
+    }
+    killLocal(active.child);
     return true;
   }
 
@@ -138,10 +174,15 @@ export class RunManager extends EventEmitter {
   }
 
   async shutdown(): Promise<void> {
+    const kills: Promise<unknown>[] = [];
     for (const active of this.active.values()) {
       active.cancelled = true;
-      killTree(active.child);
+      if (active.remote) {
+        kills.push(killRemoteRun(active.remote.device, active.remote.pidFile));
+      }
+      killLocal(active.child);
     }
+    await Promise.allSettled(kills);
     for (const stream of this.logs.values()) {
       stream.end();
     }
@@ -163,6 +204,11 @@ export class RunManager extends EventEmitter {
     };
     this.active.set(run.id, state);
     this.eventCache.set(run.id, this.eventCache.get(run.id) ?? []);
+
+    if (run.deviceId) {
+      await this.startRemote(state);
+      return;
+    }
 
     const settings = this.options.getSettings();
     const override = settings.agents[run.agent]?.command;
@@ -189,6 +235,7 @@ export class RunManager extends EventEmitter {
       model: run.model,
       resumeSessionId,
       promptFile,
+      images: this.options.imagesFor(run),
     });
 
     this.append(run, "status", `启动 ${AGENT_LABELS[run.agent]} · ${run.access === "full" ? "完全放开" : "安全模式"} · ${run.cwd}`);
@@ -210,12 +257,113 @@ export class RunManager extends EventEmitter {
       this.finish(state, null, "无法启动进程");
       return;
     }
+    this.attach(state, child, invocation.stdin);
+  }
+
+  /**
+   * Run on another computer: the prompt (and any attachments) are copied over
+   * first, then the agent is started through ssh and its JSONL streams back
+   * through the same connection, so parsing is identical to a local run.
+   */
+  private async startRemote(state: ActiveRun): Promise<void> {
+    const run = state.run;
+    let device: RemoteDevice;
+    try {
+      device = await this.options.resolveDevice(run.deviceId!);
+    } catch (error) {
+      this.append(run, "stderr", error instanceof Error ? error.message : String(error));
+      this.finish(state, null, "连不上远程电脑");
+      return;
+    }
+    const agent = device.agents.find((item) => item.kind === run.agent);
+    if (!agent?.available || !agent.command) {
+      this.append(run, "stderr", `${device.name} 上没有找到 ${AGENT_LABELS[run.agent]} 的命令行工具。请先在那台电脑上安装并登录，然后在设置里重新检测。`);
+      this.finish(state, null, `${device.name} 上未安装对应的 CLI`);
+      return;
+    }
+    if (!device.home) {
+      this.append(run, "stderr", `还不知道 ${device.name} 的用户目录，请在设置里重新检测这台电脑。`);
+      this.finish(state, null, "设备信息不完整");
+      return;
+    }
+
+    const paths = remoteRunPaths(device, run.id);
+    state.remote = { device, pidFile: paths.pidFile };
+    const resumeSessionId = run.resumedFromRunId ? sessionIdAlongChain(this.options.listRuns(), run.resumedFromRunId) : undefined;
+    const quote = isWindowsDevice(device) ? quoteForCmd : shQuote;
+    const built = buildShellCommandLine(
+      run.agent,
+      agent.command,
+      {
+        prompt: run.prompt,
+        cwd: run.cwd,
+        access: run.access,
+        model: run.model,
+        resumeSessionId,
+        promptFile: paths.promptFile,
+        images: this.options.imagesFor(run),
+      },
+      quote,
+    );
+
+    this.append(
+      run,
+      "status",
+      `在 ${device.name} 上启动 ${AGENT_LABELS[run.agent]} · ${run.access === "full" ? "完全放开" : "安全模式"} · ${run.cwd}`,
+    );
+    if (run.resumedFromRunId && !resumeSessionId) {
+      this.append(run, "status", "上一轮没有留下可继续的会话，这条消息将作为新会话发送。");
+    }
+
+    try {
+      if (!(await directoryExists(device, run.cwd))) {
+        this.append(run, "stderr", `${device.name} 上没有这个目录：${run.cwd}`);
+        this.finish(state, null, "项目目录不存在");
+        return;
+      }
+      await uploadFile(device, paths.promptFile, run.prompt);
+      // The local log keeps a copy too, like local runs do.
+      await writeFile(join(this.options.runsDir, `${run.id}.prompt.md`), run.prompt, "utf8");
+      for (const attachment of this.options.attachmentsFor(run)) {
+        if (!existsSync(attachment.local)) {
+          continue;
+        }
+        await uploadFile(device, attachment.remote, await readFile(attachment.local));
+        this.append(run, "status", `已复制附件到 ${device.name}：${attachment.remote}`);
+      }
+    } catch (error) {
+      if (state.cancelled) {
+        this.finish(state, null, undefined);
+        return;
+      }
+      this.append(run, "stderr", error instanceof Error ? error.message : String(error));
+      this.finish(state, null, "准备远程运行失败");
+      return;
+    }
+    if (state.cancelled) {
+      this.finish(state, null, undefined);
+      return;
+    }
+
+    let child: ChildProcess;
+    try {
+      child = sshSpawn(device, buildLauncher(device, { commandLine: built.commandLine, cwd: run.cwd, pidFile: paths.pidFile }));
+    } catch (error) {
+      this.append(run, "stderr", `无法启动 ssh：${error instanceof Error ? error.message : String(error)}`);
+      this.finish(state, null, "无法启动 ssh");
+      return;
+    }
+    this.attach(state, child, built.stdin);
+  }
+
+  private attach(state: ActiveRun, child: ChildProcess, stdin: string | undefined): void {
+    const run = state.run;
     state.child = child;
 
     if (child.stdin) {
       child.stdin.on("error", () => undefined);
-      if (invocation.stdin !== undefined) {
-        child.stdin.write(invocation.stdin);
+      if (stdin !== undefined) {
+        child.stdin.write(stdin);
       }
       child.stdin.end();
     }
@@ -228,7 +376,7 @@ export class RunManager extends EventEmitter {
       const lines = createInterface({ input: child.stderr, crlfDelay: Number.POSITIVE_INFINITY });
       lines.on("line", (line) => {
         const text = line.trim();
-        if (!text) {
+        if (!text || (state.remote && isPowerShellNoise(text))) {
           return;
         }
         state.lastStderr = text;
@@ -249,6 +397,9 @@ export class RunManager extends EventEmitter {
       this.append(run, "stderr", `进程错误：${error.message}`);
     });
     child.on("close", (code) => {
+      if (state.remote && code === SSH_FAILURE_EXIT && !state.cancelled) {
+        this.append(run, "stderr", `和 ${state.remote.device.name} 的 SSH 连接断开了。`);
+      }
       this.finish(state, code, undefined);
     });
   }
@@ -372,19 +523,7 @@ export class RunManager extends EventEmitter {
   }
 }
 
-function killTree(child: ChildProcess | null): void {
-  if (!child || child.pid === undefined || child.exitCode !== null) {
-    return;
-  }
-  if (process.platform === "win32") {
-    const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
-    killer.on("error", () => child.kill());
-    return;
-  }
-  child.kill("SIGTERM");
-  setTimeout(() => {
-    if (child.exitCode === null) {
-      child.kill("SIGKILL");
-    }
-  }, 5000).unref();
+/** When its stderr is a pipe, powershell.exe serialises progress records as CLIXML; none of it is agent output. */
+function isPowerShellNoise(line: string): boolean {
+  return line.startsWith("#< CLIXML") || line.startsWith("<Objs ") || line.startsWith("<Objs>");
 }
