@@ -1,9 +1,12 @@
 package com.quickerhub.nearbox
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.view.LayoutInflater
 import android.view.View
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
@@ -14,14 +17,36 @@ import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import com.quickerhub.nearbox.databinding.ActivityMainBinding
+import com.quickerhub.nearbox.databinding.ItemHostBinding
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private var scanner: LanScanner? = null
     private val filePicker = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         fileCallback?.onReceiveValue(uris.toTypedArray())
         fileCallback = null
+    }
+    private val qrScanner = registerForActivityResult(ScanContract()) { result ->
+        val invite = InviteParser.parse(result.contents)
+        if (invite == null) {
+            if (!result.contents.isNullOrBlank()) {
+                Toast.makeText(this, "不是 Nearbox 邀请码", Toast.LENGTH_SHORT).show()
+            }
+            return@registerForActivityResult
+        }
+        openSession(invite.host, invite.port.toString(), invite.token)
+    }
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) {
+            startQrScan()
+        } else {
+            Toast.makeText(this, getString(R.string.camera_needed), Toast.LENGTH_SHORT).show()
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -33,6 +58,8 @@ class MainActivity : AppCompatActivity() {
         binding.hostInput.setText(prefs().getString(KEY_HOST, ""))
         binding.connectButton.setOnClickListener { connectFromForm() }
         binding.pasteButton.setOnClickListener { pasteInvite() }
+        binding.refreshButton.setOnClickListener { scanner?.refresh(prefs().getString(KEY_HOST, null)) }
+        binding.scanButton.setOnClickListener { requestQrScan() }
 
         binding.webView.settings.javaScriptEnabled = true
         binding.webView.settings.domStorageEnabled = true
@@ -48,9 +75,7 @@ class MainActivity : AppCompatActivity() {
                 if (!request.isForMainFrame) {
                     return
                 }
-                binding.webView.visibility = View.GONE
-                binding.pairing.visibility = View.VISIBLE
-                Toast.makeText(this@MainActivity, "连不上电脑，请确认电脑端已打开并在同一 Wi-Fi", Toast.LENGTH_LONG).show()
+                showPairing("连不上电脑，正在重新查找…")
             }
         }
         binding.webView.webChromeClient = object : WebChromeClient() {
@@ -67,7 +92,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (!handleIntent(intent)) {
-            reopenLastHost()
+            if (!reopenLastHost()) {
+                showPairing()
+            }
         }
     }
 
@@ -76,18 +103,19 @@ class MainActivity : AppCompatActivity() {
         handleIntent(intent)
     }
 
-    /**
-     * The web app remembers its paired session in WebView storage, so a plain launch can go
-     * straight back to the last PC without a token. If that session is gone, the page itself
-     * shows the PIN screen.
-     */
-    private fun reopenLastHost() {
+    override fun onDestroy() {
+        scanner?.stop()
+        super.onDestroy()
+    }
+
+    private fun reopenLastHost(): Boolean {
         val host = prefs().getString(KEY_HOST, "").orEmpty()
         if (host.isBlank()) {
-            return
+            return false
         }
         val port = prefs().getInt(KEY_PORT, 17831)
         showWeb("http://$host:$port/")
+        return true
     }
 
     override fun onBackPressed() {
@@ -95,20 +123,17 @@ class MainActivity : AppCompatActivity() {
             binding.webView.goBack()
             return
         }
+        if (binding.webView.visibility == View.VISIBLE) {
+            showPairing()
+            return
+        }
         super.onBackPressed()
     }
 
     private fun handleIntent(intent: Intent?): Boolean {
-        val uri = intent?.data ?: return false
-        if (uri.scheme == "nearbox" && uri.host == "connect") {
-            openSession(uri.getQueryParameter("host"), uri.getQueryParameter("port"), uri.getQueryParameter("t"))
-            return true
-        }
-        if (uri.scheme == "http" || uri.scheme == "https") {
-            openSession(uri.host, uri.port.takeIf { it > 0 }?.toString(), uri.getQueryParameter("t") ?: uri.getQueryParameter("pin"))
-            return true
-        }
-        return false
+        val invite = InviteParser.parse(intent?.data?.toString()) ?: return false
+        openSession(invite.host, invite.port.toString(), invite.token)
+        return true
     }
 
     private fun connectFromForm() {
@@ -122,16 +147,36 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pasteInvite() {
-        val text = androidx.core.content.ContextCompat.getSystemService(
-            this,
-            android.content.ClipboardManager::class.java,
-        )?.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
-        val uri = runCatching { Uri.parse(text.trim()) }.getOrNull()
-        if (uri?.host.isNullOrBlank()) {
+        val text = ContextCompat.getSystemService(this, android.content.ClipboardManager::class.java)
+            ?.primaryClip
+            ?.getItemAt(0)
+            ?.coerceToText(this)
+            ?.toString()
+            .orEmpty()
+        val invite = InviteParser.parse(text)
+        if (invite == null) {
             Toast.makeText(this, "剪贴板里没有邀请链接", Toast.LENGTH_SHORT).show()
             return
         }
-        openSession(uri.host, uri.port.takeIf { it > 0 }?.toString(), uri.getQueryParameter("t") ?: uri.getQueryParameter("pin"))
+        openSession(invite.host, invite.port.toString(), invite.token)
+    }
+
+    private fun requestQrScan() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            startQrScan()
+        } else {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    private fun startQrScan() {
+        qrScanner.launch(
+            ScanOptions()
+                .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                .setPrompt(getString(R.string.scan_prompt))
+                .setBeepEnabled(false)
+                .setOrientationLocked(true),
+        )
     }
 
     private fun openSession(host: String?, portText: String?, token: String?) {
@@ -147,10 +192,48 @@ class MainActivity : AppCompatActivity() {
         showWeb("http://$safeHost:$port/?t=${Uri.encode(tokenValue)}")
     }
 
+    private fun showPairing(status: String? = null) {
+        binding.webView.visibility = View.GONE
+        binding.pairing.visibility = View.VISIBLE
+        if (status != null) {
+            binding.scanStatus.text = status
+        }
+        startScan()
+    }
+
     private fun showWeb(url: String) {
+        scanner?.stop()
         binding.pairing.visibility = View.GONE
         binding.webView.visibility = View.VISIBLE
         binding.webView.loadUrl(url)
+    }
+
+    private fun startScan() {
+        scanner?.stop()
+        binding.hostList.removeAllViews()
+        val next = LanScanner(
+            onHost = { host -> runOnUiThread { addHost(host) } },
+            onStatus = { text -> runOnUiThread { binding.scanStatus.text = text } },
+        )
+        scanner = next
+        next.start(prefs().getString(KEY_HOST, null))
+    }
+
+    private fun addHost(host: FoundHost) {
+        val row = ItemHostBinding.inflate(LayoutInflater.from(this), binding.hostList, false)
+        row.hostName.text = host.name
+        val version = if (host.version.isBlank()) "" else " · v${host.version}"
+        row.hostMeta.text = "${host.connectHost}:${host.port}$version"
+        row.root.setOnClickListener {
+            if (host.token.isNullOrBlank()) {
+                binding.hostInput.setText(host.connectHost)
+                binding.pinInput.requestFocus()
+                Toast.makeText(this, "请输入电脑上的 6 位验证码", Toast.LENGTH_SHORT).show()
+            } else {
+                openSession(host.connectHost, host.port.toString(), host.token)
+            }
+        }
+        binding.hostList.addView(row.root)
     }
 
     private fun prefs() = getSharedPreferences("nearbox", MODE_PRIVATE)

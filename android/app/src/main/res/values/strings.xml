@@ -5,5 +5,11 @@
     <string name="pin_hint">6 位验证码</string>
     <string name="connect">连接</string>
     <string name="paste">粘贴邀请链接</string>
-    <string name="hint">会话页面由电脑下发。把电脑上的验证码填进来，或粘贴扫码得到的链接。</string>
+    <string name="scan_qr">扫码连接</string>
+    <string name="refresh">重新查找</string>
+    <string name="scanning">正在查找同一网络上的电脑…</string>
+    <string name="manual">也可以手动输入</string>
+    <string name="hint">自动查找同一 Wi-Fi 上的电脑，点一下配对；也可以扫描电脑上的二维码。</string>
+    <string name="scan_prompt">对准电脑「设置 → 连接手机」里的二维码</string>
+    <string name="camera_needed">扫码需要相机权限</string>
 </resources>

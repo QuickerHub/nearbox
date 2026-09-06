@@ -1,5 +1,6 @@
 import { createReadStream, existsSync } from "node:fs";
 import { mkdir, readFile, stat } from "node:fs/promises";
+import dgram from "node:dgram";
 import http from "node:http";
 import { hostname } from "node:os";
 import { extname, join, resolve as resolvePath } from "node:path";
@@ -7,6 +8,7 @@ import { randomBytes, randomInt } from "node:crypto";
 import { EventEmitter } from "node:events";
 import QRCode from "qrcode";
 import { WebSocket, WebSocketServer } from "ws";
+import { buildDiscoverInfo, DISCOVERY_PORT, type DiscoverInfo } from "@shared/discover";
 import {
   type Actor,
   type AgentKind,
@@ -75,6 +77,8 @@ export class LanServer extends EventEmitter {
   private invite: InviteInfo | null = null;
   private listenError: string | undefined;
   private snapshotTimer: NodeJS.Timeout | null = null;
+  private beacon: dgram.Socket | null = null;
+  private beaconTimer: NodeJS.Timeout | null = null;
 
   constructor(options: {
     hub: TaskHub;
@@ -155,9 +159,11 @@ export class LanServer extends EventEmitter {
     if (this.selectedHost) {
       await this.refreshInvite();
     }
+    this.startBeacon();
   }
 
   async stop(): Promise<void> {
+    this.stopBeacon();
     for (const binding of this.sockets) {
       binding.socket.close();
     }
@@ -233,6 +239,70 @@ export class LanServer extends EventEmitter {
     return this.invite;
   }
 
+  discoverInfo(): DiscoverInfo | { service: "nearbox"; error: string } {
+    if (!this.selectedHost) {
+      return { service: "nearbox", error: this.listenError ?? "电脑还没有局域网地址" };
+    }
+    if (!this.invite || inviteExpired(this.invite)) {
+      return buildDiscoverInfo({
+        name: this.hostName,
+        host: this.selectedHost,
+        port: this.port,
+        version: this.appVersion,
+      });
+    }
+    return buildDiscoverInfo({
+      name: this.hostName,
+      host: this.selectedHost,
+      port: this.port,
+      version: this.appVersion,
+      pin: this.invite.pin,
+      token: this.invite.token,
+      url: this.invite.url,
+    });
+  }
+
+  private startBeacon(): void {
+    const socket = dgram.createSocket({ type: "udp4", reuseAddr: true });
+    socket.on("error", () => undefined);
+    socket.bind(0, () => {
+      try {
+        socket.setBroadcast(true);
+      } catch {
+        /* Windows sometimes rejects this until the first send */
+      }
+    });
+    this.beacon = socket;
+    const pulse = () => {
+      const info = this.discoverInfo();
+      if (!("host" in info) || !info.host) {
+        return;
+      }
+      const payload = Buffer.from(JSON.stringify(info));
+      try {
+        socket.setBroadcast(true);
+        socket.send(payload, DISCOVERY_PORT, "255.255.255.255");
+      } catch {
+        /* ignore a missed pulse */
+      }
+    };
+    pulse();
+    this.beaconTimer = setInterval(pulse, 2000);
+  }
+
+  private stopBeacon(): void {
+    if (this.beaconTimer) {
+      clearInterval(this.beaconTimer);
+      this.beaconTimer = null;
+    }
+    try {
+      this.beacon?.close();
+    } catch {
+      /* already closed */
+    }
+    this.beacon = null;
+  }
+
   forgetDevice(deviceId: string): void {
     for (const [token, session] of this.sessions) {
       if (session.device.id === deviceId) {
@@ -271,6 +341,13 @@ export class LanServer extends EventEmitter {
           apkAvailable: this.apkPath !== null,
           apkUrl: this.apkPath ? "/app/nearbox.apk" : null,
         });
+        return;
+      }
+      if (url.pathname === "/api/discover" && method === "GET") {
+        if (this.selectedHost && (!this.invite || inviteExpired(this.invite))) {
+          await this.refreshInvite();
+        }
+        this.writeJson(res, this.discoverInfo());
         return;
       }
       if (url.pathname === "/app/nearbox.apk" && method === "GET") {

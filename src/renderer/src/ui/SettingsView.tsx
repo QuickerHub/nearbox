@@ -38,7 +38,7 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme }: Sett
           <section className="settings__block">
             <div className="settings__block-head">
               <h2>连接手机</h2>
-              <p className="muted">手机和电脑连同一 Wi-Fi，用相机扫码或输入验证码。不经过互联网。</p>
+              <p className="muted">手机打开 Nearbox 会自动发现这台电脑，点一下即可配对；也可以扫码。不经过互联网。</p>
             </div>
             <div className="pair-grid">
               <div className="qr-card">

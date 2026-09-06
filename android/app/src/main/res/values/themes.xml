@@ -4,5 +4,15 @@
         <item name="android:statusBarColor">#141414</item>
         <item name="android:navigationBarColor">#141414</item>
         <item name="android:windowBackground">#141414</item>
+        <item name="android:colorBackground">#141414</item>
+        <item name="colorPrimary">#ECECEC</item>
+        <item name="colorOnPrimary">#141414</item>
+        <item name="colorSecondary">#2A2A2A</item>
+        <item name="colorOnSecondary">#E6E6E6</item>
+        <item name="colorSurface">#181818</item>
+        <item name="colorOnSurface">#E6E6E6</item>
+        <item name="colorOutline">#2B2B2B</item>
+        <item name="android:textColorPrimary">#E6E6E6</item>
+        <item name="android:textColorSecondary">#8A8A8A</item>
     </style>
 </resources>

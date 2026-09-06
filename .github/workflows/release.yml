@@ -92,5 +92,5 @@ jobs:
           mapfile -t files < <(find artifacts -type f \( -name '*.apk' -o -name '*.exe' -o -name '*.zip' \))
           gh release create "v${version}" "${files[@]}" \
             --title "Nearbox v${version}" \
-            --notes "手机记想法，电脑跑 Agent。Windows 安装包内含同版本 Android 薄壳；手机界面由电脑下发，更新电脑即可，只有壳本身变了才需要重装 APK。" \
+            --notes "手机记想法，电脑跑 Agent。Android 薄壳会自动发现局域网电脑，也可扫码配对。Windows 安装包内含同版本 APK；手机界面由电脑下发，更新电脑即可，只有壳本身变了才需要重装 APK。" \
             --verify-tag
