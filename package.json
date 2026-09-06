@@ -1,0 +1,37 @@
+{
+  "name": "nearbox",
+  "productName": "Nearbox",
+  "version": "0.1.0",
+  "description": "局域网里手机和电脑互传消息、图片和文件。",
+  "main": "./out/main/index.js",
+  "type": "module",
+  "private": true,
+  "author": "QuickerHub",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "node --experimental-strip-types --test src/main/network.test.ts",
+    "preview": "electron-vite preview"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^18.3.24",
+    "@types/react-dom": "^18.3.7",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.0.2",
+    "electron": "^37.4.0",
+    "electron-vite": "^4.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  }
+}
