@@ -1,7 +1,7 @@
 {
   "name": "nearbox",
   "productName": "Nearbox",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "局域网里手机和电脑互传消息、图片和文件。",
   "main": "./out/main/index.js",
   "type": "module",
