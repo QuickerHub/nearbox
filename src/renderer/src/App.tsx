@@ -1,25 +1,35 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { type HostSnapshot, isRunActive } from "@shared/protocol";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AGENT_LABELS, type AgentAccess, type AgentKind, type HostSnapshot, isRunActive, splitCapture, type Task } from "@shared/protocol";
 import { connectClient, pairWithPin, type ClientHandle } from "./lib/client";
-import { type Route, type Section, sectionOf, useRoute } from "./lib/router";
+import type { SendAction } from "./lib/plan";
+import { useRoute } from "./lib/router";
 import { applyTheme, cycleTheme, readThemeMode, themeLabel, type ThemeMode } from "./theme";
-import { Icon, type IconName, ThemeIcon } from "./ui/Icons";
-import { InboxView } from "./ui/InboxView";
-import { ProjectsView } from "./ui/ProjectsView";
-import { RunView } from "./ui/RunView";
-import { RunsView } from "./ui/RunsView";
+import { ChatComposer, type ComposerChips } from "./ui/ChatComposer";
+import { Icon, ThemeIcon } from "./ui/Icons";
 import { SettingsView } from "./ui/SettingsView";
-import { TaskDetail } from "./ui/TaskDetail";
-import { TaskListView } from "./ui/TaskListView";
-import { EmptyState } from "./ui/bits";
+import { TaskList } from "./ui/TaskList";
+import { Thread } from "./ui/Thread";
 
-const NAV: { section: Section; label: string; icon: IconName; route: Route }[] = [
-  { section: "inbox", label: "收集箱", icon: "inbox", route: { name: "inbox" } },
-  { section: "tasks", label: "任务", icon: "tasks", route: { name: "tasks", status: "all" } },
-  { section: "runs", label: "Agent", icon: "bolt", route: { name: "runs" } },
-  { section: "projects", label: "项目", icon: "folder", route: { name: "projects" } },
-  { section: "settings", label: "设置", icon: "settings", route: { name: "settings" } },
-];
+const PREFS_KEY = "nearbox.compose";
+
+/** What this device last picked in the composer. `agent: null` means "never chose", so we default to the first installed one. */
+interface ComposePrefs {
+  projectId: string;
+  agent: AgentKind | "" | null;
+}
+
+function readPrefs(): ComposePrefs {
+  try {
+    const raw = window.localStorage.getItem(PREFS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<ComposePrefs>;
+      return { projectId: typeof parsed.projectId === "string" ? parsed.projectId : "", agent: parsed.agent === undefined ? null : parsed.agent };
+    }
+  } catch {
+    // fall through to defaults
+  }
+  return { projectId: "", agent: null };
+}
 
 export function App(): JSX.Element {
   const [snapshot, setSnapshot] = useState<HostSnapshot | null>(null);
@@ -29,9 +39,31 @@ export function App(): JSX.Element {
   const [themeMode, setThemeMode] = useState<ThemeMode>(() => readThemeMode());
   const [client, setClient] = useState<ClientHandle | null>(null);
   const clientRef = useRef<ClientHandle | null>(null);
-  const { route, navigate, back } = useRoute();
-  const [lastList, setLastList] = useState<"inbox" | "tasks">("inbox");
+  const { route, navigate } = useRoute();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [prefs, setPrefsState] = useState<ComposePrefs>(() => readPrefs());
+  const [accessOverride, setAccessOverride] = useState<{ agent: AgentKind; access: AgentAccess } | null>(null);
+  // Chip picks on an open task are patched to the server; this keeps the chip on the new value until the snapshot catches up.
+  const [taskOverride, setTaskOverride] = useState<{ taskId: string; agent?: AgentKind | ""; projectId?: string } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const noticeTimer = useRef<number | null>(null);
   const isDesktop = Boolean(window.nearboxDesktop);
+
+  const setPrefs = useCallback((patch: Partial<ComposePrefs>) => {
+    setPrefsState((current) => {
+      const next = { ...current, ...patch };
+      window.localStorage.setItem(PREFS_KEY, JSON.stringify(next));
+      return next;
+    });
+  }, []);
+
+  const flash = useCallback((text: string) => {
+    setNotice(text);
+    if (noticeTimer.current) {
+      window.clearTimeout(noticeTimer.current);
+    }
+    noticeTimer.current = window.setTimeout(() => setNotice(null), 2600);
+  }, []);
 
   useEffect(() => {
     applyTheme(themeMode);
@@ -77,17 +109,25 @@ export function App(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    if (route.name === "inbox" || route.name === "tasks") {
-      setLastList(route.name);
-    }
-  }, [route]);
-
-  useEffect(() => {
     if (!window.nearboxDesktop) {
       return;
     }
     return window.nearboxDesktop.onNavigate((hash) => navigate(hash));
   }, [navigate]);
+
+  // Old-style links: a run opens its task; "#/settings" opens the modal.
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+    if (route.name === "run") {
+      const run = snapshot.runs.find((item) => item.id === route.id);
+      navigate(run ? { name: "task", id: run.taskId } : { name: "home" }, true);
+    } else if (route.name === "settings") {
+      setSettingsOpen(true);
+      navigate({ name: "home" }, true);
+    }
+  }, [route, snapshot, navigate]);
 
   useEffect(() => {
     if (!snapshot) {
@@ -97,17 +137,124 @@ export function App(): JSX.Element {
     document.title = active ? `(${active}) Nearbox` : "Nearbox";
   }, [snapshot]);
 
-  const counts = useMemo(() => {
-    const inbox = snapshot?.tasks.filter((task) => task.status === "inbox").length ?? 0;
-    const open = snapshot?.tasks.filter((task) => task.status === "todo" || task.status === "doing").length ?? 0;
-    const runs = snapshot?.runs.filter(isRunActive).length ?? 0;
-    return { inbox, tasks: open, runs, projects: 0, settings: 0 } as Record<Section, number>;
-  }, [snapshot]);
-
   const onCycleTheme = () => {
     const next = cycleTheme(themeMode);
     setThemeMode(next);
     applyTheme(next);
+  };
+
+  const task: Task | undefined = route.name === "task" && snapshot ? snapshot.tasks.find((item) => item.id === route.id) : undefined;
+
+  const chips = useMemo<ComposerChips>(() => {
+    if (!snapshot) {
+      return { projectId: "", agent: "", access: "safe" };
+    }
+    const available = snapshot.agents.filter((item) => item.available).map((item) => item.kind);
+    const validAgent = (value: AgentKind | "" | null | undefined): value is AgentKind => Boolean(value) && available.includes(value as AgentKind);
+    const validProject = (value: string | undefined) => Boolean(value) && snapshot.projects.some((item) => item.id === value);
+    const recentProject = [...snapshot.projects].sort(
+      (a, b) => Date.parse(b.lastUsedAt ?? b.createdAt) - Date.parse(a.lastUsedAt ?? a.createdAt),
+    )[0]?.id;
+    const override = task && taskOverride?.taskId === task.id ? taskOverride : null;
+    const agentPick = override?.agent !== undefined ? override.agent : task?.agent;
+    const projectPick = override?.projectId !== undefined ? override.projectId : task?.projectId;
+    const agent: AgentKind | "" =
+      override?.agent === ""
+        ? ""
+        : validAgent(agentPick)
+          ? agentPick
+          : prefs.agent === null
+            ? available[0] ?? ""
+            : validAgent(prefs.agent)
+              ? prefs.agent
+              : "";
+    const projectId = validProject(projectPick) ? projectPick! : validProject(prefs.projectId) ? prefs.projectId : recentProject ?? "";
+    const access: AgentAccess = agent
+      ? accessOverride?.agent === agent
+        ? accessOverride.access
+        : snapshot.settings.agents[agent]?.access ?? "safe"
+      : "safe";
+    return { projectId, agent, access };
+  }, [snapshot, task, prefs, accessOverride, taskOverride]);
+
+  const onChips = (patch: Partial<ComposerChips>) => {
+    if (!client) {
+      return;
+    }
+    if (patch.projectId !== undefined) {
+      setPrefs({ projectId: patch.projectId });
+      if (task) {
+        setTaskOverride((current) => ({ ...(current?.taskId === task.id ? current : {}), taskId: task.id, projectId: patch.projectId }));
+        if (patch.projectId !== (task.projectId ?? "")) {
+          void client.updateTask(task.id, { projectId: patch.projectId || null }).catch(() => undefined);
+        }
+      }
+    }
+    if (patch.agent !== undefined) {
+      setPrefs({ agent: patch.agent });
+      if (task) {
+        setTaskOverride((current) => ({ ...(current?.taskId === task.id ? current : {}), taskId: task.id, agent: patch.agent }));
+        if (patch.agent !== (task.agent ?? "")) {
+          void client.updateTask(task.id, { agent: patch.agent || null }).catch(() => undefined);
+        }
+      }
+    }
+    if (patch.access !== undefined) {
+      const agent = patch.agent ?? chips.agent;
+      if (agent) {
+        setAccessOverride({ agent, access: patch.access });
+      }
+    }
+  };
+
+  const send = async (action: SendAction, text: string) => {
+    if (!client) {
+      return;
+    }
+    const dispatchInput = { agent: chips.agent as AgentKind, projectId: chips.projectId, access: chips.access };
+    switch (action) {
+      case "capture": {
+        const { title, details } = splitCapture(text);
+        const created = await client.createTask({ title, details, status: "inbox", projectId: chips.projectId || null });
+        flash(`已记录「${created.title}」，${isDesktop ? "在左侧列表里" : "在下方列表里"}。`);
+        return;
+      }
+      case "create-run": {
+        const { title, details } = splitCapture(text);
+        const created = await client.createTask({ title, details, status: "todo", projectId: chips.projectId, agent: chips.agent || null });
+        try {
+          await client.dispatch(created.id, dispatchInput);
+        } finally {
+          navigate({ name: "task", id: created.id });
+        }
+        return;
+      }
+      case "note":
+        await client.addNote(task!.id, text);
+        return;
+      case "run":
+        await client.dispatch(task!.id, dispatchInput);
+        return;
+      case "note-run":
+        await client.addNote(task!.id, text);
+        await client.dispatch(task!.id, dispatchInput);
+        return;
+      case "reply":
+        await client.replyRun(task!.latestRunId!, text);
+        return;
+    }
+  };
+
+  const uploadFiles = async (files: File[]) => {
+    if (!client) {
+      return;
+    }
+    for (const file of files) {
+      await client.upload(file, task?.id);
+    }
+    if (!task) {
+      flash(files.length === 1 ? `已收到「${files[0]!.name}」，存为一条任务。` : `已收到 ${files.length} 个文件。`);
+    }
   };
 
   if (fatal?.code === "NO_INVITE" || (!isDesktop && fatal?.message.includes("邀请"))) {
@@ -159,193 +306,135 @@ export function App(): JSX.Element {
     );
   }
 
-  const section = sectionOf(route);
-  const selectedTask = route.name === "task" ? snapshot.tasks.find((task) => task.id === route.id) : undefined;
-  const selectedRun = route.name === "run" ? snapshot.runs.find((run) => run.id === route.id) : undefined;
+  const activeRun = task ? snapshot.runs.find((run) => run.taskId === task.id && isRunActive(run)) : undefined;
+  const runningTasks = snapshot.tasks.filter((item) => snapshot.runs.some((run) => run.taskId === item.id && isRunActive(run)));
+  const phonesOnline = snapshot.devices.filter((device) => device.role === "phone" && device.online).length;
+  const goHome = () => navigate({ name: "home" });
   const openTask = (id: string) => navigate({ name: "task", id });
-  const openRun = (id: string) => navigate({ name: "run", id });
-  const goProjects = () => navigate({ name: "projects" });
 
-  const taskDetail = (embedded: boolean) =>
-    selectedTask ? (
-      <TaskDetail
-        key={selectedTask.id}
-        snapshot={snapshot}
-        client={client}
-        task={selectedTask}
-        embedded={embedded}
-        onBack={() => (isDesktop ? navigate(lastList === "inbox" ? { name: "inbox" } : { name: "tasks", status: "all" }) : back())}
-        onOpenRun={openRun}
-        onManageProjects={goProjects}
-      />
-    ) : (
-      <NotFound label="这个任务不存在或已删除" onBack={() => navigate({ name: "tasks", status: "all" })} />
-    );
+  const composer = (variant: "hero" | "dock") => (
+    <ChatComposer
+      key={task?.id ?? "home"}
+      snapshot={snapshot}
+      client={client}
+      task={task}
+      chips={chips}
+      onChips={onChips}
+      onSend={send}
+      onFiles={uploadFiles}
+      onStop={activeRun ? () => void client.cancelRun(activeRun.id) : undefined}
+      notice={notice}
+      variant={variant}
+      autoFocus={isDesktop}
+    />
+  );
 
-  const runDetail = (embedded: boolean) =>
-    selectedRun ? (
-      <RunView
-        key={selectedRun.id}
-        snapshot={snapshot}
-        client={client}
-        run={selectedRun}
-        embedded={embedded}
-        onBack={() => (isDesktop ? navigate({ name: "runs" }) : back())}
-        onOpenTask={openTask}
-        onOpenRun={openRun}
-      />
-    ) : (
-      <NotFound label="找不到这次运行" onBack={() => navigate({ name: "runs" })} />
-    );
+  const threadOrNotFound = task ? (
+    <Thread key={task.id} snapshot={snapshot} client={client} task={task} onDeleted={goHome}>
+      {composer("dock")}
+    </Thread>
+  ) : (
+    <div className="home">
+      <div className="home__inner">
+        <p className="eyebrow">这个任务不存在或已删除</p>
+        <button type="button" className="ghost" onClick={goHome}>
+          回到开始
+        </button>
+      </div>
+    </div>
+  );
 
-  const listFor = (which: "inbox" | "tasks") =>
-    which === "inbox" ? (
-      <InboxView snapshot={snapshot} client={client} selectedTaskId={selectedTask?.id} onOpenTask={openTask} />
-    ) : (
-      <TaskListView
-        snapshot={snapshot}
-        client={client}
-        filter={route.name === "tasks" ? route.status : "all"}
-        selectedTaskId={selectedTask?.id}
-        onFilter={(statusFilter) => navigate({ name: "tasks", status: statusFilter }, true)}
-        onOpenTask={openTask}
-      />
-    );
+  const home = (
+    <div className="home">
+      <div className="home__inner">
+        {isDesktop ? (
+          <>
+            <h1 className="home__title">想让 Agent 做点什么？</h1>
+            <p className="home__sub muted">一句话说清楚任务，选好项目和 Agent，回车就开跑。不选 Agent 就只是记一下。</p>
+          </>
+        ) : null}
+        {composer("hero")}
+        {runningTasks.length ? (
+          <div className="home__running">
+            {runningTasks.map((item) => {
+              const run = snapshot.runs.find((candidate) => candidate.taskId === item.id && isRunActive(candidate))!;
+              return (
+                <button key={item.id} type="button" className="home__running-item" onClick={() => openTask(item.id)}>
+                  <span className="spinner spinner--small" />
+                  <span className="home__running-title">{item.title}</span>
+                  <span className="muted small">
+                    {AGENT_LABELS[run.agent]} · {run.status === "queued" ? "排队中" : "运行中"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+      {!isDesktop ? <TaskList snapshot={snapshot} onSelect={openTask} compact /> : null}
+    </div>
+  );
 
-  const settingsView = <SettingsView snapshot={snapshot} client={client} themeMode={themeMode} onCycleTheme={onCycleTheme} />;
+  const settings = settingsOpen ? (
+    <SettingsView snapshot={snapshot} client={client} themeMode={themeMode} onCycleTheme={onCycleTheme} onClose={() => setSettingsOpen(false)} />
+  ) : null;
 
   if (isDesktop) {
-    const listSection: "inbox" | "tasks" | null =
-      route.name === "inbox" ? "inbox" : route.name === "tasks" ? "tasks" : route.name === "task" ? lastList : null;
     return (
       <main className="app app--desktop">
-        <nav className="sidebar">
-          <div className="sidebar__brand">
-            <span className="chrome__mark">N</span>
-            <div>
+        <aside className="sidebar">
+          <div className="sidebar__top">
+            <div className="sidebar__brand">
+              <span className="chrome__mark">N</span>
               <strong>Nearbox</strong>
-              <p className="muted small">
-                {snapshot.selectedHost ? `${snapshot.selectedHost}:${snapshot.port}` : "未发现局域网地址"}
-              </p>
             </div>
-          </div>
-          {NAV.map((item) => (
-            <button
-              key={item.section}
-              type="button"
-              className={item.section === section ? "nav-item nav-item--on" : "nav-item"}
-              onClick={() => navigate(item.route)}
-            >
-              <Icon name={item.icon} size={17} />
-              <span>{item.label}</span>
-              {counts[item.section] ? <span className={item.section === "runs" ? "nav-count nav-count--live" : "nav-count"}>{counts[item.section]}</span> : null}
+            <button type="button" className={route.name === "home" ? "sidebar__new sidebar__new--on" : "sidebar__new"} onClick={goHome}>
+              <Icon name="plus" size={15} />
+              <span>新对话</span>
             </button>
-          ))}
+          </div>
+          <TaskList snapshot={snapshot} selectedTaskId={task?.id} onSelect={openTask} />
           <div className="sidebar__foot">
-            <div className="sidebar__phones">
-              <span className={snapshot.devices.some((d) => d.role === "phone" && d.online) ? "dot dot--on" : "dot"} />
-              <span className="muted small">
-                {(() => {
-                  const online = snapshot.devices.filter((d) => d.role === "phone" && d.online).length;
-                  return online ? `${online} 台手机在线` : "没有手机在线";
-                })()}
-              </span>
-            </div>
-            <button type="button" className="theme-btn" onClick={onCycleTheme} title={themeLabel(themeMode)}>
+            <span className="sidebar__phones" title={snapshot.selectedHost ? `${snapshot.selectedHost}:${snapshot.port}` : "未发现局域网地址"}>
+              <span className={phonesOnline ? "dot dot--on" : "dot"} />
+              <span className="muted small">{phonesOnline ? `${phonesOnline} 台手机在线` : "没有手机在线"}</span>
+            </span>
+            <button type="button" className="icon-btn icon-btn--plain" onClick={onCycleTheme} title={themeLabel(themeMode)}>
               <ThemeIcon mode={themeMode} />
             </button>
+            <button type="button" className="icon-btn icon-btn--plain" onClick={() => setSettingsOpen(true)} title="设置">
+              <Icon name="settings" size={16} />
+            </button>
           </div>
-        </nav>
-
-        {status ? <div className="banner">{status}</div> : null}
-
-        <div className={(listSection && route.name === "task") || (section === "runs" && route.name === "run") ? "workspace workspace--split" : "workspace"}>
-          {listSection ? (
-            route.name === "task" ? (
-              <>
-                <div className="pane pane--list">{listFor(listSection)}</div>
-                <div className="pane pane--detail">{taskDetail(true)}</div>
-              </>
-            ) : (
-              <div className="pane pane--wide">{listFor(listSection)}</div>
-            )
-          ) : section === "runs" ? (
-            route.name === "run" ? (
-              <>
-                <div className="pane pane--list">
-                  <RunsView snapshot={snapshot} selectedRunId={selectedRun?.id} onOpenRun={openRun} />
-                </div>
-                <div className="pane pane--detail">{runDetail(true)}</div>
-              </>
-            ) : (
-              <div className="pane pane--wide">
-                <RunsView snapshot={snapshot} selectedRunId={selectedRun?.id} onOpenRun={openRun} />
-              </div>
-            )
-          ) : section === "projects" ? (
-            <div className="pane pane--single">
-              <ProjectsView snapshot={snapshot} client={client} />
-            </div>
-          ) : (
-            <div className="pane pane--single">{settingsView}</div>
-          )}
+        </aside>
+        <div className="main">
+          {status ? <div className="banner">{status}</div> : null}
+          {route.name === "task" ? threadOrNotFound : home}
         </div>
+        {settings}
       </main>
     );
   }
 
-  const detailRoute = route.name === "task" || route.name === "run";
   return (
     <main className="app app--phone">
-      {status ? <div className="banner">{status}</div> : null}
-      <div className="phone-body">
-        {route.name === "task"
-          ? taskDetail(false)
-          : route.name === "run"
-            ? runDetail(false)
-            : section === "inbox"
-              ? listFor("inbox")
-              : section === "tasks"
-                ? listFor("tasks")
-                : section === "runs"
-                  ? <RunsView snapshot={snapshot} onOpenRun={openRun} />
-                  : section === "projects"
-                    ? <ProjectsView snapshot={snapshot} client={client} />
-                    : settingsView}
-      </div>
-      {!detailRoute ? (
-        <nav className="tabbar">
-          {NAV.map((item) => (
-            <button
-              key={item.section}
-              type="button"
-              className={item.section === section ? "tab tab--on" : "tab"}
-              onClick={() => navigate(item.route)}
-            >
-              <span className="tab__icon">
-                <Icon name={item.icon} size={20} />
-                {counts[item.section] ? <span className="tab__badge">{counts[item.section]}</span> : null}
-              </span>
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </nav>
-      ) : null}
-    </main>
-  );
-}
-
-function NotFound({ label, onBack }: { label: string; onBack(): void }): JSX.Element {
-  return (
-    <section className="screen">
-      <EmptyState
-        title={label}
-        action={
-          <button type="button" className="ghost" onClick={onBack}>
-            返回列表
+      <header className="topbar">
+        {route.name === "task" ? (
+          <button type="button" className="icon-btn icon-btn--plain" onClick={goHome} title="返回">
+            <Icon name="back" />
           </button>
-        }
-      />
-    </section>
+        ) : (
+          <span className="chrome__mark">N</span>
+        )}
+        <strong className="topbar__title">{task ? task.title : "Nearbox"}</strong>
+        {route.name !== "task" ? <span className={phonesOnline || client.surface === "phone" ? "dot dot--on" : "dot"} title="已连上电脑" /> : null}
+        <button type="button" className="icon-btn icon-btn--plain" onClick={() => setSettingsOpen(true)} title="设置">
+          <Icon name="settings" size={18} />
+        </button>
+      </header>
+      {status ? <div className="banner">{status}</div> : null}
+      <div className="main">{route.name === "task" ? threadOrNotFound : home}</div>
+      {settings}
+    </main>
   );
 }

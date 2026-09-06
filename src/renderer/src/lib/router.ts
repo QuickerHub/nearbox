@@ -1,77 +1,41 @@
 import { useCallback, useEffect, useState } from "react";
-import type { TaskStatus } from "@shared/protocol";
 
+/**
+ * Three places to be: a fresh conversation, one task's thread, or settings.
+ * Old links (#/run/:id, #/inbox, #/tasks, #/projects) are still parsed so
+ * notifications and bookmarks from earlier versions keep working.
+ */
 export type Route =
-  | { name: "inbox" }
-  | { name: "tasks"; status: TaskStatus | "all" }
+  | { name: "home" }
   | { name: "task"; id: string }
-  | { name: "runs" }
   | { name: "run"; id: string }
-  | { name: "projects" }
   | { name: "settings" };
-
-export type Section = "inbox" | "tasks" | "runs" | "projects" | "settings";
 
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#\/?/, "");
-  const [pathPart, query = ""] = raw.split("?");
-  const parts = (pathPart ?? "").split("/").filter(Boolean);
-  const params = new URLSearchParams(query);
+  const [pathPart = ""] = raw.split("?");
+  const parts = pathPart.split("/").filter(Boolean);
   switch (parts[0]) {
-    case "tasks": {
-      const status = params.get("status") ?? "all";
-      return { name: "tasks", status: isStatus(status) ? status : "all" };
-    }
     case "task":
-      return parts[1] ? { name: "task", id: decodeURIComponent(parts[1]) } : { name: "tasks", status: "all" };
-    case "runs":
-      return { name: "runs" };
+      return parts[1] ? { name: "task", id: decodeURIComponent(parts[1]) } : { name: "home" };
     case "run":
-      return parts[1] ? { name: "run", id: decodeURIComponent(parts[1]) } : { name: "runs" };
-    case "projects":
-      return { name: "projects" };
+      return parts[1] ? { name: "run", id: decodeURIComponent(parts[1]) } : { name: "home" };
     case "settings":
+    case "projects":
       return { name: "settings" };
     default:
-      return { name: "inbox" };
-  }
-}
-
-function isStatus(value: string): value is TaskStatus | "all" {
-  return value === "all" || value === "inbox" || value === "todo" || value === "doing" || value === "done";
-}
-
-export function sectionOf(route: Route): Section {
-  switch (route.name) {
-    case "inbox":
-      return "inbox";
-    case "tasks":
-    case "task":
-      return "tasks";
-    case "runs":
-    case "run":
-      return "runs";
-    case "projects":
-      return "projects";
-    case "settings":
-      return "settings";
+      return { name: "home" };
   }
 }
 
 export function hrefFor(route: Route): string {
   switch (route.name) {
-    case "inbox":
-      return "#/inbox";
-    case "tasks":
-      return route.status === "all" ? "#/tasks" : `#/tasks?status=${route.status}`;
+    case "home":
+      return "#/";
     case "task":
       return `#/task/${encodeURIComponent(route.id)}`;
-    case "runs":
-      return "#/runs";
     case "run":
       return `#/run/${encodeURIComponent(route.id)}`;
-    case "projects":
-      return "#/projects";
     case "settings":
       return "#/settings";
   }
@@ -103,7 +67,7 @@ export function useRoute(): { route: Route; navigate(route: Route | string, repl
     if (window.history.length > 1) {
       window.history.back();
     } else {
-      window.location.hash = "#/inbox";
+      window.location.hash = "#/";
     }
   }, []);
 

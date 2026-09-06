@@ -181,7 +181,7 @@ function notifyRunFinished(run: AgentRun): void {
     .join("\n")
     .slice(0, 240);
   const notification = new Notification({ title, body: body || "运行结束", silent: false });
-  notification.on("click", () => showWindow(`#/run/${run.id}`));
+  notification.on("click", () => showWindow(`#/task/${run.taskId}`));
   notification.show();
 }
 

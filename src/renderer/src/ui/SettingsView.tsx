@@ -1,24 +1,36 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AGENT_KINDS, AGENT_LABELS, type AgentKind, type HostSnapshot } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatRelative } from "../lib/format";
 import { type ThemeMode, themeLabel } from "../theme";
 import { Icon, ThemeIcon } from "./Icons";
+import { ProjectsBlock } from "./ProjectsBlock";
 
 interface SettingsViewProps {
   snapshot: HostSnapshot;
   client: ClientHandle;
   themeMode: ThemeMode;
   onCycleTheme(): void;
+  onClose(): void;
 }
 
-export function SettingsView({ snapshot, client, themeMode, onCycleTheme }: SettingsViewProps): JSX.Element {
+/** Settings live in a modal over the conversation; Escape or the backdrop closes it. */
+export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClose }: SettingsViewProps): JSX.Element {
   const desktop = client.surface === "desktop";
   const [copied, setCopied] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const invite = snapshot.invite;
   const phones = snapshot.devices.filter((device) => device.role === "phone");
   const settings = snapshot.settings;
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const copy = async (label: string, text: string) => {
     await navigator.clipboard.writeText(text);
@@ -32,8 +44,15 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme }: Sett
   };
 
   return (
-    <section className="screen settings">
-      <div className="screen__scroll settings__scroll">
+    <div className="modal-backdrop" onClick={onClose} role="presentation">
+      <section className="modal settings" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="设置">
+        <header className="modal__head">
+          <h2>设置</h2>
+          <button type="button" className="icon-btn icon-btn--plain" onClick={onClose} title="关闭">
+            <Icon name="close" />
+          </button>
+        </header>
+      <div className="modal__body settings__scroll">
         {desktop ? (
           <section className="settings__block">
             <div className="settings__block-head">
@@ -129,6 +148,8 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme }: Sett
             </div>
           </section>
         )}
+
+        <ProjectsBlock snapshot={snapshot} client={client} />
 
         <section className="settings__block">
           <div className="settings__block-head">
@@ -276,6 +297,7 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme }: Sett
           </div>
         </section>
       </div>
-    </section>
+      </section>
+    </div>
   );
 }
