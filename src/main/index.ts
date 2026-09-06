@@ -17,7 +17,7 @@ async function createWindow(): Promise<void> {
     minWidth: 880,
     minHeight: 620,
     title: "Nearbox",
-    backgroundColor: "#161410",
+    backgroundColor: "#f3f5f8",
     autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, "../preload/index.mjs"),

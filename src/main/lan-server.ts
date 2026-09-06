@@ -183,7 +183,7 @@ export class LanServer extends EventEmitter {
     const qrDataUrl = await QRCode.toDataURL(url, {
       margin: 1,
       width: 320,
-      color: { dark: "#1b1914", light: "#fffaf1" },
+      color: { dark: "#111827", light: "#ffffff" },
     });
     this.invite = {
       url,

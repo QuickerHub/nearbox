@@ -1,16 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { HostSnapshot } from "@shared/protocol";
 import { connectClient, pairWithPin, type ClientHandle } from "./lib/client";
+import {
+  applyTheme,
+  cycleTheme,
+  readThemeMode,
+  themeLabel,
+  type ThemeMode,
+} from "./theme";
 import { ChatPane } from "./ui/ChatPane";
+import { ThemeIcon } from "./ui/Icons";
 import { PairingPane } from "./ui/PairingPane";
 
 export function App(): JSX.Element {
   const [snapshot, setSnapshot] = useState<HostSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pin, setPin] = useState("");
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => readThemeMode());
   const clientRef = useRef<ClientHandle | null>(null);
   const [client, setClient] = useState<ClientHandle | null>(null);
   const isDesktop = Boolean(window.nearboxDesktop);
+
+  useEffect(() => {
+    applyTheme(themeMode);
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => applyTheme(readThemeMode());
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, [themeMode]);
 
   useEffect(() => {
     let disposed = false;
@@ -51,6 +68,19 @@ export function App(): JSX.Element {
   const onlinePhones = useMemo(
     () => (snapshot?.devices ?? []).filter((item) => item.role === "phone" && item.online),
     [snapshot],
+  );
+
+  const onCycleTheme = () => {
+    const next = cycleTheme(themeMode);
+    setThemeMode(next);
+    applyTheme(next);
+  };
+
+  const themeButton = (
+    <button type="button" className="theme-btn" onClick={onCycleTheme} title={themeLabel(themeMode)}>
+      <ThemeIcon mode={themeMode} />
+      <span>{themeLabel(themeMode)}</span>
+    </button>
   );
 
   if (!isDesktop && !snapshot && error?.includes("缺少邀请")) {
@@ -99,21 +129,44 @@ export function App(): JSX.Element {
   return (
     <main className={isDesktop ? "app app--desktop" : "app app--phone"}>
       {isDesktop ? (
-        <PairingPane
-          snapshot={snapshot}
-          onRefresh={() => void client.refreshInvite()}
-          onSelectHost={(host) => void client.setHost(host)}
-          onOpenInbox={() => void client.openInbox()}
-        />
+        <header className="chrome">
+          <div className="chrome__brand">
+            <span className="chrome__mark">N</span>
+            <strong>Nearbox</strong>
+          </div>
+          <div className="chrome__meta">
+            <span className="chrome__dot" />
+            <span>
+              {snapshot.selectedHost || "未发现局域网地址"}
+              {snapshot.selectedHost ? `:${snapshot.port}` : ""}
+            </span>
+            <span>·</span>
+            <span>{onlinePhones.length ? `${onlinePhones.length} 台手机在线` : "等待手机加入"}</span>
+          </div>
+          <div className="chrome__actions">{themeButton}</div>
+        </header>
       ) : (
         <header className="phone-bar">
           <div>
             <p className="eyebrow">已连上 {snapshot.hostName}</p>
             <h1>Nearbox</h1>
           </div>
-          <span className={onlinePhones.length ? "pill pill--on" : "pill"}>{onlinePhones.length ? "在线" : "连接中"}</span>
+          <div className="chrome__actions">
+            <span className={onlinePhones.length ? "pill pill--on" : "pill"}>
+              {onlinePhones.length ? "在线" : "连接中"}
+            </span>
+            {themeButton}
+          </div>
         </header>
       )}
+      {isDesktop ? (
+        <PairingPane
+          snapshot={snapshot}
+          onRefresh={() => void client.refreshInvite()}
+          onSelectHost={(host) => void client.setHost(host)}
+          onOpenInbox={() => void client.openInbox()}
+        />
+      ) : null}
       <ChatPane
         snapshot={snapshot}
         surface={client.surface}
