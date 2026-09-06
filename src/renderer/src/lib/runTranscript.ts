@@ -1,437 +1,302 @@
-import type { RunEvent } from "../../../shared/protocol";
-
-export type ToolKind = "shell" | "file" | "search" | "generic";
-export type ToolStatus = "running" | "done" | "error";
-
-export interface ParsedTool {
-  kind: ToolKind;
-  name: string;
-  rawName: string;
-  status: ToolStatus;
-  meta: string;
-  command?: string;
-  output?: string;
-  detail?: string;
-  exitCode?: number;
-}
+import type { RunEvent, ToolCall, ToolKind, ToolStatus } from "../../../shared/protocol";
 
 export type TranscriptItem =
-  | { type: "status"; text: string; seq: number }
   | { type: "thinking"; text: string; seq: number }
-  | { type: "tool"; tool: ParsedTool; seq: number }
   | { type: "text"; text: string; seq: number }
+  | { type: "tool"; tool: ToolCall; seq: number }
+  | { type: "status"; text: string; seq: number }
   | { type: "stderr"; text: string; seq: number }
-  | { type: "raw"; text: string; seq: number }
-  | { type: "result"; text: string; error: boolean; seq: number };
+  | { type: "raw"; text: string; seq: number };
 
-const TOOL_LABELS: Record<string, { label: string; kind: ToolKind }> = {
-  read: { label: "读取文件", kind: "file" },
-  read_file: { label: "读取文件", kind: "file" },
-  readfile: { label: "读取文件", kind: "file" },
-  write: { label: "写入文件", kind: "file" },
-  write_file: { label: "写入文件", kind: "file" },
-  writefile: { label: "写入文件", kind: "file" },
-  edit: { label: "编辑文件", kind: "file" },
-  edit_file: { label: "编辑文件", kind: "file" },
-  strreplace: { label: "编辑文件", kind: "file" },
-  apply_patch: { label: "应用补丁", kind: "file" },
-  delete: { label: "删除文件", kind: "file" },
-  delete_file: { label: "删除文件", kind: "file" },
-  glob: { label: "查找文件", kind: "file" },
-  find_files: { label: "查找文件", kind: "file" },
-  ls: { label: "列出目录", kind: "file" },
-  list_dir: { label: "列出目录", kind: "file" },
-  grep: { label: "搜索内容", kind: "search" },
-  search: { label: "搜索内容", kind: "search" },
-  codebase_search: { label: "搜索内容", kind: "search" },
-  web_search: { label: "网页搜索", kind: "search" },
-  websearch: { label: "网页搜索", kind: "search" },
-  shell: { label: "终端", kind: "shell" },
-  bash: { label: "终端", kind: "shell" },
-  run_command: { label: "终端", kind: "shell" },
-  command_execution: { label: "终端", kind: "shell" },
-  todo_list: { label: "待办", kind: "generic" },
-  mcp_tool_call: { label: "MCP", kind: "generic" },
-};
+/** Rows the UI renders inside the work fold. */
+export type WorkRow =
+  | { type: "thinking"; text: string; seq: number }
+  | { type: "text"; text: string; seq: number }
+  | { type: "tool"; tool: ToolCall; seq: number }
+  /** A run of consecutive same-kind lookups (reads, searches…) folded into one line. */
+  | { type: "tools"; kind: ToolKind; tools: ToolCall[]; seq: number }
+  | { type: "status"; text: string; seq: number }
+  | { type: "stderr"; lines: string[]; seq: number }
+  | { type: "raw"; lines: string[]; seq: number };
 
-const NOISY_STATUS = /^(已连接|已收到任务|开始处理|会话已创建|step|session)/i;
-
-interface ToolParse {
-  phase: "start" | "complete" | "result";
-  kind?: ToolKind;
-  rawName?: string;
-  status?: ToolStatus;
-  meta?: string;
-  command?: string;
-  output?: string;
-  detail?: string;
-  exitCode?: number;
-}
-
-export function normalizeToolId(name: string): string {
-  return name
-    .trim()
-    .replace(/ToolCall$/i, "")
-    .replace(/[\s-]+/g, "_")
-    .toLowerCase();
-}
-
-export function toolLabel(rawName: string): string {
-  const id = normalizeToolId(rawName);
-  return TOOL_LABELS[id]?.label ?? rawName.replace(/_/g, " ");
-}
-
-export function toolKind(rawName: string, fallback?: ToolKind): ToolKind {
-  const id = normalizeToolId(rawName);
-  return TOOL_LABELS[id]?.kind ?? fallback ?? "generic";
-}
-
-export function fileActionLabel(rawName: string, status: ToolStatus): string {
-  const id = normalizeToolId(rawName);
-  const writing = /write/.test(id);
-  const editing = /edit|strreplace|patch|delete/.test(id);
-  const listing = /glob|find|ls|list/.test(id);
-  if (status === "running") {
-    if (writing) return "写入";
-    if (editing) return "编辑";
-    if (listing) return "查找";
-    return "读取";
-  }
-  if (writing) return "已写入";
-  if (editing) return "已编辑";
-  if (listing) return "已查找";
-  return "已读取";
-}
-
-export function parseToolLine(text: string): ToolParse {
-  const trimmed = text.replace(/\r\n/g, "\n").trimEnd();
-  if (trimmed.startsWith("$ ")) {
-    const [command, ...rest] = trimmed.slice(2).split("\n");
-    return {
-      phase: "start",
-      kind: "shell",
-      rawName: "run_command",
-      status: "running",
-      command,
-      output: rest.join("\n") || undefined,
-      meta: clip(command ?? "", 72),
-    };
-  }
-
-  const ended = /^命令结束(?: \(exit (-?\d+)\))?(?:\n([\s\S]*))?$/.exec(trimmed);
-  if (ended) {
-    const exitCode = ended[1] === undefined ? undefined : Number(ended[1]);
-    const failed = exitCode !== undefined && exitCode !== 0;
-    return {
-      phase: "complete",
-      kind: "shell",
-      rawName: "run_command",
-      status: failed ? "error" : "done",
-      exitCode,
-      output: ended[2] || undefined,
-      meta: failed ? `exit ${exitCode}` : exitCode === undefined ? "完成" : "成功",
-    };
-  }
-
-  const done = /^完成\s+([^:：]+)[:：]\s*([\s\S]*)$/.exec(trimmed);
-  if (done) {
-    const rawName = done[1]!.trim();
-    const detail = done[2] ?? "";
-    return {
-      phase: "complete",
-      rawName,
-      kind: toolKind(rawName),
-      status: "done",
-      detail,
-      meta: peekMeta(rawName, detail),
-    };
-  }
-
-  if (trimmed.startsWith("结果:")) {
-    return { phase: "result", output: trimmed.slice(3).trim(), status: "done" };
-  }
-
-  if (trimmed.startsWith("修改文件")) {
-    const body = trimmed.replace(/^修改文件\s*\n?/, "").trim();
-    return {
-      phase: "complete",
-      kind: "file",
-      rawName: "edit_file",
-      status: "done",
-      meta: firstPath(body) || clip(body, 72),
-      detail: body,
-    };
-  }
-
-  if (trimmed.startsWith("修改 ")) {
-    const body = trimmed.slice(3).trim();
-    return {
-      phase: "complete",
-      kind: "file",
-      rawName: "edit_file",
-      status: "done",
-      meta: clip(body, 72),
-      detail: body,
-    };
-  }
-
-  const started = /^([A-Za-z][\w./-]*)(?:\s+(running|completed|pending|error))?\s+([\s\S]+)$/.exec(trimmed);
-  if (started) {
-    const rawName = started[1]!;
-    const word = started[2];
-    const rest = started[3] ?? "";
-    const status: ToolStatus = word === "error" ? "error" : word === "completed" ? "done" : "running";
-    return {
-      phase: word === "completed" || word === "error" ? "complete" : "start",
-      rawName,
-      kind: toolKind(rawName),
-      status,
-      detail: rest,
-      meta: peekMeta(rawName, rest),
-    };
-  }
-
-  return { phase: "start", rawName: "tool", status: "running", meta: clip(trimmed, 72), detail: trimmed };
-}
-
-export function buildTranscript(events: readonly RunEvent[]): TranscriptItem[] {
-  const items: TranscriptItem[] = [];
-  for (const event of events) {
-    if (event.kind === "thinking") {
-      const last = items.at(-1);
-      if (last?.type === "thinking") {
-        last.text += last.text && !last.text.endsWith("\n") && !event.text.startsWith("\n") ? event.text : event.text;
-      } else {
-        items.push({ type: "thinking", text: event.text, seq: event.seq });
-      }
-      continue;
-    }
-    if (event.kind === "text") {
-      const last = items.at(-1);
-      if (last?.type === "text") {
-        last.text = joinText(last.text, event.text);
-      } else {
-        items.push({ type: "text", text: event.text, seq: event.seq });
-      }
-      continue;
-    }
-    if (event.kind === "tool") {
-      const parsed = parseToolLine(event.text);
-      const last = items.at(-1);
-      if (last?.type === "tool" && canMerge(last.tool, parsed)) {
-        mergeTool(last.tool, parsed);
-        last.seq = event.seq;
-      } else {
-        if (last?.type === "tool" && last.tool.status === "running") {
-          last.tool.status = "done";
-        }
-        items.push({ type: "tool", tool: toTool(parsed), seq: event.seq });
-      }
-      continue;
-    }
-    if (event.kind === "status") {
-      items.push({ type: "status", text: event.text, seq: event.seq });
-      continue;
-    }
-    if (event.kind === "stderr") {
-      items.push({ type: "stderr", text: event.text, seq: event.seq });
-      continue;
-    }
-    if (event.kind === "raw") {
-      items.push({ type: "raw", text: event.text, seq: event.seq });
-      continue;
-    }
-    if (event.kind === "result") {
-      items.push({ type: "result", text: event.text, error: /失败|错误|error/i.test(event.text), seq: event.seq });
-    }
-  }
-  return items;
-}
-
-export function splitWork(items: readonly TranscriptItem[]): {
-  work: TranscriptItem[];
-  summary: TranscriptItem[];
-  trailing: TranscriptItem[];
+export interface Transcript {
+  /** Everything up to and including the last tool call or thought, in order. */
+  work: WorkRow[];
+  /** Assistant text after the last tool call: the answer for this turn. */
+  answer: string;
   toolCount: number;
-} {
-  const body: TranscriptItem[] = [];
-  const trailing: TranscriptItem[] = [];
-  for (const item of items) {
-    if (item.type === "result") {
-      trailing.push(item);
-    } else {
-      body.push(item);
-    }
-  }
-
-  let lastWork = -1;
-  let toolCount = 0;
-  for (let i = 0; i < body.length; i += 1) {
-    const item = body[i]!;
-    if (item.type === "tool") {
-      toolCount += 1;
-      lastWork = i;
-    } else if (item.type === "thinking" && item.text.trim()) {
-      lastWork = i;
-    }
-  }
-
-  if (lastWork < 0 || toolCount === 0) {
-    return { work: [], summary: body, trailing, toolCount };
-  }
-
-  return {
-    work: body.slice(0, lastWork + 1).filter(visibleInWork),
-    summary: body.slice(lastWork + 1),
-    trailing,
-    toolCount,
-  };
+  /** Calls the agent has started but not finished. */
+  running: ToolCall[];
 }
+
+/** Statuses the runner and CLIs emit for bookkeeping; they add nothing in a chat view. */
+const NOISY_STATUS = /^(启动 |运行结束|运行失败|已停止|模型 |已连接|已收到任务|开始处理|会话已创建|step|session)/i;
+
+/** Lookups that read a lot and say little; consecutive ones collapse into "读取了 N 个文件". */
+const GROUPABLE: ReadonlySet<ToolKind> = new Set<ToolKind>(["read", "glob", "grep", "ls", "web"]);
 
 export function isNoisyStatus(text: string): boolean {
   return NOISY_STATUS.test(text.trim());
 }
 
-function visibleInWork(item: TranscriptItem): boolean {
-  return item.type !== "status" || !isNoisyStatus(item.text);
-}
-
-function canMerge(tool: ParsedTool, next: ToolParse): boolean {
-  if (next.phase === "result") {
-    return true;
-  }
-  if (next.phase !== "complete") {
-    return false;
-  }
-  if (tool.status !== "running" && next.rawName && normalizeToolId(next.rawName) !== normalizeToolId(tool.rawName)) {
-    return false;
-  }
-  if (next.kind && tool.kind !== "generic" && next.kind !== tool.kind) {
-    return tool.kind === "shell" && next.kind === "shell";
-  }
-  return true;
-}
-
-function mergeTool(tool: ParsedTool, next: ToolParse): void {
-  if (next.command && !tool.command) {
-    tool.command = next.command;
-  }
-  if (next.output) {
-    tool.output = tool.output ? `${tool.output}\n${next.output}` : next.output;
-  }
-  if (next.detail) {
-    tool.detail = tool.detail && tool.detail !== next.detail ? `${tool.detail}\n${next.detail}` : next.detail;
-  }
-  if (next.exitCode !== undefined) {
-    tool.exitCode = next.exitCode;
-  }
-  if (next.kind && tool.kind === "generic") {
-    tool.kind = next.kind;
-  }
-  if (next.rawName && tool.rawName === "tool") {
-    tool.rawName = next.rawName;
-    tool.name = toolLabel(next.rawName);
-  }
-  if (next.meta && (next.phase === "complete" || !tool.meta || tool.meta === "…")) {
-    if (tool.kind === "file" && tool.meta && next.phase === "complete") {
-      // keep the path from the start event
-    } else if (tool.command) {
-      tool.meta = next.meta;
-    } else if (!looksLikeJsonBlob(next.meta) || !tool.meta) {
-      tool.meta = next.meta;
+/**
+ * Turn the raw event stream into ordered items. Tool events that share an id
+ * collapse into one item that keeps the position of the first and the state
+ * of the latest; text and thinking deltas merge with their neighbours.
+ */
+export function buildTranscript(events: readonly RunEvent[]): TranscriptItem[] {
+  const items: TranscriptItem[] = [];
+  const toolIndex = new Map<string, number>();
+  for (const event of events) {
+    switch (event.kind) {
+      case "thinking":
+      case "text": {
+        const last = items.at(-1);
+        if (last?.type === event.kind) {
+          last.text = joinText(last.text, event.text);
+        } else {
+          items.push({ type: event.kind, text: event.text, seq: event.seq });
+        }
+        break;
+      }
+      case "tool": {
+        const tool = event.tool ?? legacyTool(event.text, event.seq, items);
+        if (!tool) {
+          break;
+        }
+        const existing = toolIndex.get(tool.id);
+        if (existing !== undefined) {
+          const item = items[existing];
+          if (item?.type === "tool") {
+            item.tool = { ...item.tool, ...tool };
+          }
+        } else {
+          toolIndex.set(tool.id, items.length);
+          items.push({ type: "tool", tool, seq: event.seq });
+        }
+        break;
+      }
+      case "status":
+        if (!isNoisyStatus(event.text)) {
+          items.push({ type: "status", text: event.text, seq: event.seq });
+        }
+        break;
+      case "stderr":
+      case "raw":
+        items.push({ type: event.kind, text: event.text, seq: event.seq });
+        break;
+      case "result":
+        break;
     }
   }
-  if (next.status) {
-    tool.status = next.status;
-  } else if (next.phase === "complete" || next.phase === "result") {
-    tool.status = tool.status === "error" ? "error" : "done";
-  }
+  return items;
 }
 
-function toTool(parsed: ToolParse): ParsedTool {
-  const rawName = parsed.rawName ?? "tool";
+/** Split items into the collapsible work section and the final answer, grouping rows for display. */
+export function summarizeTranscript(items: readonly TranscriptItem[]): Transcript {
+  let lastWork = -1;
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]!;
+    if (item.type === "tool" || (item.type === "thinking" && item.text.trim())) {
+      lastWork = index;
+    }
+  }
+  const head = items.slice(0, lastWork + 1);
+  const tail = items.slice(lastWork + 1);
+  const answer = tail
+    .filter((item): item is Extract<TranscriptItem, { type: "text" }> => item.type === "text")
+    .map((item) => item.text.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  // Diagnostics that arrive after the answer (stderr on exit, a late status) still belong to the work section.
+  const work = groupRows([...head, ...tail.filter((item) => item.type !== "text")]);
+  const tools = items.filter((item): item is Extract<TranscriptItem, { type: "tool" }> => item.type === "tool").map((item) => item.tool);
   return {
-    kind: parsed.kind ?? toolKind(rawName),
-    name: toolLabel(rawName),
-    rawName,
-    status: parsed.status ?? (parsed.phase === "complete" ? "done" : "running"),
-    meta: parsed.meta ?? parsed.command ?? "",
-    command: parsed.command,
-    output: parsed.output,
-    detail: parsed.detail,
-    exitCode: parsed.exitCode,
+    work,
+    answer,
+    toolCount: tools.length,
+    running: tools.filter((tool) => tool.status === "running"),
   };
 }
 
-function peekMeta(rawName: string, rest: string): string {
-  const json = tryJson(rest);
-  if (json) {
-    const hit = firstPathish(json);
-    if (hit) {
-      return clip(hit, 72);
-    }
-  }
-  const path = firstPath(rest);
-  if (path) {
-    return clip(path, 72);
-  }
-  if (toolKind(rawName) === "shell") {
-    const command = json && typeof json.command === "string" ? json.command : rest;
-    return clip(command, 72);
-  }
-  return clip(stripJsonNoise(rest), 72);
-}
-
-function firstPathish(value: Record<string, unknown>): string {
-  for (const key of ["path", "file", "filename", "target_file", "target", "query", "pattern", "command", "cmd", "url"]) {
-    const item = value[key];
-    if (typeof item === "string" && item.trim()) {
-      return item.trim();
-    }
-  }
-  for (const item of Object.values(value)) {
-    if (typeof item === "string" && /[\\/]/.test(item) && item.length < 160) {
-      return item;
-    }
-    if (item && typeof item === "object" && !Array.isArray(item)) {
-      const nested = firstPathish(item as Record<string, unknown>);
-      if (nested) {
-        return nested;
+function groupRows(items: readonly TranscriptItem[]): WorkRow[] {
+  const rows: WorkRow[] = [];
+  for (const item of items) {
+    const last = rows.at(-1);
+    switch (item.type) {
+      case "tool": {
+        const kind = item.tool.kind;
+        if (GROUPABLE.has(kind)) {
+          if (last?.type === "tools" && last.kind === kind) {
+            last.tools.push(item.tool);
+            break;
+          }
+          if (last?.type === "tool" && last.tool.kind === kind) {
+            rows[rows.length - 1] = { type: "tools", kind, tools: [last.tool, item.tool], seq: last.seq };
+            break;
+          }
+        }
+        rows.push({ type: "tool", tool: item.tool, seq: item.seq });
+        break;
       }
+      case "stderr":
+      case "raw": {
+        if (last?.type === item.type) {
+          last.lines.push(item.text);
+        } else {
+          rows.push({ type: item.type, lines: [item.text], seq: item.seq });
+        }
+        break;
+      }
+      default:
+        rows.push(item);
     }
   }
-  return "";
+  return rows;
 }
 
-function firstPath(text: string): string {
-  const match = /(?:^|[\s"'=])((?:[A-Za-z]:)?(?:[\\/][\w.\-@]+)+\.[A-Za-z0-9]+|[\w.\-]+(?:[\\/][\w.\-]+)+\.[A-Za-z0-9]+)/.exec(text);
-  return match?.[1] ?? "";
+// ---------------------------------------------------------------------------
+// Presentation helpers shared by the rows
+// ---------------------------------------------------------------------------
+
+const VERBS: Record<ToolKind, { running: string; done: string }> = {
+  shell: { running: "运行", done: "运行了" },
+  read: { running: "读取", done: "读取了" },
+  edit: { running: "编辑", done: "编辑了" },
+  write: { running: "写入", done: "写入了" },
+  delete: { running: "删除", done: "删除了" },
+  glob: { running: "查找", done: "查找了" },
+  grep: { running: "搜索", done: "搜索了" },
+  ls: { running: "列出", done: "列出了" },
+  web: { running: "查询", done: "查询了" },
+  task: { running: "子任务", done: "子任务" },
+  todo: { running: "更新待办", done: "更新了待办" },
+  mcp: { running: "调用", done: "调用了" },
+  other: { running: "调用", done: "调用了" },
+};
+
+const GROUP_NOUNS: Record<ToolKind, string> = {
+  shell: "条命令",
+  read: "个文件",
+  edit: "处",
+  write: "个文件",
+  delete: "个文件",
+  glob: "次",
+  grep: "次",
+  ls: "个目录",
+  web: "次",
+  task: "个子任务",
+  todo: "次",
+  mcp: "次",
+  other: "次",
+};
+
+export function toolVerb(tool: Pick<ToolCall, "kind" | "status">): string {
+  const verbs = VERBS[tool.kind];
+  return tool.status === "running" ? verbs.running : verbs.done;
 }
 
-function tryJson(text: string): Record<string, unknown> | null {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+/** "读取了 4 个文件" / "搜索了 3 次" */
+export function groupLabel(kind: ToolKind, count: number, running: boolean): string {
+  const verbs = VERBS[kind];
+  return `${running ? verbs.running : verbs.done} ${count} ${GROUP_NOUNS[kind]}`;
+}
+
+/** Short, plain name for a tool the app does not otherwise recognise. */
+export function prettyToolName(name: string): string {
+  const id = name.replace(/ToolCall$/i, "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").trim();
+  return id ? id.charAt(0).toLowerCase() + id.slice(1) : "tool";
+}
+
+export function statusLabel(tool: ToolCall): string {
+  switch (tool.status) {
+    case "running":
+      return "进行中";
+    case "rejected":
+      return "被拦截";
+    case "error":
+      return tool.exitCode !== undefined && tool.exitCode !== 0 ? `退出码 ${tool.exitCode}` : "失败";
+    default:
+      return "";
+  }
+}
+
+export function isFailed(status: ToolStatus): boolean {
+  return status === "error" || status === "rejected";
+}
+
+/** Anything worth opening the row for. */
+export function hasDetail(tool: ToolCall): boolean {
+  return Boolean(tool.output || tool.diff || tool.input || tool.error || (tool.files && tool.files.length > 1));
+}
+
+/** Lines of a unified diff, tagged for colouring. */
+export function diffLines(diff: string): { tag: "add" | "del" | "hunk" | "meta" | "ctx"; text: string }[] {
+  return diff
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .filter((line, index, all) => !(index === all.length - 1 && line === ""))
+    .map((line) => {
+      if (line.startsWith("+++") || line.startsWith("---")) {
+        return { tag: "meta" as const, text: line };
+      }
+      if (line.startsWith("@@")) {
+        return { tag: "hunk" as const, text: line };
+      }
+      if (line.startsWith("+")) {
+        return { tag: "add" as const, text: line };
+      }
+      if (line.startsWith("-")) {
+        return { tag: "del" as const, text: line };
+      }
+      return { tag: "ctx" as const, text: line };
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Legacy: logs written before tool events carried structured data
+// ---------------------------------------------------------------------------
+
+/**
+ * Old logs only have a text line per tool event ("read {…}", "完成 read: {…}",
+ * "$ npm test", "命令结束 (exit 0)"). Completions fold into the nearest
+ * still-running legacy tool; everything else starts a new generic row.
+ */
+function legacyTool(text: string, seq: number, items: readonly TranscriptItem[]): ToolCall | null {
+  const trimmed = text.replace(/\r\n/g, "\n").trim();
+  if (!trimmed) {
     return null;
   }
-  try {
-    const value = JSON.parse(trimmed) as unknown;
-    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
-  } catch {
-    return null;
+  const completion = /^(完成 |结果:|命令结束)/.test(trimmed);
+  if (completion) {
+    const open = [...items].reverse().find((item) => item.type === "tool" && item.tool.status === "running" && item.tool.id.startsWith("legacy-"));
+    if (open?.type === "tool") {
+      const exit = /\(exit (-?\d+)\)/.exec(trimmed);
+      const exitCode = exit ? Number(exit[1]) : undefined;
+      const failed = exitCode !== undefined && exitCode !== 0;
+      return {
+        ...open.tool,
+        status: failed ? "error" : "ok",
+        exitCode,
+        output: trimmed.replace(/^(完成 [^:：]*[:：]\s*|结果:\s*|命令结束[^\n]*\n?)/, "") || undefined,
+      };
+    }
   }
-}
-
-function looksLikeJsonBlob(text: string): boolean {
-  return text.trim().startsWith("{") || text.trim().startsWith("[");
-}
-
-function stripJsonNoise(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-function clip(text: string, max: number): string {
-  const value = text.replace(/\s+/g, " ").trim();
-  return value.length > max ? `${value.slice(0, max)}…` : value;
+  if (trimmed.startsWith("$ ")) {
+    const [command = "", ...rest] = trimmed.slice(2).split("\n");
+    return { id: `legacy-${seq}`, name: "shell", kind: "shell", status: "running", command, subject: command, output: rest.join("\n") || undefined };
+  }
+  const named = /^([A-Za-z][\w.-]*)\s+([\s\S]*)$/.exec(trimmed);
+  const name = named?.[1] ?? "tool";
+  const detail = named?.[2] ?? trimmed;
+  return {
+    id: `legacy-${seq}`,
+    name,
+    kind: "other",
+    status: "running",
+    subject: detail.replace(/\s+/g, " ").slice(0, 80),
+    input: detail,
+  };
 }
 
 function joinText(left: string, right: string): string {

@@ -9,6 +9,7 @@ export type Route =
   | { name: "home" }
   | { name: "task"; id: string }
   | { name: "run"; id: string }
+  | { name: "remote" }
   | { name: "settings" };
 
 export function parseRoute(hash: string): Route {
@@ -20,6 +21,8 @@ export function parseRoute(hash: string): Route {
       return parts[1] ? { name: "task", id: decodeURIComponent(parts[1]) } : { name: "home" };
     case "run":
       return parts[1] ? { name: "run", id: decodeURIComponent(parts[1]) } : { name: "home" };
+    case "remote":
+      return { name: "remote" };
     case "settings":
     case "projects":
       return { name: "settings" };
@@ -36,6 +39,8 @@ export function hrefFor(route: Route): string {
       return `#/task/${encodeURIComponent(route.id)}`;
     case "run":
       return `#/run/${encodeURIComponent(route.id)}`;
+    case "remote":
+      return "#/remote";
     case "settings":
       return "#/settings";
   }

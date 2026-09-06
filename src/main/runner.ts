@@ -10,6 +10,8 @@ import {
   type HostSettings,
   type RunEvent,
   type RunEventKind,
+  sessionIdAlongChain,
+  type ToolCall,
 } from "@shared/protocol";
 import {
   buildInvocation,
@@ -178,16 +180,21 @@ export class RunManager extends EventEmitter {
 
     const promptFile = join(this.options.runsDir, `${run.id}.prompt.md`);
     await writeFile(promptFile, run.prompt, "utf8");
+    // Resolved now rather than at dispatch time: the previous turn may still have been running when this one was queued.
+    const resumeSessionId = run.resumedFromRunId ? sessionIdAlongChain(this.options.listRuns(), run.resumedFromRunId) : undefined;
     const invocation = buildInvocation(run.agent, command, {
       prompt: run.prompt,
       cwd: run.cwd,
       access: run.access,
       model: run.model,
-      resumeSessionId: run.resumedFromRunId ? this.sessionIdOf(run.resumedFromRunId) : undefined,
+      resumeSessionId,
       promptFile,
     });
 
     this.append(run, "status", `启动 ${AGENT_LABELS[run.agent]} · ${run.access === "full" ? "完全放开" : "安全模式"} · ${run.cwd}`);
+    if (run.resumedFromRunId && !resumeSessionId) {
+      this.append(run, "status", "上一轮没有留下可继续的会话，这条消息将作为新会话发送。");
+    }
 
     let child: ChildProcess;
     try {
@@ -249,14 +256,22 @@ export class RunManager extends EventEmitter {
   private consume(state: ActiveRun, line: string): void {
     const parsed = state.parser.feed(line);
     for (const event of parsed.events) {
-      this.append(state.run, event.kind, event.text);
+      this.append(state.run, event.kind, event.text, event.tool);
     }
+    let changed = false;
     if (parsed.sessionId) {
       state.sessionId = parsed.sessionId;
       if (state.run.sessionId !== parsed.sessionId) {
         state.run.sessionId = parsed.sessionId;
-        this.options.onRunChanged(state.run);
+        changed = true;
       }
+    }
+    if (parsed.modelLabel && state.run.modelLabel !== parsed.modelLabel) {
+      state.run.modelLabel = parsed.modelLabel;
+      changed = true;
+    }
+    if (changed) {
+      this.options.onRunChanged(state.run);
     }
     if (parsed.result !== undefined) {
       state.result = parsed.result;
@@ -313,9 +328,12 @@ export class RunManager extends EventEmitter {
     this.options.onRunFinished(run);
   }
 
-  private append(run: AgentRun, kind: RunEventKind, text: string): void {
+  private append(run: AgentRun, kind: RunEventKind, text: string, tool?: ToolCall): void {
     run.eventCount += 1;
     const event: RunEvent = { seq: run.eventCount, at: new Date().toISOString(), kind, text };
+    if (tool) {
+      event.tool = tool;
+    }
     let cached = this.eventCache.get(run.id);
     if (!cached) {
       cached = [];
@@ -341,10 +359,6 @@ export class RunManager extends EventEmitter {
 
   private logPath(runId: string): string {
     return join(this.options.runsDir, `${runId}.jsonl`);
-  }
-
-  private sessionIdOf(runId: string): string | undefined {
-    return this.options.listRuns().find((run) => run.id === runId)?.sessionId;
   }
 
   private trimCache(): void {

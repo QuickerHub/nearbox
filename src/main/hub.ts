@@ -9,6 +9,7 @@ import {
   type AgentInfo,
   type AgentKind,
   type AgentRun,
+  canContinueRun,
   type DispatchInput,
   type FileMeta,
   type HostSettings,
@@ -345,11 +346,13 @@ export class TaskHub extends EventEmitter {
       if (!previous || previous.taskId !== task.id) {
         fail("找不到要继续的运行。", "NOT_FOUND");
       }
-      if (!previous.sessionId) {
-        fail("上一次运行没有留下会话，无法继续对话。请重新派发。");
-      }
       if (previous.agent !== agent) {
         fail("继续对话必须使用同一个 Agent。");
+      }
+      // A follow-up may be queued while the previous turn is still running; the
+      // session id is resolved along the chain when this run actually starts.
+      if (!canContinueRun(this.runs, previous)) {
+        fail("上一轮没有留下可继续的会话，请开始新会话。");
       }
       run.resumedFromRunId = previous.id;
       run.cwd = previous.cwd;
@@ -415,6 +418,9 @@ export class TaskHub extends EventEmitter {
     }
     if (patch.notifyOnRunFinish !== undefined) {
       settings.notifyOnRunFinish = Boolean(patch.notifyOnRunFinish);
+    }
+    if (patch.remoteControlEnabled !== undefined) {
+      settings.remoteControlEnabled = Boolean(patch.remoteControlEnabled);
     }
     if (patch.agents) {
       for (const kind of AGENT_KINDS) {

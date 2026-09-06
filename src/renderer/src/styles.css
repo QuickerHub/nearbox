@@ -2412,3 +2412,206 @@ a {
   }
 }
 
+/* ------------------------------------------------------------ remote control */
+
+.banner--remote {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--info-soft);
+  color: var(--text);
+}
+
+.home__remote {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  color: var(--text);
+  text-align: left;
+}
+
+.home__remote:hover {
+  border-color: var(--line-strong);
+  background: var(--bg-hover);
+}
+
+.home__remote > .icon:first-child {
+  color: var(--accent);
+}
+
+.home__remote > .icon:last-child {
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.home__remote-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.remote {
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  color: var(--text);
+}
+
+.remote__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+
+.remote__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.remote__title strong {
+  max-width: 24vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remote__state {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-sunken);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.remote__state--open {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.remote__state--closed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.remote__stats {
+  flex: 0 0 auto;
+}
+
+.remote__presets {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.remote__viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  background: #050505;
+  overflow: hidden;
+}
+
+.remote__canvas {
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  display: block;
+  background: #000;
+  border-radius: 6px;
+  box-shadow: var(--shadow-pop);
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.remote__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.remote__overlay strong {
+  color: var(--text);
+  font-size: 15px;
+  max-width: 360px;
+}
+
+.remote__controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+
+.remote__controls--view {
+  align-items: center;
+}
+
+.remote__modes {
+  display: flex;
+  gap: 6px;
+}
+
+.remote__keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.remote__keys .mini-btn {
+  min-height: 30px;
+}
+
+.remote__text {
+  display: flex;
+  gap: 6px;
+}
+
+.remote__text input {
+  flex: 1;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  padding: 7px 10px;
+  font-size: 16px; /* keeps iOS from zooming the viewport on focus */
+}
+
+@media (max-width: 640px) {
+  .remote__stats {
+    display: none;
+  }
+  .remote__title strong {
+    max-width: 32vw;
+  }
+}

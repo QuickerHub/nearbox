@@ -32,6 +32,7 @@ import {
 import { receiveToInbox } from "./files";
 import type { TaskHub } from "./hub";
 import { isLoopbackOrPrivate, listPrivateLanAddresses, normalizeRemoteIp } from "./network";
+import type { RemoteControlHub } from "./remote";
 import type { PairedSession } from "./store";
 
 const MIME: Record<string, string> = {
@@ -71,8 +72,10 @@ export class LanServer extends EventEmitter {
   private readonly sessions = new Map<string, PairedSession>();
   private readonly sockets = new Set<SocketBinding>();
   private readonly devices = new Map<string, DeviceInfo>();
+  private readonly remote: RemoteControlHub | null;
   private server: http.Server | null = null;
   private wss: WebSocketServer | null = null;
+  private rcWss: WebSocketServer | null = null;
   private selectedHost = "";
   private invite: InviteInfo | null = null;
   private listenError: string | undefined;
@@ -88,6 +91,7 @@ export class LanServer extends EventEmitter {
     desktopSecret: string;
     appVersion: string;
     apkPath?: string | null;
+    remote?: RemoteControlHub | null;
     port?: number;
   }) {
     super();
@@ -97,6 +101,7 @@ export class LanServer extends EventEmitter {
     this.vitePort = options.vitePort;
     this.desktopSecret = options.desktopSecret;
     this.appVersion = options.appVersion;
+    this.remote = options.remote ?? null;
     this.apkPath = options.apkPath && existsSync(options.apkPath) ? options.apkPath : null;
     this.inboxDir = join(options.userData, "inbox");
     this.stagingDir = join(options.userData, "staging");
@@ -128,12 +133,17 @@ export class LanServer extends EventEmitter {
       void this.handleHttp(req, res);
     });
     const wss = new WebSocketServer({ noServer: true });
+    const rcWss = new WebSocketServer({ noServer: true });
     server.on("upgrade", (req, socket, head) => {
       const url = new URL(req.url ?? "/", "http://nearbox.local");
       if (url.pathname === "/ws") {
         wss.handleUpgrade(req, socket, head, (ws) => {
           wss.emit("connection", ws, req);
         });
+        return;
+      }
+      if (url.pathname === "/rc") {
+        this.handleRemoteUpgrade(req, socket, head, rcWss);
         return;
       }
       if (!this.rendererRoot) {
@@ -156,6 +166,7 @@ export class LanServer extends EventEmitter {
 
     this.server = server;
     this.wss = wss;
+    this.rcWss = rcWss;
     if (this.selectedHost) {
       await this.refreshInvite();
     }
@@ -164,14 +175,51 @@ export class LanServer extends EventEmitter {
 
   async stop(): Promise<void> {
     this.stopBeacon();
+    this.remote?.stop();
     for (const binding of this.sockets) {
       binding.socket.close();
     }
     this.sockets.clear();
     await new Promise<void>((resolve) => this.wss?.close(() => resolve()) ?? resolve());
+    await new Promise<void>((resolve) => this.rcWss?.close(() => resolve()) ?? resolve());
     await new Promise<void>((resolve) => this.server?.close(() => resolve()) ?? resolve());
     this.wss = null;
+    this.rcWss = null;
     this.server = null;
+  }
+
+  /** The remote-control channel: authorize like everything else, then hand the socket to the hub. */
+  private handleRemoteUpgrade(
+    req: http.IncomingMessage,
+    socket: import("node:stream").Duplex,
+    head: Buffer,
+    rcWss: WebSocketServer,
+  ): void {
+    if (!this.remote || !this.hub.settings.remoteControlEnabled) {
+      socket.destroy();
+      return;
+    }
+    const remoteIp = normalizeRemoteIp(req.socket.remoteAddress);
+    if (!isLoopbackOrPrivate(remoteIp)) {
+      socket.destroy();
+      return;
+    }
+    let session: PairedSession;
+    try {
+      session = this.authorize(req, new URL(req.url ?? "/", "http://nearbox.local"));
+    } catch {
+      socket.destroy();
+      return;
+    }
+    rcWss.handleUpgrade(req, socket, head, (ws) => {
+      this.remote?.attach(ws, { id: session.device.id, name: session.device.name });
+    });
+  }
+
+  /** Drop remote viewers right away when the user turns the feature off. */
+  refreshRemoteEnabled(): void {
+    this.remote?.refreshEnabled();
+    this.scheduleSnapshot();
   }
 
   snapshot(): HostSnapshot {
@@ -189,6 +237,12 @@ export class LanServer extends EventEmitter {
       agents: this.hub.agents,
       settings: this.hub.settings,
       limits: this.limits,
+      remote: this.remote?.status() ?? {
+        supported: false,
+        enabled: this.hub.settings.remoteControlEnabled,
+        controllers: 0,
+        display: null,
+      },
       inboxDir: this.inboxDir,
       dataDir: this.hub.dataDir,
       appVersion: this.appVersion,

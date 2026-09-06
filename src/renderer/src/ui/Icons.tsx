@@ -10,7 +10,9 @@ import {
   Flag,
   Folder,
   Inbox,
+  Keyboard,
   ListTodo,
+  Monitor,
   MoreHorizontal,
   Paperclip,
   Pencil,
@@ -63,7 +65,9 @@ export type IconName =
   | "auto"
   | "edit"
   | "reply"
-  | "terminal";
+  | "terminal"
+  | "monitor"
+  | "keyboard";
 
 const ICONS: Record<IconName, LucideIcon> = {
   inbox: Inbox,
@@ -96,6 +100,8 @@ const ICONS: Record<IconName, LucideIcon> = {
   edit: Pencil,
   reply: Reply,
   terminal: Terminal,
+  monitor: Monitor,
+  keyboard: Keyboard,
 };
 
 export function Icon({

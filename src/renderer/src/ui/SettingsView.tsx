@@ -22,6 +22,12 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
   const invite = snapshot.invite;
   const phones = snapshot.devices.filter((device) => device.role === "phone");
   const settings = snapshot.settings;
+  const remote = snapshot.remote;
+  const openRemote = () => {
+    onClose();
+    window.location.hash = "#/remote";
+  };
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -148,6 +154,42 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
             </div>
           </section>
         )}
+
+        <section className="settings__block">
+          <div className="settings__block-head">
+            <h2>远程控制</h2>
+            <p className="muted">
+              配对过的设备可以看这台电脑的屏幕、操作鼠标键盘，像向日葵一样；因为在同一个应用里，可以边看画面边让 Agent 干活。
+            </p>
+          </div>
+          {desktop ? (
+            <label className="setting-row">
+              <span>
+                <strong>允许远程控制这台电脑</strong>
+                <span className="muted small">
+                  {remote.supported ? "关掉后正在控制的设备会立刻断开。" : "当前系统不支持输入注入，只能被查看。"}
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={settings.remoteControlEnabled}
+                onChange={(event) => void client.updateSettings({ remoteControlEnabled: event.target.checked })}
+              />
+            </label>
+          ) : null}
+          <div className="setting-row">
+            <span>
+              <strong>{desktop ? "打开远程桌面（本机预览）" : `控制 ${snapshot.hostName}`}</strong>
+              <span className="muted small">
+                {remote.controllers > 0 ? `现在有 ${remote.controllers} 台设备在看/控制` : "实时画面 + 鼠标键盘 + 中文输入"}
+              </span>
+            </span>
+            <button type="button" className="ghost" disabled={!settings.remoteControlEnabled} onClick={openRemote}>
+              <Icon name="monitor" size={14} />
+              打开
+            </button>
+          </div>
+        </section>
 
         <ProjectsBlock snapshot={snapshot} client={client} />
 

@@ -1,4 +1,4 @@
-import type { AgentAccess, AgentKind, RunEventKind } from "@shared/protocol";
+import type { AgentAccess, AgentKind, RunEventKind, ToolCall, ToolKind, ToolStatus } from "@shared/protocol";
 
 // Pure helpers: how each agent CLI is invoked and how its JSONL output is read.
 // No Node/Electron imports here so the logic stays unit-testable.
@@ -166,11 +166,14 @@ export function versionKey(name: string): number {
 export interface ParsedEvent {
   kind: RunEventKind;
   text: string;
+  tool?: ToolCall;
 }
 
 export interface ParseResult {
   events: ParsedEvent[];
   sessionId?: string;
+  /** Model name the CLI reported, when it says. */
+  modelLabel?: string;
   result?: string;
   isError?: boolean;
 }
@@ -180,22 +183,29 @@ export interface OutputParser {
   end(): ParseResult;
 }
 
-const MAX_TOOL_TEXT = 600;
+/** Longest tool output kept per event; shell output keeps its tail, everything else its head. */
+const MAX_TOOL_OUTPUT = 8_000;
+const MAX_TOOL_INPUT = 1_500;
+const MAX_TOOL_FILES = 200;
 
 interface Sink {
   push(into: ParsedEvent[], kind: RunEventKind, text: string): void;
   delta(into: ParsedEvent[], kind: RunEventKind, text: string): void;
+  tool(into: ParsedEvent[], call: ToolCall): void;
   flush(into: ParsedEvent[]): void;
+  lastText(): string;
 }
 
 /**
  * Each CLI has its own JSONL dialect. The parser normalizes them into a small
- * set of event kinds and coalesces token deltas so the UI is not flooded.
+ * set of event kinds, coalesces token deltas so the UI is not flooded, and
+ * tracks tool calls by id so a start and its completion become one thing.
  */
 export function createOutputParser(kind: AgentKind): OutputParser {
   let pendingKind: RunEventKind | null = null;
   let pendingText = "";
   let lastText = "";
+  const tools = new Map<string, ToolCall>();
 
   const sink: Sink = {
     flush(into) {
@@ -224,7 +234,22 @@ export function createOutputParser(kind: AgentKind): OutputParser {
         }
       }
     },
+    tool(into, call) {
+      sink.flush(into);
+      into.push({ kind: "tool", text: toolLine(call), tool: call });
+    },
+    lastText: () => lastText,
   };
+
+  /** Merge a start or completion into the tracked call and return the current state. */
+  const track = (id: string, patch: Partial<ToolCall> & Pick<ToolCall, "name" | "kind">): ToolCall => {
+    const existing = tools.get(id);
+    const next: ToolCall = { ...(existing ?? { id, status: "running" }), ...compactPatch(patch), id };
+    tools.set(id, next);
+    return next;
+  };
+
+  const context: DialectContext = { sink, track, tools };
 
   const feed = (line: string): ParseResult => {
     const trimmed = line.trim();
@@ -248,16 +273,16 @@ export function createOutputParser(kind: AgentKind): OutputParser {
     switch (kind) {
       case "cursor":
       case "claude":
-        parseStreamJson(data, out, sink);
+        parseStreamJson(data, out, context);
         break;
       case "codex":
-        parseCodex(data, out, sink);
+        parseCodex(data, out, context);
         break;
       case "grok":
-        parseGrok(data, out, sink);
+        parseGrok(data, out, context);
         break;
       case "opencode":
-        parseOpencode(data, out, sink);
+        parseOpencode(data, out, context);
         break;
     }
     return out;
@@ -273,8 +298,14 @@ export function createOutputParser(kind: AgentKind): OutputParser {
   return { feed, end };
 }
 
+interface DialectContext {
+  sink: Sink;
+  track(id: string, patch: Partial<ToolCall> & Pick<ToolCall, "name" | "kind">): ToolCall;
+  tools: Map<string, ToolCall>;
+}
+
 /** cursor-agent and Claude Code share this dialect. */
-function parseStreamJson(data: Record<string, unknown>, out: ParseResult, sink: Sink): void {
+function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink, track, tools }: DialectContext): void {
   const type = String(data.type ?? "");
   const events = out.events;
   if (typeof data.session_id === "string" && data.session_id) {
@@ -282,24 +313,32 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, sink: 
   }
   switch (type) {
     case "system": {
-      sink.push(events, "status", data.model ? `模型 ${String(data.model)}` : "已连接");
+      if (typeof data.model === "string" && data.model) {
+        out.modelLabel = data.model;
+      }
       return;
     }
     case "user": {
+      // Claude Code reports tool results as user messages; the initial prompt echo carries nothing new.
       const message = isRecord(data.message) ? data.message : {};
-      let sawToolResult = false;
       for (const block of asArray(message.content)) {
-        if (isRecord(block) && block.type === "tool_result") {
-          sawToolResult = true;
-          const content = block.content;
-          const text = typeof content === "string" ? content : asArray(content).map(textOf).join("\n");
-          if (text.trim()) {
-            sink.push(events, "tool", `结果: ${truncate(text, MAX_TOOL_TEXT)}`);
-          }
+        if (!isRecord(block) || block.type !== "tool_result") {
+          continue;
         }
-      }
-      if (!sawToolResult) {
-        sink.push(events, "status", "已收到任务");
+        const id = String(block.tool_use_id ?? "");
+        const text = typeof block.content === "string" ? block.content : asArray(block.content).map(textOf).join("\n");
+        const previous = tools.get(id);
+        const isError = Boolean(block.is_error);
+        sink.tool(
+          events,
+          track(id, {
+            name: previous?.name ?? "tool",
+            kind: previous?.kind ?? "other",
+            status: isError ? "error" : "ok",
+            output: previous?.kind === "shell" ? clipTail(text) : clipHead(text),
+            error: isError ? firstLine(text) : undefined,
+          }),
+        );
       }
       return;
     }
@@ -323,7 +362,9 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, sink: 
         } else if (block.type === "thinking" && typeof block.thinking === "string") {
           sink.push(events, "thinking", block.thinking);
         } else if (block.type === "tool_use") {
-          sink.push(events, "tool", `${String(block.name ?? "tool")} ${truncate(compact(block.input), MAX_TOOL_TEXT)}`);
+          const name = String(block.name ?? "tool");
+          const args = isRecord(block.input) ? block.input : {};
+          sink.tool(events, track(String(block.id ?? `tool-${events.length}`), describeArgs(name, args)));
         }
       }
       return;
@@ -331,24 +372,25 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, sink: 
     case "tool_call": {
       const subtype = String(data.subtype ?? "");
       const call = isRecord(data.tool_call) ? data.tool_call : {};
-      const name = Object.keys(call)[0] ?? "tool";
-      const payload = isRecord(call[name]) ? (call[name] as Record<string, unknown>) : {};
+      const rawName = Object.keys(call).find((key) => key.endsWith("ToolCall")) ?? Object.keys(call)[0] ?? "tool";
+      const payload = isRecord(call[rawName]) ? (call[rawName] as Record<string, unknown>) : {};
+      const args = isRecord(payload.args) ? payload.args : {};
+      const id = String(data.call_id ?? payload.toolCallId ?? args.toolCallId ?? `tool-${events.length}`);
       if (subtype === "started") {
-        sink.push(events, "tool", `${prettyToolName(name)} ${truncate(compact(payload.args ?? payload), MAX_TOOL_TEXT)}`);
+        sink.tool(events, track(id, describeArgs(rawName, args, typeof payload.description === "string" ? payload.description : undefined)));
       } else if (subtype === "completed") {
-        const result = payload.result ?? payload.output;
-        if (result !== undefined) {
-          sink.push(events, "tool", `完成 ${prettyToolName(name)}: ${truncate(compact(result), MAX_TOOL_TEXT)}`);
-        }
+        const described = describeArgs(rawName, args, typeof payload.description === "string" ? payload.description : undefined);
+        sink.tool(events, track(id, { ...described, ...describeCursorResult(described.kind, payload.result) }));
       }
       return;
     }
     case "result": {
       sink.flush(events);
       const isError = Boolean(data.is_error) || data.subtype === "error";
-      const text = typeof data.result === "string" ? data.result : "";
+      const reported = typeof data.result === "string" ? data.result : "";
       out.isError = isError;
-      out.result = text || undefined;
+      // cursor-agent's `result` glues every assistant message together; the last message is the actual answer.
+      out.result = (isError ? reported : sink.lastText() || reported) || undefined;
       const duration = typeof data.duration_ms === "number" ? ` · ${formatDuration(data.duration_ms)}` : "";
       events.push({ kind: "result", text: `${isError ? "失败" : "完成"}${duration}` });
       return;
@@ -358,26 +400,17 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, sink: 
   }
 }
 
-function prettyToolName(name: string): string {
-  return name
-    .replace(/ToolCall$/, "")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .toLowerCase();
-}
-
 /** `codex exec --json` */
-function parseCodex(data: Record<string, unknown>, out: ParseResult, sink: Sink): void {
+function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, track }: DialectContext): void {
   const type = String(data.type ?? "");
   const events = out.events;
   if (type === "thread.started") {
     if (typeof data.thread_id === "string") {
       out.sessionId = data.thread_id;
     }
-    sink.push(events, "status", "会话已创建");
     return;
   }
   if (type === "turn.started") {
-    sink.push(events, "status", "开始处理");
     return;
   }
   if (type === "turn.completed") {
@@ -402,6 +435,9 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, sink: Sink)
     const phase = type.slice("item.".length);
     const item = isRecord(data.item) ? data.item : {};
     const itemType = String(item.type ?? "");
+    const id = String(item.id ?? `item-${events.length}`);
+    const itemStatus = String(item.status ?? "");
+    const status: ToolStatus = itemStatus === "failed" ? "error" : phase === "completed" || itemStatus === "completed" ? "ok" : "running";
     switch (itemType) {
       case "agent_message":
         if (phase === "completed" && typeof item.text === "string") {
@@ -414,30 +450,69 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, sink: Sink)
           sink.push(events, "thinking", item.text);
         }
         return;
-      case "command_execution":
-        if (phase === "started") {
-          sink.push(events, "tool", `$ ${String(item.command ?? "")}`);
-        } else if (phase === "completed") {
-          const output = typeof item.aggregated_output === "string" ? item.aggregated_output : "";
-          const exit = item.exit_code === undefined ? "" : ` (exit ${String(item.exit_code)})`;
-          sink.push(events, "tool", `命令结束${exit}${output.trim() ? `\n${truncate(output, MAX_TOOL_TEXT)}` : ""}`);
-        }
+      case "command_execution": {
+        const command = String(item.command ?? "");
+        const exitCode = typeof item.exit_code === "number" ? item.exit_code : undefined;
+        const output = typeof item.aggregated_output === "string" ? item.aggregated_output : "";
+        sink.tool(
+          events,
+          track(id, {
+            name: itemType,
+            kind: "shell",
+            command: unwrapPwsh(command),
+            subject: unwrapPwsh(command),
+            status: status === "ok" && exitCode !== undefined && exitCode !== 0 ? "error" : status,
+            exitCode,
+            output: output.trim() ? clipTail(output) : undefined,
+          }),
+        );
         return;
-      case "file_change":
-        if (phase === "completed") {
-          const changes = asArray(item.changes)
-            .map((change) => (isRecord(change) ? `${String(change.kind ?? "edit")} ${String(change.path ?? "")}` : ""))
-            .filter(Boolean);
-          sink.push(events, "tool", `修改文件\n${changes.join("\n")}`);
-        }
+      }
+      case "file_change": {
+        const changes = asArray(item.changes).filter(isRecord);
+        const files = changes.map((change) => String(change.path ?? "")).filter(Boolean);
+        const kinds = new Set(changes.map((change) => String(change.kind ?? "update")));
+        const kind: ToolKind = kinds.size === 1 && kinds.has("add") ? "write" : kinds.size === 1 && kinds.has("delete") ? "delete" : "edit";
+        sink.tool(
+          events,
+          track(id, {
+            name: itemType,
+            kind,
+            status,
+            files,
+            subject: files.length > 1 ? `${basenameOf(files[0]!)} 等 ${files.length} 个文件` : basenameOf(files[0] ?? ""),
+          }),
+        );
         return;
-      case "mcp_tool_call":
+      }
+      case "mcp_tool_call": {
+        sink.tool(
+          events,
+          track(id, {
+            name: itemType,
+            kind: "mcp",
+            status,
+            subject: [item.server, item.tool].filter(Boolean).map(String).join(" · ") || undefined,
+            input: item.arguments === undefined ? undefined : clipHead(compact(item.arguments), MAX_TOOL_INPUT),
+            output: item.result === undefined ? undefined : clipHead(compact(item.result)),
+            error: item.error === undefined ? undefined : firstLine(compact(item.error)),
+          }),
+        );
+        return;
+      }
       case "web_search":
-      case "todo_list":
-        if (phase !== "updated") {
-          sink.push(events, "tool", `${itemType}: ${truncate(compact(item), MAX_TOOL_TEXT)}`);
-        }
+        sink.tool(events, track(id, { name: itemType, kind: "web", status, subject: typeof item.query === "string" ? item.query : undefined }));
         return;
+      case "todo_list": {
+        if (phase === "updated") {
+          return;
+        }
+        const todos = asArray(item.items)
+          .filter(isRecord)
+          .map((todo) => `${todo.completed ? "☑" : "☐"} ${String(todo.text ?? "")}`);
+        sink.tool(events, track(id, { name: itemType, kind: "todo", status, subject: `${todos.length} 项`, output: todos.join("\n") || undefined }));
+        return;
+      }
       default:
         if (phase === "completed") {
           sink.push(events, "raw", compact(item));
@@ -449,7 +524,7 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, sink: Sink)
 }
 
 /** Grok Build `--output-format streaming-json` (ACP session updates). */
-function parseGrok(data: Record<string, unknown>, out: ParseResult, sink: Sink): void {
+function parseGrok(data: Record<string, unknown>, out: ParseResult, { sink, track, tools }: DialectContext): void {
   const type = String(data.type ?? "");
   const events = out.events;
   switch (type) {
@@ -464,32 +539,41 @@ function parseGrok(data: Record<string, unknown>, out: ParseResult, sink: Sink):
       return;
     case "tool_call":
     case "tool_use": {
-      const name = String(data.title ?? data.name ?? data.tool ?? type);
-      const detail = data.input ?? data.rawInput ?? data.data;
-      sink.push(events, "tool", `${name}${detail === undefined ? "" : ` ${truncate(compact(detail), MAX_TOOL_TEXT)}`}`);
+      const id = String(data.toolCallId ?? data.id ?? `tool-${events.length}`);
+      const title = String(data.title ?? data.name ?? data.tool ?? "tool");
+      const rawInput = isRecord(data.rawInput) ? data.rawInput : isRecord(data.input) ? data.input : {};
+      const described = describeArgs(title, rawInput, undefined, grokKind(String(data.kind ?? ""), title));
+      sink.tool(
+        events,
+        track(id, {
+          ...described,
+          subject: described.subject ?? title,
+          status: grokStatus(String(data.status ?? "")),
+          ...describeGrokContent(asArray(data.content)),
+        }),
+      );
       return;
     }
     case "tool_call_update":
     case "tool_result": {
-      // Updates carry either a diff (file edited) or the tool's textual output; empty updates are progress ticks.
-      const parts = asArray(data.content)
-        .map((item) => {
-          if (!isRecord(item)) {
-            return "";
-          }
-          if (item.type === "diff") {
-            return `修改 ${String(item.path ?? "")}`;
-          }
-          if (item.type === "content") {
-            const inner = isRecord(item.content) ? item.content : {};
-            return typeof inner.text === "string" ? `结果: ${truncate(inner.text, MAX_TOOL_TEXT)}` : "";
-          }
-          return compact(item);
-        })
-        .filter(Boolean);
-      if (parts.length) {
-        sink.push(events, "tool", [...new Set(parts)].join("\n"));
+      const id = String(data.toolCallId ?? data.id ?? "");
+      const previous = tools.get(id);
+      const content = describeGrokContent(asArray(data.content));
+      const rawOutput = data.rawOutput === undefined ? undefined : compact(data.rawOutput);
+      const patch: Partial<ToolCall> & Pick<ToolCall, "name" | "kind"> = {
+        name: previous?.name ?? String(data.title ?? "tool"),
+        kind: previous?.kind ?? "other",
+        ...content,
+        status: data.status === undefined ? previous?.status ?? "running" : grokStatus(String(data.status)),
+      };
+      if (!content.output && rawOutput) {
+        patch.output = previous?.kind === "shell" ? clipTail(rawOutput) : clipHead(rawOutput);
       }
+      // Empty updates are progress ticks; only emit when there is something new to show.
+      if (!content.output && !content.diff && !rawOutput && data.status === undefined) {
+        return;
+      }
+      sink.tool(events, track(id, patch));
       return;
     }
     case "end": {
@@ -513,8 +597,72 @@ function parseGrok(data: Record<string, unknown>, out: ParseResult, sink: Sink):
   }
 }
 
+function grokKind(kind: string, title: string): ToolKind {
+  switch (kind) {
+    case "read":
+      return "read";
+    case "edit":
+      return "edit";
+    case "delete":
+      return "delete";
+    case "search":
+      return "grep";
+    case "execute":
+      return "shell";
+    case "fetch":
+      return "web";
+    default:
+      return toolKindOf(title);
+  }
+}
+
+function grokStatus(status: string): ToolStatus {
+  if (status === "completed") {
+    return "ok";
+  }
+  if (status === "failed" || status === "error") {
+    return "error";
+  }
+  return "running";
+}
+
+function describeGrokContent(content: unknown[]): Partial<ToolCall> {
+  const patch: Partial<ToolCall> = {};
+  const outputs: string[] = [];
+  const files: string[] = [];
+  for (const item of content) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    if (item.type === "diff") {
+      const path = String(item.path ?? "");
+      if (path) {
+        files.push(path);
+      }
+      const oldText = typeof item.oldText === "string" ? item.oldText : "";
+      const newText = typeof item.newText === "string" ? item.newText : "";
+      if (oldText || newText) {
+        patch.diff = clipHead(simpleDiff(oldText, newText));
+      }
+    } else if (item.type === "content") {
+      const inner = isRecord(item.content) ? item.content : item;
+      if (typeof inner.text === "string" && inner.text.trim()) {
+        outputs.push(inner.text);
+      }
+    }
+  }
+  if (files.length) {
+    patch.files = files;
+    patch.subject = files.length > 1 ? `${basenameOf(files[0]!)} 等 ${files.length} 个文件` : basenameOf(files[0]!);
+  }
+  if (outputs.length) {
+    patch.output = clipHead(outputs.join("\n"));
+  }
+  return patch;
+}
+
 /** opencode `run --format json`: shape is loose, so extract text where it exists. */
-function parseOpencode(data: Record<string, unknown>, out: ParseResult, sink: Sink): void {
+function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, track }: DialectContext): void {
   const type = String(data.type ?? "");
   const events = out.events;
   const part = isRecord(data.part) ? data.part : isRecord(data.properties) ? data.properties : data;
@@ -535,11 +683,24 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, sink: Si
   }
   if (partType === "tool" || partType === "tool_use" || partType === "tool-invocation") {
     const state = isRecord(part.state) ? part.state : {};
-    const status = String(state.status ?? "");
-    sink.push(
+    const name = String(part.tool ?? part.name ?? "tool");
+    const input = isRecord(state.input) ? state.input : isRecord(part.input) ? part.input : {};
+    const id = String(part.callID ?? part.callId ?? part.id ?? `tool-${events.length}`);
+    const stateStatus = String(state.status ?? "");
+    const status: ToolStatus = stateStatus === "completed" ? "ok" : stateStatus === "error" ? "error" : "running";
+    const described = describeArgs(name, input);
+    const metadata = isRecord(state.metadata) ? state.metadata : {};
+    const output = typeof state.output === "string" ? state.output : undefined;
+    sink.tool(
       events,
-      "tool",
-      `${String(part.tool ?? part.name ?? "tool")} ${status} ${truncate(compact(state.input ?? part.input ?? ""), MAX_TOOL_TEXT)}`,
+      track(id, {
+        ...described,
+        subject: described.subject ?? (typeof state.title === "string" ? state.title : undefined),
+        status,
+        output: output ? (described.kind === "shell" ? clipTail(output) : clipHead(output)) : undefined,
+        exitCode: typeof metadata.exit === "number" ? metadata.exit : undefined,
+        error: typeof state.error === "string" ? firstLine(state.error) : undefined,
+      }),
     );
     return;
   }
@@ -549,10 +710,288 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, sink: Si
     return;
   }
   if (partType.startsWith("step") || partType === "session") {
-    sink.push(events, "status", partType);
     return;
   }
   sink.push(events, "raw", compact(data));
+}
+
+// ---------------------------------------------------------------------------
+// Tool normalization
+// ---------------------------------------------------------------------------
+
+/** Map whatever a CLI calls a tool onto our small set of kinds. */
+export function toolKindOf(rawName: string): ToolKind {
+  const id = rawName
+    .trim()
+    .replace(/ToolCall$/i, "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[\s-]+/g, "_")
+    .toLowerCase();
+  if (/^(shell|bash|run_command|run_terminal_cmd|command_execution|execute|terminal|powershell|cmd|exec)$/.test(id)) {
+    return "shell";
+  }
+  if (/^(read|read_file|readfile|view|cat|view_file|read_files)$/.test(id)) {
+    return "read";
+  }
+  if (/^(write|write_file|writefile|create_file|create|save_file)$/.test(id)) {
+    return "write";
+  }
+  if (/^(edit|edit_file|editfile|str_replace|strreplace|str_replace_editor|apply_patch|multi_edit|multiedit|search_replace|patch|notebook_edit)$/.test(id)) {
+    return "edit";
+  }
+  if (/^(delete|delete_file|deletefile|remove|rm)$/.test(id)) {
+    return "delete";
+  }
+  if (/^(glob|find_files|file_search|find)$/.test(id)) {
+    return "glob";
+  }
+  if (/^(grep|search|codebase_search|sem_search|semsearch|ripgrep|grep_search|search_files|search_code)$/.test(id)) {
+    return "grep";
+  }
+  if (/^(ls|list_dir|list|list_directory|listdir|tree)$/.test(id)) {
+    return "ls";
+  }
+  if (/^(web_search|websearch|search_web|fetch|web_fetch|webfetch|fetch_url|browse|read_url|http)$/.test(id)) {
+    return "web";
+  }
+  if (/^(task|agent|subagent|sub_agent|spawn_agent)$/.test(id)) {
+    return "task";
+  }
+  if (/^(todo|todo_write|todowrite|todo_list|update_todos|todo_read|todoread|update_plan|plan)$/.test(id)) {
+    return "todo";
+  }
+  if (/^(mcp|mcp_tool_call|mcp_tool)$/.test(id) || id.startsWith("mcp_")) {
+    return "mcp";
+  }
+  return "other";
+}
+
+const PATH_KEYS = ["path", "file_path", "filePath", "target_file", "targetFile", "relativeWorkspacePath", "relative_workspace_path", "file", "filename", "notebook_path"];
+const DIR_KEYS = ["targetDirectory", "target_directory", "workingDirectory", "working_directory", "cwd", "dir", "directory", "path"];
+const PATTERN_KEYS = ["globPattern", "glob_pattern", "pattern", "query", "regex", "search"];
+const WEB_KEYS = ["query", "url", "search_term", "searchTerm", "q"];
+
+/** Turn a call's arguments into subject/command/input, independent of which CLI produced them. */
+function describeArgs(
+  rawName: string,
+  args: Record<string, unknown>,
+  description?: string,
+  kindOverride?: ToolKind,
+): Partial<ToolCall> & Pick<ToolCall, "name" | "kind"> {
+  const kind = kindOverride && kindOverride !== "other" ? kindOverride : toolKindOf(rawName);
+  const call: Partial<ToolCall> & Pick<ToolCall, "name" | "kind"> = { name: rawName, kind };
+  const desc = description ?? pickString(args, ["description", "explanation"]);
+  if (desc) {
+    call.description = desc;
+  }
+  switch (kind) {
+    case "shell": {
+      const command = pickString(args, ["command", "cmd", "script"]);
+      call.command = command || undefined;
+      call.subject = command || undefined;
+      call.cwd = pickString(args, DIR_KEYS.filter((key) => key !== "path")) || undefined;
+      break;
+    }
+    case "read":
+    case "write":
+    case "edit":
+    case "delete": {
+      const path = pickString(args, PATH_KEYS);
+      call.subject = path ? basenameOf(path) : undefined;
+      call.files = path ? [path] : undefined;
+      break;
+    }
+    case "ls": {
+      const path = pickString(args, DIR_KEYS);
+      call.subject = path || undefined;
+      call.cwd = path || undefined;
+      break;
+    }
+    case "glob":
+    case "grep": {
+      call.subject = pickString(args, PATTERN_KEYS) || undefined;
+      call.cwd = pickString(args, DIR_KEYS) || undefined;
+      break;
+    }
+    case "web":
+      call.subject = pickString(args, WEB_KEYS) || undefined;
+      break;
+    case "task":
+      call.subject = pickString(args, ["description", "title"]) || firstLine(pickString(args, ["prompt", "task"])) || undefined;
+      break;
+    case "todo": {
+      const todos = asArray(args.todos ?? args.items ?? args.plan)
+        .filter(isRecord)
+        .map((todo) => {
+          const status = String(todo.status ?? "");
+          const mark = status === "completed" || todo.completed === true ? "☑" : status === "in_progress" ? "◐" : "☐";
+          return `${mark} ${String(todo.content ?? todo.text ?? todo.step ?? todo.title ?? "")}`;
+        });
+      call.subject = todos.length ? `${todos.length} 项` : undefined;
+      call.output = todos.join("\n") || undefined;
+      break;
+    }
+    case "mcp":
+      call.subject = pickString(args, ["tool", "name", "toolName", "tool_name"]) || undefined;
+      break;
+    default: {
+      const hint = pickString(args, [...PATH_KEYS, ...PATTERN_KEYS, ...WEB_KEYS, "command", "name", "title"]);
+      call.subject = hint || undefined;
+    }
+  }
+  if (!call.subject && !call.command && Object.keys(args).length) {
+    call.input = clipHead(prettyArgs(args), MAX_TOOL_INPUT);
+  }
+  return call;
+}
+
+/** cursor-agent wraps results as { success | failure | error | rejected: {...} }. */
+function describeCursorResult(kind: ToolKind, result: unknown): Partial<ToolCall> {
+  if (!isRecord(result)) {
+    return { status: "ok" };
+  }
+  const outcome = Object.keys(result)[0] ?? "success";
+  const body = isRecord(result[outcome]) ? (result[outcome] as Record<string, unknown>) : {};
+  const status: ToolStatus = outcome === "success" ? "ok" : outcome === "rejected" ? "rejected" : "error";
+  const patch: Partial<ToolCall> = { status };
+  if (status === "rejected") {
+    patch.error = pickString(body, ["reason", "message"]) || "命令被拦截：安全模式下不允许执行，需要「完全放开」";
+    return patch;
+  }
+  switch (kind) {
+    case "shell": {
+      const stdout = pickString(body, ["interleavedOutput", "stdout", "output"]);
+      const stderr = pickString(body, ["stderr"]);
+      const combined = stdout && stderr && !stdout.includes(stderr) ? `${stdout}\n${stderr}` : stdout || stderr;
+      patch.output = combined.trim() ? clipTail(combined) : undefined;
+      patch.exitCode = typeof body.exitCode === "number" ? body.exitCode : undefined;
+      if (status === "ok" && patch.exitCode !== undefined && patch.exitCode !== 0) {
+        patch.status = "error";
+      }
+      if (body.aborted === true) {
+        patch.error = "命令被中止";
+      }
+      break;
+    }
+    case "edit":
+    case "write": {
+      patch.diff = typeof body.diffString === "string" && body.diffString.trim() ? clipHead(body.diffString) : undefined;
+      patch.linesAdded = typeof body.linesAdded === "number" ? body.linesAdded : undefined;
+      patch.linesRemoved = typeof body.linesRemoved === "number" ? body.linesRemoved : undefined;
+      if (typeof body.path === "string" && body.path) {
+        patch.files = [body.path];
+      }
+      break;
+    }
+    case "read": {
+      patch.output = typeof body.content === "string" ? clipHead(body.content) : undefined;
+      break;
+    }
+    case "glob":
+    case "ls": {
+      const files = asArray(body.files ?? body.entries ?? body.results)
+        .map((item) => (typeof item === "string" ? cleanGlobPath(item) : isRecord(item) ? String(item.path ?? item.name ?? "") : ""))
+        .filter(Boolean);
+      if (files.length) {
+        patch.files = files.slice(0, MAX_TOOL_FILES);
+        const total = typeof body.totalFiles === "number" ? body.totalFiles : files.length;
+        patch.output = `${files.slice(0, MAX_TOOL_FILES).join("\n")}${total > MAX_TOOL_FILES ? `\n… 共 ${total} 个` : ""}`;
+      } else if (typeof body.content === "string") {
+        patch.output = clipHead(body.content);
+      }
+      break;
+    }
+    case "task": {
+      const steps = asArray(body.conversationSteps).filter(isRecord);
+      const answer = [...steps].reverse().find((step) => isRecord(step.assistantMessage) && typeof step.assistantMessage.text === "string");
+      const text = answer && isRecord(answer.assistantMessage) ? String(answer.assistantMessage.text) : pickString(body, ["result", "text", "output"]);
+      patch.output = text ? clipHead(text) : undefined;
+      break;
+    }
+    default: {
+      const text = pickString(body, ["content", "text", "output", "result", "message"]);
+      patch.output = text ? clipHead(text) : Object.keys(body).length ? clipHead(prettyArgs(body)) : undefined;
+    }
+  }
+  if (status === "error") {
+    const nested = isRecord(body.error) ? pickString(body.error, ["error", "message"]) : "";
+    patch.error = nested || pickString(body, ["error", "message", "reason", "stderr"]) || `${outcome}`;
+    if (kind === "shell" && !patch.output && patch.error) {
+      patch.output = clipTail(patch.error);
+    }
+  }
+  return patch;
+}
+
+/** cursor-agent's glob results come back as "../.\src\App.jsx" style paths. */
+function cleanGlobPath(path: string): string {
+  return path.replace(/^\.\.[\\/]/, "").replace(/^\.[\\/]/, "");
+}
+
+/** codex wraps every command in an explicit pwsh call on Windows; show what the agent meant. */
+function unwrapPwsh(command: string): string {
+  const match = /^"?(?:[A-Za-z]:\\[^"]*\\)?(?:pwsh|powershell)(?:\.exe)?"?\s+-Command\s+'([\s\S]*)'\s*$/i.exec(command.trim());
+  if (match) {
+    return match[1]!.replace(/''/g, "'");
+  }
+  const bash = /^(?:\/bin\/)?(?:ba)?sh\s+-lc\s+'([\s\S]*)'\s*$/.exec(command.trim());
+  if (bash) {
+    return bash[1]!.replace(/'\\''/g, "'");
+  }
+  return command;
+}
+
+function toolLine(call: ToolCall): string {
+  if (call.kind === "shell") {
+    return `$ ${call.command ?? call.subject ?? call.name}`;
+  }
+  const verb: Record<ToolKind, string> = {
+    shell: "$",
+    read: "读取",
+    edit: "编辑",
+    write: "写入",
+    delete: "删除",
+    glob: "查找",
+    grep: "搜索",
+    ls: "列出",
+    web: "联网",
+    task: "子任务",
+    todo: "待办",
+    mcp: "MCP",
+    other: call.name,
+  };
+  return `${verb[call.kind]} ${call.subject ?? ""}`.trim();
+}
+
+function compactPatch<T extends object>(patch: T): T {
+  const copy = { ...patch } as Record<string, unknown>;
+  for (const key of Object.keys(copy)) {
+    if (copy[key] === undefined) {
+      delete copy[key];
+    }
+  }
+  return copy as T;
+}
+
+function simpleDiff(oldText: string, newText: string): string {
+  const removed = oldText ? oldText.split("\n").map((line) => `-${line}`) : [];
+  const added = newText ? newText.split("\n").map((line) => `+${line}`) : [];
+  return [...removed, ...added].join("\n");
+}
+
+function prettyArgs(args: Record<string, unknown>): string {
+  const shallow: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0)) {
+      continue;
+    }
+    shallow[key] = value;
+  }
+  try {
+    return JSON.stringify(shallow, null, 2);
+  } catch {
+    return String(args);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -577,6 +1016,26 @@ function textOf(block: unknown): string {
   return "";
 }
 
+function pickString(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return "";
+}
+
+function basenameOf(path: string): string {
+  const cleaned = path.replace(/[\\/]+$/, "");
+  const index = Math.max(cleaned.lastIndexOf("/"), cleaned.lastIndexOf("\\"));
+  return index >= 0 ? cleaned.slice(index + 1) || cleaned : cleaned;
+}
+
+function firstLine(text: string): string {
+  return text.replace(/\r\n/g, "\n").split("\n").find((line) => line.trim())?.trim() ?? "";
+}
+
 function compact(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -591,6 +1050,16 @@ function compact(value: unknown): string {
 export function truncate(value: string, max: number): string {
   const text = value.replace(/\r\n/g, "\n");
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+function clipHead(value: string, max = MAX_TOOL_OUTPUT): string {
+  const text = value.replace(/\r\n/g, "\n");
+  return text.length > max ? `${text.slice(0, max)}\n… 已省略 ${text.length - max} 个字符` : text;
+}
+
+function clipTail(value: string, max = MAX_TOOL_OUTPUT): string {
+  const text = value.replace(/\r\n/g, "\n");
+  return text.length > max ? `… 已省略前 ${text.length - max} 个字符\n${text.slice(text.length - max)}` : text;
 }
 
 function formatDuration(ms: number): string {

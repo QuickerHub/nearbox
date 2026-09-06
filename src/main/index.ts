@@ -17,6 +17,9 @@ import { AGENT_LABELS, type AgentRun, DEFAULT_PORT, type HostSettings, RUN_STATU
 import { spawnEnv } from "./agents";
 import { TaskHub } from "./hub";
 import { LanServer } from "./lan-server";
+import { createInputInjector } from "./input-win";
+import { RemoteControlHub } from "./remote";
+import { captureScreen, primaryDisplaySize } from "./screen";
 
 const isDev = import.meta.env.DEV;
 
@@ -185,6 +188,23 @@ function notifyRunFinished(run: AgentRun): void {
   notification.show();
 }
 
+let lastControllerNotice = 0;
+function notifyRemoteController(name: string): void {
+  // Coalesce reconnect storms so a flaky link doesn't spam notifications.
+  const now = Date.now();
+  if (!Notification.isSupported() || now - lastControllerNotice < 4000) {
+    return;
+  }
+  lastControllerNotice = now;
+  const notification = new Notification({
+    title: "有人开始远程控制这台电脑",
+    body: `${name} 已连接。要停止，请在 Nearbox 设置里关闭远程控制。`,
+    silent: false,
+  });
+  notification.on("click", () => showWindow("#/remote"));
+  notification.show();
+}
+
 async function startHost(): Promise<void> {
   if (server) {
     return;
@@ -192,6 +212,19 @@ async function startHost(): Promise<void> {
   const userData = join(app.getPath("userData"), "nearbox");
   const nextHub = new TaskHub(join(userData, "data"));
   await nextHub.init();
+  const remote = new RemoteControlHub({
+    capture: captureScreen,
+    input: createInputInjector(),
+    getEnabled: () => nextHub.settings.remoteControlEnabled,
+    getDisplay: primaryDisplaySize,
+    onControllersChanged: (controllers, latest) => {
+      refreshTrayMenu();
+      if (latest) {
+        notifyRemoteController(latest.name);
+      }
+    },
+    log: (message) => console.warn(`[remote] ${message}`),
+  });
   const next = new LanServer({
     hub: nextHub,
     userData,
@@ -200,12 +233,16 @@ async function startHost(): Promise<void> {
     desktopSecret,
     appVersion: app.getVersion(),
     apkPath: resolveApkPath(),
+    remote,
     port: DEFAULT_PORT,
   });
   await next.start();
   next.on("snapshot", () => refreshTrayMenu());
   nextHub.on("run-finished", (run: AgentRun) => notifyRunFinished(run));
-  nextHub.on("settings", (settings: HostSettings) => applyLoginItem(settings));
+  nextHub.on("settings", (settings: HostSettings) => {
+    applyLoginItem(settings);
+    next.refreshRemoteEnabled();
+  });
   hub = nextHub;
   server = next;
   applyLoginItem(nextHub.settings);

@@ -6,6 +6,7 @@ import { useRoute } from "./lib/router";
 import { applyTheme, cycleTheme, readThemeMode, themeLabel, type ThemeMode } from "./theme";
 import { ChatComposer, type ComposerChips } from "./ui/ChatComposer";
 import { Icon, ThemeIcon } from "./ui/Icons";
+import { RemoteView } from "./ui/RemoteView";
 import { SettingsView } from "./ui/SettingsView";
 import { TaskList } from "./ui/TaskList";
 import { Thread } from "./ui/Thread";
@@ -306,11 +307,18 @@ export function App(): JSX.Element {
     );
   }
 
+  if (route.name === "remote") {
+    return <RemoteView client={client} snapshot={snapshot} onExit={() => navigate({ name: "home" })} />;
+  }
+
   const activeRun = task ? snapshot.runs.find((run) => run.taskId === task.id && isRunActive(run)) : undefined;
   const runningTasks = snapshot.tasks.filter((item) => snapshot.runs.some((run) => run.taskId === item.id && isRunActive(run)));
   const phonesOnline = snapshot.devices.filter((device) => device.role === "phone" && device.online).length;
+  const remoteControllers = snapshot.remote?.controllers ?? 0;
+  const canRemote = Boolean(snapshot.remote?.enabled);
   const goHome = () => navigate({ name: "home" });
   const openTask = (id: string) => navigate({ name: "task", id });
+  const openRemote = () => navigate({ name: "remote" });
 
   const composer = (variant: "hero" | "dock") => (
     <ChatComposer
@@ -354,6 +362,16 @@ export function App(): JSX.Element {
           </>
         ) : null}
         {composer("hero")}
+        {canRemote ? (
+          <button type="button" className="home__remote" onClick={openRemote}>
+            <Icon name="monitor" size={18} />
+            <span className="home__remote-text">
+              <strong>远程控制这台电脑</strong>
+              <span className="muted small">{isDesktop ? "本机预览，方便联调" : `实时画面 + 触控操作 ${snapshot.hostName}`}</span>
+            </span>
+            <Icon name="chevron" size={16} />
+          </button>
+        ) : null}
         {runningTasks.length ? (
           <div className="home__running">
             {runningTasks.map((item) => {
@@ -399,6 +417,11 @@ export function App(): JSX.Element {
               <span className={phonesOnline ? "dot dot--on" : "dot"} />
               <span className="muted small">{phonesOnline ? `${phonesOnline} 台手机在线` : "没有手机在线"}</span>
             </span>
+            {canRemote ? (
+              <button type="button" className="icon-btn icon-btn--plain" onClick={openRemote} title="远程控制">
+                <Icon name="monitor" size={16} />
+              </button>
+            ) : null}
             <button type="button" className="icon-btn icon-btn--plain" onClick={onCycleTheme} title={themeLabel(themeMode)}>
               <ThemeIcon mode={themeMode} />
             </button>
@@ -409,6 +432,15 @@ export function App(): JSX.Element {
         </aside>
         <div className="main">
           {status ? <div className="banner">{status}</div> : null}
+          {remoteControllers > 0 ? (
+            <div className="banner banner--remote">
+              有 {remoteControllers} 台设备正在远程控制这台电脑 ·{" "}
+              <button type="button" className="link-btn" onClick={openRemote}>
+                查看
+              </button>{" "}
+              · 可在设置里关闭
+            </div>
+          ) : null}
           {route.name === "task" ? threadOrNotFound : home}
         </div>
         {settings}
