@@ -1,9 +1,10 @@
-import { execFile } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, extname, join } from "node:path";
-import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type AgentKind } from "@shared/protocol";
-import { type ResolvedCommand, versionKey } from "./agent-output";
+import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type AgentKind, type AgentModel } from "@shared/protocol";
+import { MODEL_LIST_ARGS, parseModelList } from "./agent-models";
+import { quoteForCmd, type ResolvedCommand, versionKey } from "./agent-output";
 
 export {
   buildInvocation,
@@ -69,6 +70,11 @@ export function spawnEnv(): NodeJS.ProcessEnv {
   };
   if (IS_WINDOWS) {
     env.Path = env.PATH;
+  }
+  // The Node-based CLIs are bundles of several megabytes; Node's compile cache saves close to a
+  // second on every cold start. Their own launchers set this, which Nearbox bypasses to avoid cmd.exe.
+  if (!env.NODE_COMPILE_CACHE) {
+    env.NODE_COMPILE_CACHE = join(tmpdir(), "nearbox-node-compile-cache");
   }
   return env;
 }
@@ -201,7 +207,28 @@ function resolveCursorAgentBundle(shimDir: string): ResolvedCommand | null {
   return { file: node, prefixArgs: [script], display: `${node} ${script}`, viaCmd: false };
 }
 
+/**
+ * Looking a command up means spawning `where`/`which`, a few hundred
+ * milliseconds on every run. Found commands are remembered until the next
+ * detection pass or until the file they point at is gone (CLI updated).
+ */
+const resolvedCommands = new Map<string, ResolvedCommand>();
+
 export async function resolveAgentCommand(kind: AgentKind, override?: string): Promise<ResolvedCommand | null> {
+  const key = `${kind}|${override?.trim() ?? ""}`;
+  const cached = resolvedCommands.get(key);
+  if (cached && existsSync(cached.file) && (cached.prefixArgs.length === 0 || existsSync(cached.prefixArgs[0]!))) {
+    return cached;
+  }
+  resolvedCommands.delete(key);
+  const resolved = await lookupAgentCommand(kind, override);
+  if (resolved) {
+    resolvedCommands.set(key, resolved);
+  }
+  return resolved;
+}
+
+async function lookupAgentCommand(kind: AgentKind, override?: string): Promise<ResolvedCommand | null> {
   if (override && override.trim()) {
     const trimmed = override.trim();
     if (existsSync(trimmed)) {
@@ -226,6 +253,8 @@ function pickBest(candidates: string[]): string {
 export async function detectAgents(
   overrides: Partial<Record<AgentKind, string | undefined>>,
 ): Promise<AgentInfo[]> {
+  // A detection pass is the user's way of saying "look again".
+  resolvedCommands.clear();
   return Promise.all(
     AGENT_KINDS.map(async (kind): Promise<AgentInfo> => {
       const resolved = await resolveAgentCommand(kind, overrides[kind]);
@@ -238,5 +267,89 @@ export async function detectAgents(
         supportsResume: true,
       };
     }),
+  );
+}
+
+const MODEL_LIST_TIMEOUT_MS = 45_000;
+const MODEL_LIST_MAX_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Ask the installed CLI which models it can use. Rejects with a sentence for
+ * the UI when the CLI is missing, not logged in, or does not answer in time.
+ */
+export async function listAgentModels(kind: AgentKind, override?: string): Promise<AgentModel[]> {
+  const listArgs = MODEL_LIST_ARGS[kind];
+  if (!listArgs) {
+    throw new Error(`${AGENT_LABELS[kind]} 没有列出模型的命令，请直接输入模型名。`);
+  }
+  const command = await resolveAgentCommand(kind, override);
+  if (!command) {
+    throw new Error(`没有找到 ${AGENT_LABELS[kind]} 的命令行工具。`);
+  }
+  // cmd.exe shims need one quoted line; direct executables take argv as-is.
+  const invocation = command.viaCmd
+    ? { file: command.file, args: ["/d", "/s", "/c", `"${[command.prefixArgs[0]!, ...listArgs].map(quoteForCmd).join(" ")}"`], verbatim: true }
+    : { file: command.file, args: [...command.prefixArgs, ...listArgs], verbatim: false };
+  const result = await capture(invocation.file, invocation.args, invocation.verbatim);
+  const models = parseModelList(kind, result.stdout);
+  if (!models.length) {
+    const reason = firstLine(result.stderr) || firstLine(result.stdout) || (result.code === null ? "命令没有在限定时间内结束" : `退出码 ${result.code}`);
+    throw new Error(`${AGENT_LABELS[kind]} 没有返回模型列表：${reason}`);
+  }
+  return models;
+}
+
+function capture(file: string, args: string[], windowsVerbatimArguments: boolean): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(file, args, { env: spawnEnv(), stdio: ["pipe", "pipe", "pipe"], windowsHide: true, windowsVerbatimArguments });
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let bytes = 0;
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        child.kill();
+      }
+    }, MODEL_LIST_TIMEOUT_MS);
+    child.stdout?.on("data", (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes <= MODEL_LIST_MAX_BYTES) {
+        stdout.push(chunk);
+      } else {
+        child.kill();
+      }
+    });
+    child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.on("error", (error) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(new Error(`无法启动命令：${error.message}`));
+      }
+    });
+    child.on("close", (code) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve({ code, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") });
+      }
+    });
+    child.stdin?.on("error", () => undefined);
+    child.stdin?.end();
+  });
+}
+
+function firstLine(text: string): string {
+  return (
+    text
+      .split(/\r?\n/)
+      .map((line) => line.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "").trim())
+      .find(Boolean) ?? ""
   );
 }

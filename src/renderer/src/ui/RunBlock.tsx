@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AGENT_LABELS, type AgentRun, isRunActive, type RunEvent } from "@shared/protocol";
+import { AGENT_LABELS, type AgentKind, type AgentRun, isRunActive, type RunEvent } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatDuration, formatRelative } from "../lib/format";
 import { FileStrip } from "./Attachments";
@@ -12,6 +12,8 @@ interface RunBlockProps {
   client: ClientHandle;
   /** This run starts a new agent conversation rather than continuing the previous one. */
   opensConversation: boolean;
+  /** Set for a sub-run: the agent that handed this work over with `nearbox ask`. */
+  delegatedFrom?: AgentKind;
   projectName?: string;
   onStop(runId: string): void;
   /** Load and show the full record right away (used for the newest run). */
@@ -22,7 +24,7 @@ interface RunBlockProps {
  * One turn of the conversation: the message that started it (or the hand-off
  * line when a new conversation opens), then the agent's work and answer.
  */
-export function RunBlock({ run, client, opensConversation, projectName, onStop, initiallyOpen }: RunBlockProps): JSX.Element {
+export function RunBlock({ run, client, opensConversation, delegatedFrom, projectName, onStop, initiallyOpen }: RunBlockProps): JSX.Element {
   const active = isRunActive(run);
   const queued = run.status === "queued";
   const [open, setOpen] = useState(active || Boolean(initiallyOpen));
@@ -97,15 +99,27 @@ export function RunBlock({ run, client, opensConversation, projectName, onStop, 
   // A generated prompt hides behind "提示词"; what the user typed (or attached) is always a bubble.
   const typed = run.message !== undefined || Boolean(run.attachments?.length);
 
+  const delegated = run.parentRunId !== undefined;
+
   return (
-    <article className={`run run--${run.status}`}>
+    <article className={`run run--${run.status}${delegated ? " run--delegated" : ""}`}>
       {opensConversation ? (
         <div className="handoff">
           <span className="handoff__line" />
           <span className="handoff__text">
-            <Icon name="bolt" size={12} />
-            <strong>{AGENT_LABELS[run.agent]}</strong>
-            {run.modelLabel ? <span className="handoff__dim">{run.modelLabel}</span> : null}
+            <Icon name={delegated ? "bot" : "bolt"} size={12} />
+            {delegated ? (
+              <strong title="这一段是上面的 Agent 用 nearbox ask 委派出去的子任务，回答会直接交还给它">
+                {delegatedFrom ? AGENT_LABELS[delegatedFrom] : "上级 Agent"} 委派给 {AGENT_LABELS[run.agent]}
+              </strong>
+            ) : (
+              <strong>{AGENT_LABELS[run.agent]}</strong>
+            )}
+            {run.modelLabel || run.model ? (
+              <span className="handoff__dim" title={run.model ? `--model ${run.model}` : undefined}>
+                {run.modelLabel ?? run.model}
+              </span>
+            ) : null}
             {projectName ? <span>{projectName}</span> : null}
             <span>{run.access === "full" ? "完全放开" : "安全模式"}</span>
             <span className="handoff__dim">{formatRelative(run.createdAt)}</span>
@@ -133,7 +147,7 @@ export function RunBlock({ run, client, opensConversation, projectName, onStop, 
       {queued ? (
         <div className="run__queued">
           <span className="spinner spinner--small" />
-          <span>排队中，等上一轮结束后发送</span>
+          <span>{delegated ? "排队中，等其他运行让出位置" : "排队中，等上一轮结束后发送"}</span>
           <button type="button" className="link-btn link-btn--muted" onClick={() => onStop(run.id)}>
             撤回
           </button>

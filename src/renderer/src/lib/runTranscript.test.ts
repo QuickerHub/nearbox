@@ -3,8 +3,8 @@ import test from "node:test";
 import type { RunEvent, RunEventKind, ToolCall } from "../../../shared/protocol.ts";
 import { buildTranscript, groupLabel, summarizeTranscript, toolVerb } from "./runTranscript.ts";
 
-function ev(seq: number, kind: RunEventKind, text: string, tool?: ToolCall): RunEvent {
-  return { seq, at: "2026-09-06T00:00:00.000Z", kind, text, ...(tool ? { tool } : {}) };
+function ev(seq: number, kind: RunEventKind, text: string, tool?: ToolCall, delta?: boolean): RunEvent {
+  return { seq, at: "2026-09-06T00:00:00.000Z", kind, text, ...(tool ? { tool } : {}), ...(delta ? { delta } : {}) };
 }
 
 function call(id: string, patch: Partial<ToolCall>): ToolCall {
@@ -72,6 +72,25 @@ test("a turn without tools is all answer, and running tools are reported", () =>
   assert.equal(live.running[0]?.command, "npm run build");
   const stderr = live.work.find((row) => row.type === "stderr");
   assert.equal(stderr?.type === "stderr" ? stderr.lines.length : 0, 2);
+});
+
+test("streamed fragments join verbatim while whole messages get a line break", () => {
+  const items = buildTranscript([
+    ev(1, "thinking", "Let me", undefined, true),
+    ev(2, "thinking", " think.", undefined, true),
+    ev(3, "text", "Hello ", undefined, true),
+    ev(4, "text", "world,\n", undefined, true),
+    ev(5, "text", "done", undefined, true),
+    ev(6, "text", "Second message"),
+  ]);
+  assert.deepEqual(
+    items.map((item) => (item.type === "thinking" || item.type === "text" ? [item.type, item.text] : item.type)),
+    [
+      ["thinking", "Let me think."],
+      ["text", "Hello world,\ndone\nSecond message"],
+    ],
+  );
+  assert.equal(summarizeTranscript(items).answer, "Hello world,\ndone\nSecond message");
 });
 
 test("legacy text-only tool events still pair up", () => {

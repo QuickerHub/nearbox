@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AGENT_LABELS, type AgentAccess, type AgentKind, type HostSnapshot, isRunActive, splitCapture, type Task } from "@shared/protocol";
+import { AGENT_KINDS, AGENT_LABELS, type AgentAccess, type AgentKind, type HostSnapshot, isRunActive, modelsNeedRefresh, splitCapture, type Task } from "@shared/protocol";
 import { titleForFiles } from "./lib/attachments";
 import { connectClient, pairWithPin, type ClientHandle } from "./lib/client";
-import type { SendPlan } from "./lib/plan";
+import { conversationRun, type SendPlan } from "./lib/plan";
 import { useRoute } from "./lib/router";
 import { applyTheme, cycleTheme, readThemeMode, themeLabel, type ThemeMode } from "./theme";
 import { ChatComposer, type ComposerChips, type OutgoingMessage } from "./ui/ChatComposer";
@@ -18,6 +18,10 @@ const PREFS_KEY = "nearbox.compose";
 interface ComposePrefs {
   projectId: string;
   agent: AgentKind | "" | null;
+  /** Last model picked per agent; "" means the user went back to the default. */
+  models: Partial<Record<AgentKind, string>>;
+  /** Whether runs started here may delegate to other agents; off until the user turns it on. */
+  delegate: boolean;
 }
 
 function readPrefs(): ComposePrefs {
@@ -25,12 +29,29 @@ function readPrefs(): ComposePrefs {
     const raw = window.localStorage.getItem(PREFS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<ComposePrefs>;
-      return { projectId: typeof parsed.projectId === "string" ? parsed.projectId : "", agent: parsed.agent === undefined ? null : parsed.agent };
+      const models: ComposePrefs["models"] = {};
+      for (const kind of AGENT_KINDS) {
+        const value = parsed.models?.[kind];
+        if (typeof value === "string") {
+          models[kind] = value;
+        }
+      }
+      return {
+        projectId: typeof parsed.projectId === "string" ? parsed.projectId : "",
+        agent: parsed.agent === undefined ? null : parsed.agent,
+        models,
+        delegate: parsed.delegate === true,
+      };
     }
   } catch {
     // fall through to defaults
   }
-  return { projectId: "", agent: null };
+  return { projectId: "", agent: null, models: {}, delegate: false };
+}
+
+/** A model pick belongs to one task (or the home screen) and one agent. */
+function modelPickKey(taskId: string | undefined, agent: AgentKind): string {
+  return `${taskId ?? ""}|${agent}`;
 }
 
 export function App(): JSX.Element {
@@ -45,6 +66,8 @@ export function App(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [prefs, setPrefsState] = useState<ComposePrefs>(() => readPrefs());
   const [accessOverride, setAccessOverride] = useState<{ agent: AgentKind; access: AgentAccess } | null>(null);
+  // Model picked in this session, per task (or the home screen) and agent, so a task's conversation keeps its own model.
+  const [modelPicks, setModelPicks] = useState<Record<string, string>>({});
   // Chip picks on an open task are patched to the server; this keeps the chip on the new value until the snapshot catches up.
   const [taskOverride, setTaskOverride] = useState<{ taskId: string; agent?: AgentKind | ""; projectId?: string } | null>(null);
   // "改为新会话" on a task: the next message starts a fresh agent session instead of resuming. Cleared once sent.
@@ -151,7 +174,7 @@ export function App(): JSX.Element {
 
   const chips = useMemo<ComposerChips>(() => {
     if (!snapshot) {
-      return { projectId: "", agent: "", access: "safe" };
+      return { projectId: "", agent: "", access: "safe", model: "", delegate: false };
     }
     const available = snapshot.agents.filter((item) => item.available).map((item) => item.kind);
     const validAgent = (value: AgentKind | "" | null | undefined): value is AgentKind => Boolean(value) && available.includes(value as AgentKind);
@@ -178,8 +201,46 @@ export function App(): JSX.Element {
         ? accessOverride.access
         : snapshot.settings.agents[agent]?.access ?? "safe"
       : "safe";
-    return { projectId, agent, access };
-  }, [snapshot, task, prefs, accessOverride, taskOverride]);
+    // Model: what was picked here in this session, else the model the task's conversation with this
+    // agent already runs on, else the last pick anywhere. "" leaves it to the settings / CLI default.
+    let model = "";
+    if (agent) {
+      const picked = modelPicks[modelPickKey(task?.id, agent)];
+      const conversation = task && projectId ? conversationRun(snapshot.runs, task.id, agent, projectId) : undefined;
+      model = picked !== undefined ? picked : conversation ? conversation.model ?? "" : prefs.models[agent] ?? "";
+    }
+    return { projectId, agent, access, model, delegate: prefs.delegate };
+  }, [snapshot, task, prefs, accessOverride, taskOverride, modelPicks]);
+
+  // The moment an agent is chosen, make sure its catalog is current so the model chip is ready when
+  // the user gets there. Only the agent change triggers this; the host ignores repeats within a minute.
+  useEffect(() => {
+    if (!client || !snapshot || !chips.agent) {
+      return;
+    }
+    const info = snapshot.agents.find((item) => item.kind === chips.agent);
+    if (info && modelsNeedRefresh(info)) {
+      void client.refreshModels(chips.agent).catch(() => undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on the agent only
+  }, [client, chips.agent]);
+
+  // Where the next message would go: the PC starts that agent's process now and loads the conversation
+  // it would continue, so the answer begins the moment the user sends. Keyed on the destination, not
+  // on every snapshot, and debounced so flicking through chips does not fire a request per click.
+  const conversationId =
+    task && chips.agent && chips.projectId && snapshot && freshFor !== task.id ? conversationRun(snapshot.runs, task.id, chips.agent, chips.projectId)?.id ?? "" : "";
+  const warmKey = chips.agent && chips.projectId ? `${chips.agent}|${chips.projectId}|${conversationId}` : "";
+  useEffect(() => {
+    if (!client || !warmKey) {
+      return;
+    }
+    const [agent, projectId, resumeRunId] = warmKey.split("|") as [AgentKind, string, string];
+    const timer = window.setTimeout(() => {
+      void client.warmAgent({ agent, projectId, resumeRunId: resumeRunId || undefined }).catch(() => undefined);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [client, warmKey]);
 
   const onChips = (patch: Partial<ComposerChips>) => {
     if (!client) {
@@ -209,6 +270,17 @@ export function App(): JSX.Element {
         setAccessOverride({ agent, access: patch.access });
       }
     }
+    if (patch.model !== undefined) {
+      const agent = patch.agent ?? chips.agent;
+      if (agent) {
+        const model = patch.model;
+        setModelPicks((current) => ({ ...current, [modelPickKey(task?.id, agent)]: model }));
+        setPrefs({ models: { ...prefs.models, [agent]: model } });
+      }
+    }
+    if (patch.delegate !== undefined) {
+      setPrefs({ delegate: patch.delegate });
+    }
   };
 
   /**
@@ -222,7 +294,13 @@ export function App(): JSX.Element {
     }
     const { text, files } = message;
     const fileIds = files.map((file) => file.id);
-    const dispatchInput = { agent: chips.agent as AgentKind, projectId: chips.projectId, access: chips.access };
+    const dispatchInput = {
+      agent: chips.agent as AgentKind,
+      projectId: chips.projectId,
+      access: chips.access,
+      model: chips.model || undefined,
+      delegate: chips.delegate || undefined,
+    };
     const captured = text ? splitCapture(text) : { title: titleForFiles(files), details: "" };
     switch (plan.action) {
       case "capture": {

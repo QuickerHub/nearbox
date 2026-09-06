@@ -222,6 +222,16 @@ export const AGENT_LABELS: Record<AgentKind, string> = {
 /** safe: agent may edit the workspace but asks/denies dangerous commands. full: run everything. */
 export type AgentAccess = "safe" | "full";
 
+/** One model a CLI can be pointed at with its `--model` flag. */
+export interface AgentModel {
+  /** What goes on the command line, e.g. "gpt-5.5-high", "sonnet", "opencode/claude-sonnet-5". */
+  id: string;
+  /** Human name the CLI reported; the id itself when it has none. */
+  label?: string;
+  /** The CLI picks this one when no model is given. */
+  isDefault?: boolean;
+}
+
 export interface AgentInfo {
   kind: AgentKind;
   label: string;
@@ -229,6 +239,17 @@ export interface AgentInfo {
   command?: string;
   detail?: string;
   supportsResume: boolean;
+  /**
+   * Models the CLI said this account can use. Missing until the list has been
+   * fetched (or when the CLI has no way to list them); the UI then falls back
+   * to the built-in list and free text. Kept across restarts, so this may be
+   * the list from a previous session until the next fetch replaces it.
+   */
+  models?: AgentModel[];
+  /** When `models` was last fetched successfully. */
+  modelsCheckedAt?: string;
+  /** Why the most recent fetch failed (not logged in, offline, timeout…); `models` then holds the previous list. */
+  modelsError?: string;
 }
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
@@ -266,6 +287,17 @@ export interface AgentRun {
    * previous turn is still working.
    */
   resumedFromRunId?: string;
+  /**
+   * The agent may hand sub-tasks to other agents on this PC: it gets a
+   * `nearbox` command on its PATH and a section in its prompt explaining it.
+   */
+  delegate?: boolean;
+  /**
+   * Set on a run another agent started with `nearbox ask`. Such a run belongs
+   * to its parent's task and thread but is not part of the task's own
+   * conversation; while it is active the parent is treated as idle.
+   */
+  parentRunId?: string;
   summary?: string;
   error?: string;
   eventCount: number;
@@ -320,6 +352,12 @@ export interface RunEvent {
   text: string;
   /** Present when kind === "tool". */
   tool?: ToolCall;
+  /**
+   * A streamed fragment: `text` continues the previous event of the same kind
+   * verbatim (no separator, no trimming), so the UI can show the answer as it
+   * is being written.
+   */
+  delta?: boolean;
 }
 
 export interface DispatchInput {
@@ -332,6 +370,21 @@ export interface DispatchInput {
   model?: string;
   /** Continue the conversation of this earlier run (same task, same agent). */
   resumeRunId?: string;
+  /** Let this run hand sub-tasks to other agents (local runs only). */
+  delegate?: boolean;
+}
+
+/** What a running agent sends through `nearbox ask` to start a sub-task. */
+export interface DelegateInput {
+  agent: AgentKind;
+  prompt: string;
+  /** Project id, name or path to work in; the parent's project when omitted. */
+  project?: string;
+  model?: string;
+  /** Defaults to the parent's own access level and can never exceed it. */
+  access?: AgentAccess;
+  /** Continue the parent's latest conversation with `agent` instead of starting a new one. */
+  continue?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -547,6 +600,7 @@ export function isRunActive(run: Pick<AgentRun, "status">): boolean {
 }
 
 export { canContinueRun, sessionIdAlongChain } from "./conversation";
+export { BUILTIN_MODELS, canListModels, filterModels, modelLabel, modelsForAgent, modelsNeedRefresh, normalizeModelId } from "./models";
 
 /**
  * Agents that can run in `project`: the ones installed on the device the

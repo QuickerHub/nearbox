@@ -54,7 +54,8 @@ export function buildTranscript(events: readonly RunEvent[]): TranscriptItem[] {
       case "text": {
         const last = items.at(-1);
         if (last?.type === event.kind) {
-          last.text = joinText(last.text, event.text);
+          // Streamed fragments continue the previous text exactly; whole messages get a line break between them.
+          last.text = event.delta ? last.text + event.text : joinText(last.text, event.text);
         } else {
           items.push({ type: event.kind, text: event.text, seq: event.seq });
         }

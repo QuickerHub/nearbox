@@ -4,6 +4,10 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Bundle
 import android.view.LayoutInflater
@@ -22,11 +26,44 @@ import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 import com.quickerhub.nearbox.databinding.ActivityMainBinding
 import com.quickerhub.nearbox.databinding.ItemHostBinding
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
+    private data class Target(val host: String, val port: Int, val token: String?) {
+        val url: String
+            get() = if (token.isNullOrBlank()) "http://$host:$port/" else "http://$host:$port/?t=${Uri.encode(token)}"
+    }
+
     private lateinit var binding: ActivityMainBinding
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var scanner: LanScanner? = null
+    private val io = Executors.newSingleThreadExecutor()
+
+    /** Bumped whenever the screen changes what it is doing, so results of an earlier scan / probe / page load are dropped. */
+    private var attempt = 0
+
+    /** The WebView is loading behind the pairing screen and gets revealed once the page has rendered. */
+    private var loading = false
+
+    /** Where we last tried to connect; retried automatically when Wi-Fi comes back. */
+    private var lastTarget: Target? = null
+
+    /** Whether the phone was on a LAN the last time we looked; a false→true flip triggers a retry. */
+    private var lanAvailable = false
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            runOnUiThread { onLanChanged() }
+        }
+
+        override fun onLost(network: Network) {
+            runOnUiThread {
+                onLanChanged()
+                // The interface keeps its address for a moment after the network is gone; look again shortly.
+                binding.root.postDelayed({ onLanChanged() }, 1500)
+            }
+        }
+    }
+
     private val filePicker = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         fileCallback?.onReceiveValue(uris.toTypedArray())
         fileCallback = null
@@ -58,7 +95,7 @@ class MainActivity : AppCompatActivity() {
         binding.hostInput.setText(prefs().getString(KEY_HOST, ""))
         binding.connectButton.setOnClickListener { connectFromForm() }
         binding.pasteButton.setOnClickListener { pasteInvite() }
-        binding.refreshButton.setOnClickListener { scanner?.refresh(prefs().getString(KEY_HOST, null)) }
+        binding.refreshButton.setOnClickListener { startScan() }
         binding.scanButton.setOnClickListener { requestQrScan() }
 
         binding.webView.settings.javaScriptEnabled = true
@@ -71,11 +108,21 @@ class MainActivity : AppCompatActivity() {
                 return false
             }
 
+            override fun onPageFinished(view: WebView, url: String) {
+                if (loading) {
+                    // Each session starts with a fresh loadUrl; drop the earlier ones so Back leads to the
+                    // pairing screen instead of replaying an old address.
+                    view.clearHistory()
+                    revealWeb()
+                }
+            }
+
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (!request.isForMainFrame) {
                     return
                 }
-                showPairing("连不上电脑，正在重新查找…")
+                val host = lastTarget?.host ?: request.url.host.orEmpty()
+                showPairing("连不上电脑 $host，正在重新查找…")
             }
         }
         binding.webView.webChromeClient = object : WebChromeClient() {
@@ -91,10 +138,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        if (!handleIntent(intent)) {
-            if (!reopenLastHost()) {
-                showPairing()
-            }
+        if (!handleIntent(intent) && !reopenLastHost()) {
+            showPairing()
         }
     }
 
@@ -103,31 +148,56 @@ class MainActivity : AppCompatActivity() {
         handleIntent(intent)
     }
 
+    override fun onStart() {
+        super.onStart()
+        val state = Lan.state(this)
+        lanAvailable = state == LanState.LAN
+        refreshNetworkHint(state)
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+            .build()
+        runCatching { connectivity()?.registerNetworkCallback(request, networkCallback) }
+    }
+
+    override fun onStop() {
+        runCatching { connectivity()?.unregisterNetworkCallback(networkCallback) }
+        super.onStop()
+    }
+
     override fun onDestroy() {
         scanner?.stop()
+        io.shutdownNow()
         super.onDestroy()
     }
+
+    override fun onBackPressed() {
+        if (loading) {
+            lastTarget = null
+            showPairing()
+            return
+        }
+        if (binding.webView.visibility == View.VISIBLE && binding.webView.canGoBack()) {
+            binding.webView.goBack()
+            return
+        }
+        if (binding.webView.visibility == View.VISIBLE) {
+            lastTarget = null
+            showPairing()
+            return
+        }
+        super.onBackPressed()
+    }
+
+    // ------------------------------------------------------------------ where to connect
 
     private fun reopenLastHost(): Boolean {
         val host = prefs().getString(KEY_HOST, "").orEmpty()
         if (host.isBlank()) {
             return false
         }
-        val port = prefs().getInt(KEY_PORT, 17831)
-        showWeb("http://$host:$port/")
+        tryOpen(Target(host, prefs().getInt(KEY_PORT, LanScanner.HTTP_PORT), null))
         return true
-    }
-
-    override fun onBackPressed() {
-        if (binding.webView.visibility == View.VISIBLE && binding.webView.canGoBack()) {
-            binding.webView.goBack()
-            return
-        }
-        if (binding.webView.visibility == View.VISIBLE) {
-            showPairing()
-            return
-        }
-        super.onBackPressed()
     }
 
     private fun handleIntent(intent: Intent?): Boolean {
@@ -143,7 +213,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "请填写电脑 IP 和 6 位验证码", Toast.LENGTH_SHORT).show()
             return
         }
-        openSession(host, "17831", pin)
+        openSession(host, LanScanner.HTTP_PORT.toString(), pin)
     }
 
     private fun pasteInvite() {
@@ -186,37 +256,97 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "邀请不完整", Toast.LENGTH_SHORT).show()
             return
         }
-        val port = portText?.toIntOrNull() ?: 17831
-        prefs().edit().putString(KEY_HOST, safeHost).putInt(KEY_PORT, port).apply()
         binding.hostInput.setText(safeHost)
-        showWeb("http://$safeHost:$port/?t=${Uri.encode(tokenValue)}")
+        tryOpen(Target(safeHost, portText?.toIntOrNull() ?: LanScanner.HTTP_PORT, tokenValue))
     }
 
-    private fun showPairing(status: String? = null) {
-        binding.webView.visibility = View.GONE
+    // ------------------------------------------------------------------ connecting
+
+    /**
+     * Checks that a Nearbox host really answers at [target] before handing the address to the WebView.
+     * A WebView pointed at an unreachable LAN address sits on a black page until the system's own
+     * connect timeout fires — that is what happens when the phone is not on Wi-Fi.
+     */
+    private fun tryOpen(target: Target) {
+        lastTarget = target
+        val myAttempt = ++attempt
+        stopScan()
+        hideWeb()
         binding.pairing.visibility = View.VISIBLE
-        if (status != null) {
-            binding.scanStatus.text = status
+        setConnectStatus("正在连接 ${target.host}…")
+        refreshNetworkHint()
+        io.execute {
+            val found = LanScanner.probe(target.host, target.port, PROBE_TIMEOUT_MS)
+            runOnUiThread {
+                if (attempt != myAttempt) {
+                    return@runOnUiThread
+                }
+                if (found == null) {
+                    showPairing("连不上电脑 ${target.host}，正在重新查找…")
+                } else {
+                    prefs().edit().putString(KEY_HOST, target.host).putInt(KEY_PORT, target.port).apply()
+                    setConnectStatus("找到「${found.name}」，正在打开…")
+                    showWeb(target.url)
+                }
+            }
         }
-        startScan()
     }
 
     private fun showWeb(url: String) {
-        scanner?.stop()
-        binding.pairing.visibility = View.GONE
-        binding.webView.visibility = View.VISIBLE
+        stopScan()
+        loading = true
+        val myAttempt = attempt
+        binding.webView.visibility = View.INVISIBLE
         binding.webView.loadUrl(url)
+        // Reveal even if the page never reports finishing, so a slow script cannot keep us on this screen.
+        binding.root.postDelayed({
+            if (loading && attempt == myAttempt) {
+                revealWeb()
+            }
+        }, REVEAL_FALLBACK_MS)
     }
 
+    private fun revealWeb() {
+        loading = false
+        binding.pairing.visibility = View.GONE
+        binding.webView.visibility = View.VISIBLE
+    }
+
+    private fun hideWeb() {
+        if (loading) {
+            loading = false
+            binding.webView.stopLoading()
+        }
+        binding.webView.visibility = View.GONE
+    }
+
+    private fun showPairing(message: String? = null) {
+        hideWeb()
+        binding.pairing.visibility = View.VISIBLE
+        setConnectStatus(message)
+        startScan()
+    }
+
+    // ------------------------------------------------------------------ scanning
+
     private fun startScan() {
-        scanner?.stop()
-        binding.hostList.removeAllViews()
+        stopScan()
+        val myAttempt = ++attempt
+        refreshNetworkHint()
         val next = LanScanner(
-            onHost = { host -> runOnUiThread { addHost(host) } },
-            onStatus = { text -> runOnUiThread { binding.scanStatus.text = text } },
+            this,
+            onHost = { host -> runOnUiThread { if (attempt == myAttempt) addHost(host) } },
+            onStatus = { text -> runOnUiThread { if (attempt == myAttempt) setScanStatus(text) } },
         )
         scanner = next
         next.start(prefs().getString(KEY_HOST, null))
+    }
+
+    private fun stopScan() {
+        scanner?.stop()
+        scanner = null
+        binding.hostList.removeAllViews()
+        setScanStatus(null)
     }
 
     private fun addHost(host: FoundHost) {
@@ -236,10 +366,59 @@ class MainActivity : AppCompatActivity() {
         binding.hostList.addView(row.root)
     }
 
+    // ------------------------------------------------------------------ network state
+
+    private fun connectivity() = getSystemService(ConnectivityManager::class.java)
+
+    private fun refreshNetworkHint(state: LanState = Lan.state(this)) {
+        val hint = when (state) {
+            LanState.LAN -> null
+            LanState.MOBILE_DATA -> getString(R.string.hint_mobile_data)
+            LanState.NO_WIFI -> getString(R.string.hint_no_wifi)
+        }
+        binding.networkHint.text = hint
+        binding.networkHint.visibility = if (hint == null) View.GONE else View.VISIBLE
+    }
+
+    private fun onLanChanged() {
+        if (isFinishing || isDestroyed) {
+            return
+        }
+        val state = Lan.state(this)
+        val now = state == LanState.LAN
+        refreshNetworkHint(state)
+        if (now && !lanAvailable && binding.pairing.visibility == View.VISIBLE && !loading) {
+            // Wi-Fi just came back while we were stuck on the pairing screen: pick up where we left off.
+            val target = lastTarget
+            if (target != null) {
+                tryOpen(target)
+            } else {
+                startScan()
+            }
+        }
+        lanAvailable = now
+    }
+
+    // ------------------------------------------------------------------ helpers
+
+    private fun setConnectStatus(text: String?) {
+        binding.connectStatus.text = text.orEmpty()
+        binding.connectStatus.visibility = if (text.isNullOrBlank()) View.GONE else View.VISIBLE
+    }
+
+    private fun setScanStatus(text: String?) {
+        binding.scanStatus.text = text.orEmpty()
+        binding.scanStatus.visibility = if (text.isNullOrBlank()) View.GONE else View.VISIBLE
+    }
+
     private fun prefs() = getSharedPreferences("nearbox", MODE_PRIVATE)
 
     companion object {
         private const val KEY_HOST = "last_host"
         private const val KEY_PORT = "last_port"
+
+        /** LAN hosts answer /api/discover within a few hundred ms; anything slower is as good as unreachable. */
+        private const val PROBE_TIMEOUT_MS = 2000
+        private const val REVEAL_FALLBACK_MS = 8000L
     }
 }

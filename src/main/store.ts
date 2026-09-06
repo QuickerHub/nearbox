@@ -2,6 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
+  AGENT_KINDS,
+  type AgentKind,
+  type AgentModel,
   type AgentRun,
   DEFAULT_SETTINGS,
   type DeviceInfo,
@@ -26,6 +29,12 @@ export interface StoredFile {
   byteLength?: number;
 }
 
+/** The model list a CLI reported, kept so the picker is complete right after launch and when offline. */
+export interface ModelCatalog {
+  models: AgentModel[];
+  checkedAt: string;
+}
+
 export interface PersistedState {
   version: 1;
   tasks: Task[];
@@ -35,6 +44,7 @@ export interface PersistedState {
   remoteDevices: RemoteDevice[];
   files: Record<string, StoredFile>;
   settings: HostSettings;
+  agentModels: Partial<Record<AgentKind, ModelCatalog>>;
 }
 
 const MAX_RUNS_KEPT = 300;
@@ -49,6 +59,7 @@ function emptyState(): PersistedState {
     remoteDevices: [],
     files: {},
     settings: { ...DEFAULT_SETTINGS, agents: {} },
+    agentModels: {},
   };
 }
 
@@ -88,6 +99,7 @@ export class Store {
           ...(raw.settings ?? {}),
           agents: { ...(raw.settings?.agents ?? {}) },
         },
+        agentModels: normalizeCatalogs(raw.agentModels),
       };
     } catch {
       // Keep the broken file around for inspection instead of silently replacing it.
@@ -148,6 +160,29 @@ function normalizeNote(note: TaskNote & { file?: FileMeta }): TaskNote {
     return rest;
   }
   return { ...rest, files: Array.isArray(rest.files) && rest.files.length ? rest.files : [file] };
+}
+
+/** Only well-formed catalogs survive a reload; anything odd is simply fetched again. */
+function normalizeCatalogs(value: unknown): Partial<Record<AgentKind, ModelCatalog>> {
+  const out: Partial<Record<AgentKind, ModelCatalog>> = {};
+  if (!value || typeof value !== "object") {
+    return out;
+  }
+  for (const kind of AGENT_KINDS) {
+    const entry = (value as Record<string, unknown>)[kind];
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const { models, checkedAt } = entry as { models?: unknown; checkedAt?: unknown };
+    if (!Array.isArray(models) || typeof checkedAt !== "string") {
+      continue;
+    }
+    const clean = models.filter((model): model is AgentModel => Boolean(model) && typeof (model as AgentModel).id === "string" && (model as AgentModel).id.length > 0);
+    if (clean.length) {
+      out[kind] = { models: clean, checkedAt };
+    }
+  }
+  return out;
 }
 
 function normalizeDevice(device: RemoteDevice): RemoteDevice {

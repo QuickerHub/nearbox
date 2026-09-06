@@ -212,6 +212,8 @@ export interface ParsedEvent {
   kind: RunEventKind;
   text: string;
   tool?: ToolCall;
+  /** Continues the previous event of the same kind verbatim (streamed text). */
+  delta?: boolean;
 }
 
 export interface ParseResult {
@@ -223,8 +225,20 @@ export interface ParseResult {
   isError?: boolean;
 }
 
+/** The output dialects: one per CLI, plus raw ACP session updates from a warm agent host. */
+export type OutputDialect = AgentKind | "acp";
+
 export interface OutputParser {
+  /** One line of the CLI's stdout. */
   feed(line: string): ParseResult;
+  /** One already-decoded message (a session update from an ACP connection). */
+  push(data: Record<string, unknown>): ParseResult;
+  /**
+   * Emit whatever text has streamed in since the last flush as a `delta`
+   * event, so the UI can show an answer while it is still being written.
+   * Whitespace-only fragments stay buffered until more text arrives.
+   */
+  flushPartial(): ParseResult;
   end(): ParseResult;
 }
 
@@ -241,22 +255,34 @@ interface Sink {
  * set of event kinds, coalesces token deltas so the UI is not flooded, and
  * tracks tool calls by id so a start and its completion become one thing.
  */
-export function createOutputParser(kind: AgentKind): OutputParser {
+export function createOutputParser(kind: OutputDialect): OutputParser {
   let pendingKind: RunEventKind | null = null;
   let pendingText = "";
+  // Once part of a block has gone out as a delta, the rest must follow verbatim.
+  let streaming = false;
+  // The whole of the current text block, so a streamed answer is still summarised in full.
+  let blockText = "";
   let lastText = "";
   const tools = new Map<string, ToolCall>();
 
   const sink: Sink = {
     flush(into) {
-      if (pendingKind && pendingText.trim()) {
-        into.push({ kind: pendingKind, text: pendingText.trimEnd() });
+      if (pendingKind && (pendingText.trim() || streaming)) {
+        if (streaming) {
+          if (pendingText) {
+            into.push({ kind: pendingKind, text: pendingText, delta: true });
+          }
+        } else {
+          into.push({ kind: pendingKind, text: pendingText.trimEnd() });
+        }
         if (pendingKind === "text") {
-          lastText = pendingText.trim();
+          lastText = blockText.trim();
         }
       }
       pendingKind = null;
       pendingText = "";
+      streaming = false;
+      blockText = "";
     },
     delta(into, deltaKind, text) {
       if (pendingKind && pendingKind !== deltaKind) {
@@ -264,6 +290,7 @@ export function createOutputParser(kind: AgentKind): OutputParser {
       }
       pendingKind = deltaKind;
       pendingText += text;
+      blockText += text;
     },
     push(into, eventKind, text) {
       sink.flush(into);
@@ -291,11 +318,31 @@ export function createOutputParser(kind: AgentKind): OutputParser {
 
   const context: DialectContext = { sink, track, tools };
 
+  const push = (data: Record<string, unknown>): ParseResult => {
+    const out: ParseResult = { events: [] };
+    switch (kind) {
+      case "cursor":
+      case "claude":
+        parseStreamJson(data, out, context);
+        break;
+      case "codex":
+        parseCodex(data, out, context);
+        break;
+      case "grok":
+      case "acp":
+        parseAcp(data, out, context);
+        break;
+      case "opencode":
+        parseOpencode(data, out, context);
+        break;
+    }
+    return out;
+  };
+
   const feed = (line: string): ParseResult => {
     const trimmed = line.trim();
-    const out: ParseResult = { events: [] };
     if (!trimmed) {
-      return out;
+      return { events: [] };
     }
     let data: Record<string, unknown> | null = null;
     if (trimmed.startsWith("{")) {
@@ -307,23 +354,22 @@ export function createOutputParser(kind: AgentKind): OutputParser {
       }
     }
     if (!data) {
+      const out: ParseResult = { events: [] };
       sink.push(out.events, "raw", trimmed);
       return out;
     }
-    switch (kind) {
-      case "cursor":
-      case "claude":
-        parseStreamJson(data, out, context);
-        break;
-      case "codex":
-        parseCodex(data, out, context);
-        break;
-      case "grok":
-        parseGrok(data, out, context);
-        break;
-      case "opencode":
-        parseOpencode(data, out, context);
-        break;
+    return push(data);
+  };
+
+  const flushPartial = (): ParseResult => {
+    const out: ParseResult = { events: [] };
+    if (pendingKind && pendingText.trim()) {
+      out.events.push({ kind: pendingKind, text: pendingText, delta: true });
+      if (pendingKind === "text") {
+        lastText = blockText.trim();
+      }
+      pendingText = "";
+      streaming = true;
     }
     return out;
   };
@@ -335,7 +381,7 @@ export function createOutputParser(kind: AgentKind): OutputParser {
     return out;
   };
 
-  return { feed, end };
+  return { feed, push, flushPartial, end };
 }
 
 interface DialectContext {
@@ -563,33 +609,62 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
   sink.push(events, "raw", compact(data));
 }
 
-/** Grok Build `--output-format streaming-json` (ACP session updates). */
-function parseGrok(data: Record<string, unknown>, out: ParseResult, { sink, track, tools }: DialectContext): void {
-  const type = String(data.type ?? "");
+/**
+ * ACP (Agent Client Protocol) session updates. Grok Build's
+ * `--output-format streaming-json` prints them flattened one per line with a
+ * `type` field and text in `data`; a warm agent host hands us the raw
+ * `update` objects with `sessionUpdate` and `content`. The runner adds a
+ * synthetic `end` when a prompt returns.
+ */
+function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track, tools }: DialectContext): void {
+  const type = String(data.type ?? data.sessionUpdate ?? "");
   const events = out.events;
   switch (type) {
     case "available_commands":
+    case "available_commands_update":
+    case "current_mode_update":
+    case "session_info_update":
+    case "config_option_update":
+    case "user_message_chunk":
     case "usage":
       return;
     case "thought":
-      sink.delta(events, "thinking", String(data.data ?? ""));
+    case "agent_thought_chunk":
+      sink.delta(events, "thinking", chunkText(data));
       return;
     case "text":
-      sink.delta(events, "text", String(data.data ?? ""));
+    case "agent_message_chunk":
+      sink.delta(events, "text", chunkText(data));
       return;
+    case "plan": {
+      const entries = asArray(data.entries).filter(isRecord);
+      if (!entries.length) {
+        return;
+      }
+      const lines = entries.map((entry) => {
+        const status = String(entry.status ?? "");
+        const mark = status === "completed" ? "☑" : status === "in_progress" ? "◐" : "☐";
+        return `${mark} ${String(entry.content ?? "")}`;
+      });
+      sink.tool(events, track("plan", { name: "plan", kind: "todo", status: "ok", subject: `${lines.length} 项`, output: lines.join("\n") }));
+      return;
+    }
     case "tool_call":
     case "tool_use": {
       const id = String(data.toolCallId ?? data.id ?? `tool-${events.length}`);
-      const title = String(data.title ?? data.name ?? data.tool ?? "tool");
+      const title = String(data.title ?? data.name ?? data.tool ?? "tool").replace(/^`(.*)`$/s, "$1");
       const rawInput = isRecord(data.rawInput) ? data.rawInput : isRecord(data.input) ? data.input : {};
-      const described = describeArgs(title, rawInput, undefined, grokKind(String(data.kind ?? ""), title));
+      const described = describeArgs(title, rawInput, undefined, acpKind(String(data.kind ?? ""), title));
+      const files = acpLocations(data);
       sink.tool(
         events,
         track(id, {
           ...described,
-          subject: described.subject ?? title,
-          status: grokStatus(String(data.status ?? "")),
-          ...describeGrokContent(asArray(data.content)),
+          files: described.files ?? files,
+          subject: described.subject ?? (files?.length === 1 ? basenameOf(files[0]!) : undefined) ?? title,
+          status: acpStatus(String(data.status ?? "")),
+          ...describeAcpContent(asArray(data.content)),
+          ...describeRawOutput(described.kind, data.rawOutput),
         }),
       );
       return;
@@ -598,20 +673,38 @@ function parseGrok(data: Record<string, unknown>, out: ParseResult, { sink, trac
     case "tool_result": {
       const id = String(data.toolCallId ?? data.id ?? "");
       const previous = tools.get(id);
-      const content = describeGrokContent(asArray(data.content));
-      const rawOutput = data.rawOutput === undefined ? undefined : compact(data.rawOutput);
-      const patch: Partial<ToolCall> & Pick<ToolCall, "name" | "kind"> = {
-        name: previous?.name ?? String(data.title ?? "tool"),
-        kind: previous?.kind ?? "other",
-        ...content,
-        status: data.status === undefined ? previous?.status ?? "running" : grokStatus(String(data.status)),
-      };
-      if (!content.output && rawOutput) {
-        patch.output = previous?.kind === "shell" ? clipTail(rawOutput) : clipHead(rawOutput);
-      }
+      // cursor-agent announces a call first and fills in what it is about (title, arguments, files) a moment later.
+      const rawInput = isRecord(data.rawInput) && Object.keys(data.rawInput).length ? data.rawInput : undefined;
+      const title = typeof data.title === "string" ? data.title.replace(/^`(.*)`$/s, "$1") : undefined;
+      const files = acpLocations(data);
+      const kindHint = typeof data.kind === "string" ? acpKind(data.kind, title ?? "") : previous?.kind ?? acpKind("", title ?? "");
+      const redescribed = rawInput || title ? describeArgs(title ?? previous?.name ?? "tool", rawInput ?? {}, undefined, kindHint) : undefined;
+      const content = describeAcpContent(asArray(data.content));
+      const output = describeRawOutput(redescribed?.kind ?? previous?.kind ?? "other", data.rawOutput);
+      const hasNews = Boolean(content.output || content.diff || output.output || output.exitCode !== undefined || redescribed || files);
       // Empty updates are progress ticks; only emit when there is something new to show.
-      if (!content.output && !content.diff && !rawOutput && data.status === undefined) {
+      if (!hasNews && (data.status === undefined || (previous && acpStatus(String(data.status)) === previous.status))) {
         return;
+      }
+      // The client refused this call; the agent still reports it as completed afterwards.
+      if (previous?.status === "rejected" && !hasNews) {
+        return;
+      }
+      const patch: Partial<ToolCall> & Pick<ToolCall, "name" | "kind"> = {
+        name: previous?.name ?? title ?? "tool",
+        kind: previous?.kind && previous.kind !== "other" ? previous.kind : redescribed?.kind ?? "other",
+        ...(redescribed ? compactPatch({ ...redescribed, name: undefined, kind: undefined }) : {}),
+        ...(files ? { files, subject: files.length === 1 ? basenameOf(files[0]!) : `${basenameOf(files[0]!)} 等 ${files.length} 个文件` } : {}),
+        ...output,
+        ...content,
+        status: data.status === undefined ? previous?.status ?? "running" : acpStatus(String(data.status)),
+        error: typeof data.error === "string" && data.error ? data.error : undefined,
+      };
+      if (redescribed?.subject) {
+        patch.subject = redescribed.subject;
+      }
+      if (patch.status === "ok" && patch.exitCode !== undefined && patch.exitCode !== 0) {
+        patch.status = "error";
       }
       sink.tool(events, track(id, patch));
       return;
@@ -622,10 +715,10 @@ function parseGrok(data: Record<string, unknown>, out: ParseResult, { sink, trac
         out.sessionId = data.sessionId;
       }
       const stop = String(data.stopReason ?? "end_turn");
-      const isError = stop !== "end_turn" && stop !== "max_turns";
+      const isError = stop !== "end_turn" && stop !== "max_turns" && stop !== "cancelled";
       out.isError = isError;
       const cost = typeof data.total_cost_usd === "number" ? ` · $${data.total_cost_usd.toFixed(4)}` : "";
-      events.push({ kind: "result", text: `${isError ? `结束 (${stop})` : "完成"}${cost}` });
+      events.push({ kind: "result", text: `${stop === "cancelled" ? "已取消" : isError ? `结束 (${stop})` : "完成"}${cost}` });
       return;
     }
     case "error":
@@ -637,11 +730,20 @@ function parseGrok(data: Record<string, unknown>, out: ParseResult, { sink, trac
   }
 }
 
-function grokKind(kind: string, title: string): ToolKind {
+/** Grok puts a chunk's text in `data`; raw ACP wraps it as a content block. */
+function chunkText(data: Record<string, unknown>): string {
+  const content = isRecord(data.content) ? data.content : {};
+  const text = typeof data.data === "string" ? data.data : typeof content.text === "string" ? content.text : "";
+  // Some models let their end-of-sequence marker through as text; it is never part of the answer.
+  return text.replace(/<\|(?:eos|endoftext|end_of_text|eot_id)\|>/g, "");
+}
+
+function acpKind(kind: string, title: string): ToolKind {
   switch (kind) {
     case "read":
       return "read";
     case "edit":
+    case "move":
       return "edit";
     case "delete":
       return "delete";
@@ -656,17 +758,51 @@ function grokKind(kind: string, title: string): ToolKind {
   }
 }
 
-function grokStatus(status: string): ToolStatus {
+/** ACP statuses, plus "rejected" which the runner adds when it refuses a permission request. */
+function acpStatus(status: string): ToolStatus {
   if (status === "completed") {
     return "ok";
   }
   if (status === "failed" || status === "error") {
     return "error";
   }
+  if (status === "rejected") {
+    return "rejected";
+  }
   return "running";
 }
 
-function describeGrokContent(content: unknown[]): Partial<ToolCall> {
+function acpLocations(data: Record<string, unknown>): string[] | undefined {
+  const files = asArray(data.locations)
+    .filter(isRecord)
+    .map((location) => String(location.path ?? ""))
+    .filter(Boolean);
+  return files.length ? files : undefined;
+}
+
+/** cursor-agent reports a finished command as `{ exitCode, stdout, stderr }`; anything else is shown as JSON. */
+function describeRawOutput(kind: ToolKind, rawOutput: unknown): Partial<ToolCall> {
+  if (rawOutput === undefined || rawOutput === null) {
+    return {};
+  }
+  if (isRecord(rawOutput) && ("stdout" in rawOutput || "stderr" in rawOutput || "exitCode" in rawOutput)) {
+    const stdout = typeof rawOutput.stdout === "string" ? rawOutput.stdout : "";
+    const stderr = typeof rawOutput.stderr === "string" ? rawOutput.stderr : "";
+    const combined = stdout && stderr ? `${stdout}\n${stderr}` : stdout || stderr;
+    const patch: Partial<ToolCall> = {};
+    if (combined.trim()) {
+      patch.output = clipTail(combined);
+    }
+    if (typeof rawOutput.exitCode === "number") {
+      patch.exitCode = rawOutput.exitCode;
+    }
+    return patch;
+  }
+  const text = compact(rawOutput);
+  return text ? { output: kind === "shell" ? clipTail(text) : clipHead(text) } : {};
+}
+
+function describeAcpContent(content: unknown[]): Partial<ToolCall> {
   const patch: Partial<ToolCall> = {};
   const outputs: string[] = [];
   const files: string[] = [];

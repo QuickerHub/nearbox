@@ -13,7 +13,7 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "node --experimental-strip-types --test src/main/network.test.ts src/main/agent-output.test.ts src/main/prompt.test.ts src/main/remote-input.test.ts src/main/input-win.test.ts src/shared/version.test.ts src/shared/discover.test.ts src/renderer/src/lib/runTranscript.test.ts src/renderer/src/lib/plan.test.ts src/renderer/src/lib/attachments.test.ts",
+    "test": "node --experimental-strip-types --test src/main/network.test.ts src/main/agent-output.test.ts src/main/acp.test.ts src/main/agent-models.test.ts src/main/prompt.test.ts src/main/scheduler.test.ts src/main/nearbox-cli.test.ts src/main/remote-input.test.ts src/main/input-win.test.ts src/shared/version.test.ts src/shared/discover.test.ts src/renderer/src/lib/runTranscript.test.ts src/renderer/src/lib/plan.test.ts src/renderer/src/lib/attachments.test.ts src/renderer/src/lib/remoteZoom.test.ts",
     "preview": "electron-vite preview",
     "android:sync": "node scripts/sync-android-version.mjs",
     "release:check": "node scripts/check-release-version.mjs",

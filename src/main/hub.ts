@@ -11,6 +11,7 @@ import {
   type AgentRun,
   agentsForProject,
   canContinueRun,
+  type DelegateInput,
   type DeviceCandidate,
   type DispatchInput,
   type FileMeta,
@@ -18,6 +19,8 @@ import {
   isRunActive,
   MAX_FILES_PER_MESSAGE,
   newId,
+  canListModels,
+  normalizeModelId,
   type NoteInput,
   type Project,
   type RemoteDevice,
@@ -29,13 +32,15 @@ import {
   type Task,
   type TaskInput,
   type TaskNote,
+  sessionIdAlongChain,
   type TaskPatch,
   TASK_STATUSES,
   type TaskStatus,
 } from "@shared/protocol";
-import { detectAgents } from "./agents";
+import { detectAgents, listAgentModels } from "./agents";
+import type { DelegationConfig } from "./delegation";
 import { discoverDevices } from "./lan-discover";
-import { attachmentSection, buildTurnPrompt, imagePaths, type PromptAttachment } from "./prompt";
+import { attachmentSection, buildDelegatedPrompt, buildTurnPrompt, delegationSection, imagePaths, type PromptAttachment } from "./prompt";
 import { type RunAttachment, RunManager } from "./runner";
 import { assertSafeRemotePath, directoryExists, listDirectory, probeDevice, remoteAttachmentPath } from "./ssh";
 import { Store, type StoredFile } from "./store";
@@ -43,6 +48,16 @@ import { Store, type StoredFile } from "./store";
 function fail(message: string, code = "BAD_REQUEST"): never {
   throw Object.assign(new Error(message), { code });
 }
+
+/** How long `nearbox ask` blocks before telling the agent to come back with `nearbox wait`; the prompt quotes it. */
+const DELEGATE_WAIT_SECONDS = 90;
+/** Longest single long-poll the API honours. */
+const MAX_WAIT_MS = 120_000;
+/** Model catalogs are re-fetched this often while the app runs, and at most this often on demand. */
+const MODEL_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const MODEL_RETRY_MS = 60_000;
+/** Agent hosts are started this long after launch, so they do not compete with the app coming up. */
+const WARM_AT_STARTUP_DELAY_MS = 8_000;
 
 /**
  * Owns all task-manager state. The LAN server and the Electron shell talk to
@@ -53,6 +68,12 @@ export class TaskHub extends EventEmitter {
   readonly runner: RunManager;
   readonly dataDir: string;
   private readonly deviceChecks = new Map<string, Promise<RemoteDevice>>();
+  private readonly modelFetches = new Map<AgentKind, Promise<void>>();
+  /** When each CLI was last asked for its catalog, successful or not; keeps a broken CLI from being hammered. */
+  private readonly modelAttempts = new Map<AgentKind, number>();
+  private modelTimer: NodeJS.Timeout | null = null;
+  /** Unset when the `nearbox` launcher could not be installed; runs then cannot delegate. */
+  private readonly delegation: DelegationConfig | null;
   agents: AgentInfo[] = AGENT_KINDS.map((kind) => ({
     kind,
     label: AGENT_LABELS[kind],
@@ -60,10 +81,21 @@ export class TaskHub extends EventEmitter {
     supportsResume: true,
   }));
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, options: { delegation?: DelegationConfig | null } = {}) {
     super();
+    // Several `nearbox wait` calls may be parked on run-finished at once.
+    this.setMaxListeners(100);
     this.dataDir = dataDir;
+    this.delegation = options.delegation ?? null;
     this.store = new Store(dataDir);
+    // Last session's catalogs make the picker complete before any CLI has answered (or when offline).
+    for (const info of this.agents) {
+      const cached = this.store.state.agentModels[info.kind];
+      if (cached) {
+        info.models = cached.models;
+        info.modelsCheckedAt = cached.checkedAt;
+      }
+    }
     this.runner = new RunManager({
       runsDir: join(dataDir, "runs"),
       getSettings: () => this.store.state.settings,
@@ -72,6 +104,7 @@ export class TaskHub extends EventEmitter {
       attachmentsFor: (run) => this.attachmentsFor(run),
       imagesFor: (run) => imagePaths(this.promptAttachments(run.attachments ?? [], run.deviceId)),
       promptWithoutSession: (run) => this.promptWithoutSession(run),
+      delegationFor: (run) => (run.delegate && !run.deviceId ? this.delegation : null),
       onRunChanged: (run) => {
         this.touchTaskForRun(run);
         this.store.save();
@@ -89,9 +122,30 @@ export class TaskHub extends EventEmitter {
   async init(): Promise<void> {
     await this.runner.init();
     await this.refreshAgents();
+    // The app lives in the tray for days; catalogs gain and lose models meanwhile.
+    this.modelTimer = setInterval(() => void this.refreshModels(undefined, true), MODEL_REFRESH_INTERVAL_MS);
+    this.modelTimer.unref();
+    // Once the app has settled, bring the agent up with the newest conversation loaded: its start-up
+    // (mostly MCP servers) is then paid while nobody is waiting, and the first message of the day is
+    // as quick as any follow-up.
+    setTimeout(() => this.warmRecentConversations(), WARM_AT_STARTUP_DELAY_MS).unref();
+  }
+
+  private warmRecentConversations(): void {
+    for (const kind of AGENT_KINDS) {
+      if (!this.agents.find((item) => item.kind === kind)?.available) {
+        continue;
+      }
+      const recent = [...this.runs].reverse().find((run) => run.agent === kind && !run.deviceId && run.sessionId && existsSync(run.cwd));
+      this.runner.warm(kind, recent?.cwd, recent?.sessionId);
+    }
   }
 
   async shutdown(): Promise<void> {
+    if (this.modelTimer) {
+      clearInterval(this.modelTimer);
+      this.modelTimer = null;
+    }
     await this.runner.shutdown();
     await this.store.flush();
   }
@@ -123,9 +177,70 @@ export class TaskHub extends EventEmitter {
     for (const kind of AGENT_KINDS) {
       overrides[kind] = this.settings.agents[kind]?.command;
     }
-    this.agents = await detectAgents(overrides);
+    const detected = await detectAgents(overrides);
+    // Catalogs take a few seconds to fetch; keep the last one until the new one arrives.
+    this.agents = detected.map((info) => {
+      const previous = this.agents.find((item) => item.kind === info.kind);
+      return previous?.models
+        ? { ...info, models: previous.models, modelsCheckedAt: previous.modelsCheckedAt, modelsError: previous.modelsError }
+        : info;
+    });
     this.changed();
+    void this.refreshModels(undefined, true);
     return this.agents;
+  }
+
+  /**
+   * Ask each installed CLI (or just `kind`) for its model catalog; results land
+   * on `agents[].models` and are persisted. Without `force`, a CLI asked less
+   * than a minute ago is left alone, so clients may call this whenever a
+   * catalog looks stale without turning a broken CLI into a busy loop.
+   */
+  async refreshModels(kind?: AgentKind, force = false): Promise<AgentInfo[]> {
+    const kinds = kind ? [kind] : AGENT_KINDS;
+    await Promise.all(kinds.map((item) => this.fetchModels(item, force)));
+    return this.agents;
+  }
+
+  private fetchModels(kind: AgentKind, force: boolean): Promise<void> {
+    const pending = this.modelFetches.get(kind);
+    if (pending) {
+      return pending;
+    }
+    const info = this.agents.find((item) => item.kind === kind);
+    if (!info?.available || !canListModels(kind)) {
+      return Promise.resolve();
+    }
+    const lastAttempt = this.modelAttempts.get(kind) ?? 0;
+    if (!force && Date.now() - lastAttempt < MODEL_RETRY_MS) {
+      return Promise.resolve();
+    }
+    this.modelAttempts.set(kind, Date.now());
+    const job = (async () => {
+      try {
+        const models = await listAgentModels(kind, this.settings.agents[kind]?.command);
+        const checkedAt = new Date().toISOString();
+        this.patchAgent(kind, { models, modelsCheckedAt: checkedAt, modelsError: undefined });
+        this.store.state.agentModels[kind] = { models, checkedAt };
+        this.store.save();
+      } catch (error) {
+        // The previous list stays; the picker shows it together with why it could not be refreshed.
+        this.patchAgent(kind, { modelsError: error instanceof Error ? error.message : String(error) });
+      } finally {
+        this.modelFetches.delete(kind);
+        this.changed();
+      }
+    })();
+    this.modelFetches.set(kind, job);
+    return job;
+  }
+
+  private patchAgent(kind: AgentKind, patch: Partial<AgentInfo>): void {
+    // The agent may have been re-detected meanwhile; apply to whatever entry is current.
+    const current = this.agents.find((item) => item.kind === kind);
+    if (current) {
+      Object.assign(current, patch);
+    }
   }
 
   // ----------------------------------------------------------------- tasks
@@ -589,17 +704,12 @@ export class TaskHub extends EventEmitter {
     if (!agent) {
       fail("请选择一个 Agent。");
     }
-    const device = project.deviceId ? this.remoteDevices.find((item) => item.id === project.deviceId) : undefined;
-    if (project.deviceId && !device) {
-      fail("这个项目所在的电脑已经被移除了。");
-    }
-    const info = agentsForProject({ agents: this.agents, remoteDevices: this.remoteDevices }, project).find((item) => item.kind === agent);
-    // A device that has never been checked gets the benefit of the doubt; the run itself will check it.
-    if (!info?.available && !(device && device.status !== "online" && device.agents.length === 0)) {
-      fail(device ? `${device.name} 上没有检测到 ${AGENT_LABELS[agent]}，无法派发。` : `${AGENT_LABELS[agent]} 还没有在这台电脑上安装，无法派发。`);
-    }
+    const device = this.deviceForAgent(project, agent);
     const agentSettings = this.settings.agents[agent];
     const access: AgentAccess = input.access === "full" || input.access === "safe" ? input.access : agentSettings?.access ?? "safe";
+    if (String(input.model ?? "").trim() && !normalizeModelId(input.model)) {
+      fail("模型名不合法。");
+    }
     const message = String(input.prompt ?? "").replace(/\r\n/g, "\n").trim();
     const attachments = this.resolveFiles(input.fileIds);
     const now = new Date().toISOString();
@@ -609,7 +719,7 @@ export class TaskHub extends EventEmitter {
       projectId: project.id,
       agent,
       access,
-      model: String(input.model ?? agentSettings?.model ?? "").trim() || undefined,
+      model: normalizeModelId(input.model) ?? agentSettings?.model,
       prompt: "",
       cwd: project.path,
       deviceId: device?.id,
@@ -618,6 +728,10 @@ export class TaskHub extends EventEmitter {
       createdAt: now,
       eventCount: 0,
     };
+    // The `nearbox` launcher only exists on this PC, so runs on other computers cannot delegate.
+    if (input.delegate && !device && this.delegation) {
+      run.delegate = true;
+    }
     if (input.resumeRunId) {
       const previous = this.runs.find((item) => item.id === input.resumeRunId);
       if (!previous || previous.taskId !== task.id) {
@@ -647,6 +761,7 @@ export class TaskHub extends EventEmitter {
     } else {
       run.prompt = this.defaultPrompt(task.id, project.id);
     }
+    run.prompt = this.withDelegationNotes(run, run.prompt);
     this.runs.push(run);
     task.latestRunId = run.id;
     task.projectId = project.id;
@@ -668,7 +783,163 @@ export class TaskHub extends EventEmitter {
     if (!this.tasks.some((task) => task.id === run.taskId)) {
       return run.prompt;
     }
-    return this.defaultPrompt(run.taskId, run.projectId, run.prompt);
+    // Rebuild the turn from its parts rather than reuse `run.prompt`, which may already carry the delegation notes.
+    const turn = buildTurnPrompt(run.message ?? "", this.promptAttachments(run.attachments ?? [], run.deviceId), Boolean(run.deviceId));
+    return this.withDelegationNotes(run, this.defaultPrompt(run.taskId, run.projectId, turn || undefined));
+  }
+
+  /** The prompt plus, for runs that may delegate, the section explaining the `nearbox` command. */
+  private withDelegationNotes(run: AgentRun, prompt: string): string {
+    if (!run.delegate) {
+      return prompt;
+    }
+    const targets = this.agents.filter((info) => info.available).map((info) => ({ kind: info.kind, label: info.label }));
+    const section = delegationSection(targets, DELEGATE_WAIT_SECONDS);
+    return section.length ? `${prompt.trimEnd()}\n\n${section.join("\n")}`.trimEnd() : prompt;
+  }
+
+  /** The device `project` lives on (undefined for this PC), after checking `agent` is usable there. */
+  private deviceForAgent(project: Project, agent: AgentKind): RemoteDevice | undefined {
+    const device = project.deviceId ? this.remoteDevices.find((item) => item.id === project.deviceId) : undefined;
+    if (project.deviceId && !device) {
+      fail("这个项目所在的电脑已经被移除了。");
+    }
+    const info = agentsForProject({ agents: this.agents, remoteDevices: this.remoteDevices }, project).find((item) => item.kind === agent);
+    // A device that has never been checked gets the benefit of the doubt; the run itself will check it.
+    if (!info?.available && !(device && device.status !== "online" && device.agents.length === 0)) {
+      fail(device ? `${device.name} 上没有检测到 ${AGENT_LABELS[agent]}，无法派发。` : `${AGENT_LABELS[agent]} 还没有在这台电脑上安装，无法派发。`);
+    }
+    return device;
+  }
+
+  // ------------------------------------------------------------ delegation
+
+  /**
+   * A running agent hands a sub-task to another agent (`nearbox ask`). The
+   * child joins the parent's task and thread but not the task's own
+   * conversation, and never gets more access than the parent has.
+   */
+  delegate(parentRunId: string, input: DelegateInput): AgentRun {
+    const parent = this.runs.find((item) => item.id === parentRunId);
+    if (!parent || parent.status !== "running" || !parent.delegate) {
+      fail("只有正在运行、并开启了委派的 Agent 才能委派子任务。", "NOT_FOUND");
+    }
+    const task = this.requireTask(parent.taskId);
+    const agent = agentOrUndefined(input.agent);
+    if (!agent) {
+      fail("请指定交给哪个 Agent：cursor、codex、grok、claude 或 opencode。");
+    }
+    const wanted = String(input.project ?? "").trim();
+    const project = wanted ? this.findProject(wanted) : this.projects.find((item) => item.id === parent.projectId);
+    if (!project) {
+      fail(wanted ? `没有叫「${wanted}」的项目。用 Nearbox 里登记过的项目名或它的目录路径。` : "找不到当前运行所在的项目。", "NOT_FOUND");
+    }
+    const device = this.deviceForAgent(project, agent);
+    const message = String(input.prompt ?? "").replace(/\r\n/g, "\n").trim();
+    if (!message) {
+      fail("任务说明不能为空。", "EMPTY");
+    }
+    if (String(input.model ?? "").trim() && !normalizeModelId(input.model)) {
+      fail("模型名不合法。");
+    }
+    const agentSettings = this.settings.agents[agent];
+    // The sub-task works at the parent's level unless the parent narrows it; it can never widen it.
+    const requested: AgentAccess = input.access === "full" || input.access === "safe" ? input.access : parent.access;
+    const from: Actor = { id: `agent:${parent.id}`, name: AGENT_LABELS[parent.agent], role: "desktop" };
+    const now = new Date().toISOString();
+    const run: AgentRun = {
+      id: newId(),
+      taskId: task.id,
+      projectId: project.id,
+      agent,
+      access: parent.access === "full" ? requested : "safe",
+      model: normalizeModelId(input.model) ?? agentSettings?.model,
+      prompt: "",
+      message,
+      cwd: project.path,
+      deviceId: device?.id,
+      status: "queued",
+      requestedBy: from,
+      createdAt: now,
+      eventCount: 0,
+      parentRunId: parent.id,
+    };
+    if (input.continue) {
+      // "Same conversation" for a parent means the newest sub-run it gave this agent in this project.
+      const previous = [...this.runs].reverse().find((item) => item.parentRunId === parent.id && item.agent === agent && item.projectId === project.id);
+      if (previous && canContinueRun(this.runs, previous)) {
+        run.resumedFromRunId = previous.id;
+        run.cwd = previous.cwd;
+        run.deviceId = previous.deviceId;
+      }
+    }
+    run.prompt = buildDelegatedPrompt(message, AGENT_LABELS[parent.agent], project, Boolean(run.resumedFromRunId));
+    this.runs.push(run);
+    task.notes.push({ ...this.note(from, "run", undefined), runId: run.id });
+    task.updatedAt = now;
+    project.lastUsedAt = now;
+    this.store.save();
+    this.changed();
+    this.runner.pump();
+    return run;
+  }
+
+  /** Runs started by `parentRunId` through `nearbox ask`, oldest first. */
+  childRuns(parentRunId: string): AgentRun[] {
+    return this.runs.filter((run) => run.parentRunId === parentRunId);
+  }
+
+  /**
+   * A run by id. With `scopeRunId` (a `nearbox` token) only that run and its
+   * sub-runs are visible, and a unique id prefix of at least 6 characters is
+   * accepted, since that is what the command shows the agent.
+   */
+  findRun(idOrPrefix: string, scopeRunId?: string): AgentRun | undefined {
+    const wanted = idOrPrefix.trim();
+    if (!wanted) {
+      return undefined;
+    }
+    if (scopeRunId === undefined) {
+      return this.runs.find((run) => run.id === wanted);
+    }
+    const visible = this.runs.filter((run) => run.id === scopeRunId || run.parentRunId === scopeRunId);
+    const exact = visible.find((run) => run.id === wanted);
+    if (exact || wanted.length < 6) {
+      return exact;
+    }
+    const matches = visible.filter((run) => run.id.startsWith(wanted));
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
+  /** Resolves when `run` has finished or `timeoutMs` has passed, whichever comes first. */
+  waitForRun(run: AgentRun, timeoutMs: number): Promise<AgentRun> {
+    const wait = Math.min(MAX_WAIT_MS, Math.max(0, timeoutMs));
+    if (!isRunActive(run) || wait === 0) {
+      return Promise.resolve(run);
+    }
+    return new Promise((resolve) => {
+      const settle = () => {
+        clearTimeout(timer);
+        this.off("run-finished", done);
+        resolve(run);
+      };
+      const done = (finished: AgentRun) => {
+        if (finished.id === run.id) {
+          settle();
+        }
+      };
+      const timer = setTimeout(settle, wait);
+      this.on("run-finished", done);
+    });
+  }
+
+  private findProject(text: string): Project | undefined {
+    const lower = text.toLowerCase();
+    return (
+      this.projects.find((project) => project.id === text) ??
+      this.projects.find((project) => samePath(project.path, text)) ??
+      this.projects.find((project) => project.name.toLowerCase() === lower)
+    );
   }
 
   reply(from: Actor, runId: string, text: string): AgentRun {
@@ -700,6 +971,27 @@ export class TaskHub extends EventEmitter {
     return this.runner.events(runId, afterSeq);
   }
 
+  /**
+   * The composer is pointed at an agent: get its process up now, and if the
+   * message would continue a conversation, have that session loaded, so the
+   * reply starts the moment the user hits send. Remote projects run over ssh
+   * and have nothing to warm.
+   */
+  warmAgent(input: { agent?: unknown; projectId?: unknown; resumeRunId?: unknown }): void {
+    const agent = agentOrUndefined(input.agent);
+    if (!agent) {
+      return;
+    }
+    const project = this.projects.find((item) => item.id === String(input.projectId ?? ""));
+    if (project?.deviceId) {
+      return;
+    }
+    const resumeRunId = typeof input.resumeRunId === "string" ? input.resumeRunId : undefined;
+    const previous = resumeRunId ? this.runs.find((run) => run.id === resumeRunId) : undefined;
+    const sessionId = previous && !previous.deviceId ? sessionIdAlongChain(this.runs, previous.id) : undefined;
+    this.runner.warm(agent, previous?.cwd ?? project?.path, sessionId);
+  }
+
   // -------------------------------------------------------------- settings
 
   updateSettings(patch: Partial<HostSettings>): HostSettings {
@@ -728,7 +1020,7 @@ export class TaskHub extends EventEmitter {
         }
         settings.agents[kind] = {
           access: next.access === "full" ? "full" : "safe",
-          model: String(next.model ?? "").trim() || undefined,
+          model: normalizeModelId(next.model),
           command: String(next.command ?? "").trim() || undefined,
         };
       }

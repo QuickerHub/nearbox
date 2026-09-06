@@ -53,12 +53,13 @@ export interface PlanInput {
 /**
  * The turn a new message would continue: the task's newest run by the chosen
  * agent in the chosen project. A task can hold one conversation per agent, so
- * switching the chip back to an agent picks its conversation up again.
+ * switching the chip back to an agent picks its conversation up again. Runs
+ * another agent delegated are its business, not a conversation of the task.
  */
 export function conversationRun(runs: readonly AgentRun[], taskId: string, agent: AgentKind, projectId: string): AgentRun | undefined {
   for (let index = runs.length - 1; index >= 0; index -= 1) {
     const run = runs[index]!;
-    if (run.taskId === taskId && run.agent === agent && run.projectId === projectId) {
+    if (run.taskId === taskId && run.agent === agent && run.projectId === projectId && !run.parentRunId) {
       return run;
     }
   }

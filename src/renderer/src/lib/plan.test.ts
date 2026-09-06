@@ -111,6 +111,17 @@ test("each agent keeps its own conversation in a task; switching back resumes it
   assert.equal(planSend(input({ task: task({ id: "t2" }), runs })).action, "note-run");
 });
 
+test("a run one agent delegated to another is not a conversation the user can pick up", () => {
+  const parent = run({ id: "r1", agent: "cursor", sessionId: "cursor-sess" });
+  const delegated = run({ id: "r2", agent: "codex", sessionId: "codex-sess", parentRunId: "r1", createdAt: "2026-09-06T00:01:00.000Z" });
+  const runs = [parent, delegated];
+  // Picking Codex on this task starts Codex's own conversation rather than continuing Cursor's sub-task.
+  assert.equal(planSend(input({ task: task(), runs })).action, "note-run");
+  const cursor = planSend(input({ task: task(), runs, agent: "cursor", agentLabel: "Cursor" }));
+  assert.equal(cursor.action, "reply");
+  assert.equal(cursor.resumeRunId, "r1");
+});
+
 test("asking for a fresh session skips the existing conversation and offers the way back", () => {
   const plan = planSend(input({ task: task(), latestRun: run(), fresh: true }));
   assert.equal(plan.action, "note-run");

@@ -15,6 +15,7 @@ import {
 } from "electron";
 import { AGENT_LABELS, type AgentRun, DEFAULT_PORT, type HostSettings, RUN_STATUS_LABELS } from "@shared/protocol";
 import { spawnEnv } from "./agents";
+import { installDelegationBin } from "./delegation";
 import { TaskHub } from "./hub";
 import { LanServer } from "./lan-server";
 import { createInputInjector } from "./input-win";
@@ -176,7 +177,8 @@ function applyLoginItem(settings: HostSettings): void {
 }
 
 function notifyRunFinished(run: AgentRun): void {
-  if (!hub?.settings.notifyOnRunFinish || !Notification.isSupported()) {
+  // A sub-run's answer goes to the agent that asked for it; the user hears about the parent run.
+  if (run.parentRunId || !hub?.settings.notifyOnRunFinish || !Notification.isSupported()) {
     return;
   }
   const task = hub.tasks.find((item) => item.id === run.taskId);
@@ -212,7 +214,7 @@ async function startHost(): Promise<void> {
     return;
   }
   const userData = join(app.getPath("userData"), "nearbox");
-  const nextHub = new TaskHub(join(userData, "data"));
+  const nextHub = new TaskHub(join(userData, "data"), { delegation: await installDelegation(userData) });
   await nextHub.init();
   const remote = new RemoteControlHub({
     source: new ScreenSource({ dir: userData }),
@@ -346,4 +348,20 @@ app.on("before-quit", (event) => {
 function resolveApkPath(): string | null {
   const candidates = [join(process.resourcesPath, "nearbox.apk"), join(process.cwd(), "resources", "nearbox.apk")];
   return candidates.find((item) => existsSync(item)) ?? null;
+}
+
+/** The `nearbox` command agents use to delegate; null (no delegation) when it cannot be set up. */
+async function installDelegation(userData: string): Promise<{ binDir: string; url: string } | null> {
+  const cliScript = resourcePath("cli", "nearbox.mjs");
+  if (!existsSync(cliScript)) {
+    console.warn(`[delegation] 缺少 ${cliScript}，Agent 之间将无法委派。`);
+    return null;
+  }
+  try {
+    const binDir = await installDelegationBin(userData, process.execPath, cliScript);
+    return { binDir, url: `http://127.0.0.1:${lanPort}` };
+  } catch (error) {
+    console.warn(`[delegation] 无法写入 nearbox 命令：${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
 }

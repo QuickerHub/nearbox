@@ -7,6 +7,8 @@ interface MenuProps {
   title?: string;
   /** Visually flag the chip (e.g. "完全放开"). */
   tone?: "default" | "warn" | "muted";
+  /** Extra class on the panel, e.g. "menu__panel--split" for a fixed head/foot with a scrolling middle. */
+  panelClassName?: string;
   children(close: () => void): ReactNode;
 }
 
@@ -14,7 +16,7 @@ interface MenuProps {
  * A chip that opens a small panel above itself (desktop) or a bottom sheet
  * (phone). Closes on outside click, Escape, or when an item calls `close`.
  */
-export function Menu({ icon, label, title, tone = "default", children }: MenuProps): JSX.Element {
+export function Menu({ icon, label, title, tone = "default", panelClassName, children }: MenuProps): JSX.Element {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
 
@@ -59,7 +61,7 @@ export function Menu({ icon, label, title, tone = "default", children }: MenuPro
       {open ? (
         <>
           <div className="menu__backdrop" onClick={close} role="presentation" />
-          <div className="menu__panel" role="menu">
+          <div className={panelClassName ? `menu__panel ${panelClassName}` : "menu__panel"} role="menu">
             {children(close)}
           </div>
         </>

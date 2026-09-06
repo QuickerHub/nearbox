@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type DevicePlatform, type RemoteDevice, type RemoteDirListing } from "@shared/protocol";
 import { COMMAND_NAMES } from "./agents";
+import { killTree as killLocal } from "./kill";
 
 /**
  * Everything Nearbox does on another computer goes through the local `ssh`
@@ -130,22 +131,7 @@ export function sshExec(
   });
 }
 
-export function killLocal(child: ChildProcess | null | undefined): void {
-  if (!child || child.pid === undefined || child.exitCode !== null) {
-    return;
-  }
-  if (process.platform === "win32") {
-    const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true, stdio: "ignore" });
-    killer.on("error", () => child.kill());
-    return;
-  }
-  child.kill("SIGTERM");
-  setTimeout(() => {
-    if (child.exitCode === null) {
-      child.kill("SIGKILL");
-    }
-  }, 5000).unref();
-}
+export { killLocal };
 
 export function describeTarget(target: SshTarget): string {
   const hostPort = target.port ? `${target.host}:${target.port}` : target.host;

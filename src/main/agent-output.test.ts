@@ -295,6 +295,111 @@ test("grok ACP tool calls and updates merge by toolCallId", () => {
   assert.equal(tools[2]?.diff, "-a\n+b");
 });
 
+test("raw ACP session updates from a warm host map like grok's flattened lines", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    { sessionUpdate: "session_info_update", title: "Echo" },
+    { sessionUpdate: "available_commands_update", availableCommands: [{ name: "simplify" }] },
+    { sessionUpdate: "user_message_chunk", content: { type: "text", text: "run echo" } },
+    { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "正在执行 `echo hi`" } },
+    { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: " 命令。" } },
+    { sessionUpdate: "tool_call", toolCallId: "t1", title: "`echo hi`", kind: "execute", status: "pending", rawInput: { command: "echo hi" } },
+    { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress" },
+    { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", rawOutput: { exitCode: 0, stdout: "hi\r\n", stderr: "" } },
+    { sessionUpdate: "tool_call", toolCallId: "t2", title: "Read", kind: "read", status: "completed", locations: [{ path: "D:\\x\\a.ts" }], content: [{ type: "content", content: { type: "text", text: "const a = 1" } }] },
+    { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "输出是 " } },
+    { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" } },
+    { sessionUpdate: "end", stopReason: "end_turn" },
+  ]);
+  assert.equal(all.isError, false);
+  assert.equal(all.result, "输出是 hi");
+  // The in_progress tick repeats a status the call already had and is dropped.
+  assert.deepEqual(
+    all.events.map((event) => event.kind),
+    ["thinking", "tool", "tool", "tool", "text", "result"],
+  );
+  assert.equal(all.events[0]?.text, "正在执行 `echo hi` 命令。");
+  const shell = all.events.filter((event) => event.tool?.id === "t1").map((event) => event.tool!);
+  assert.equal(shell[0]?.kind, "shell");
+  assert.equal(shell[0]?.command, "echo hi");
+  assert.equal(shell[0]?.status, "running");
+  assert.equal(shell.at(-1)?.status, "ok");
+  assert.equal(shell.at(-1)?.exitCode, 0);
+  assert.equal(shell.at(-1)?.output, "hi\n");
+  const read = all.events.find((event) => event.tool?.id === "t2")?.tool;
+  assert.equal(read?.kind, "read");
+  assert.equal(read?.subject, "a.ts");
+  assert.deepEqual(read?.files, ["D:\\x\\a.ts"]);
+  assert.equal(read?.output, "const a = 1");
+  assert.equal(all.events.at(-1)?.text, "完成");
+});
+
+test("details that arrive on a later update fill in an announced call", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    { sessionUpdate: "tool_call", toolCallId: "f1", title: "Find", kind: "search", status: "pending", rawInput: {} },
+    { sessionUpdate: "tool_call_update", toolCallId: "f1", title: "Find `*`", rawInput: { pattern: "*" }, locations: [{ path: "D:\\p\\a.md" }, { path: "D:\\p\\b.md" }] },
+    { sessionUpdate: "tool_call_update", toolCallId: "f1", status: "in_progress" },
+    { sessionUpdate: "tool_call_update", toolCallId: "f1", status: "completed", rawOutput: { totalFiles: 2, truncated: false } },
+    { sessionUpdate: "tool_call", toolCallId: "s1", title: "Terminal", kind: "execute", status: "pending", rawInput: {} },
+    { sessionUpdate: "tool_call_update", toolCallId: "s1", title: "`npm test`", rawInput: { command: "npm test" } },
+  ]);
+  const find = all.events.filter((event) => event.tool?.id === "f1").map((event) => event.tool!);
+  assert.equal(find[0]?.kind, "grep");
+  assert.equal(find[0]?.subject, "Find");
+  assert.equal(find[1]?.kind, "grep");
+  assert.equal(find[1]?.subject, "*");
+  assert.deepEqual(find[1]?.files, ["D:\\p\\a.md", "D:\\p\\b.md"]);
+  assert.equal(find.at(-1)?.status, "ok");
+  const shell = all.events.filter((event) => event.tool?.id === "s1").map((event) => event.tool!);
+  assert.equal(shell[1]?.kind, "shell");
+  assert.equal(shell[1]?.command, "npm test");
+  assert.equal(shell[1]?.subject, "npm test");
+});
+
+test("a call the client rejected stays rejected when the agent later marks it completed", () => {
+  const parser = createOutputParser("acp");
+  const events: ParsedEvent[] = [];
+  events.push(...parser.push({ sessionUpdate: "tool_call", toolCallId: "t1", title: "`npm install`", kind: "execute", status: "pending", rawInput: { command: "npm install" } }).events);
+  // The runner records its own decision before the agent hears about it.
+  events.push(...parser.push({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "rejected", error: "安全模式下不执行终端命令" }).events);
+  events.push(...parser.push({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" }).events);
+  const tools = events.filter((event) => event.tool).map((event) => event.tool!);
+  assert.equal(tools.length, 2);
+  assert.equal(tools[1]?.status, "rejected");
+  assert.equal(tools[1]?.error, "安全模式下不执行终端命令");
+});
+
+test("partial flushes stream text as deltas without losing the whole answer", () => {
+  const parser = createOutputParser("acp");
+  const events: ParsedEvent[] = [];
+  events.push(...parser.push({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello" } }).events);
+  events.push(...parser.push({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: " " } }).events);
+  events.push(...parser.flushPartial().events);
+  events.push(...parser.push({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "\n" } }).events);
+  // Whitespace alone waits for more text.
+  events.push(...parser.flushPartial().events);
+  events.push(...parser.push({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "world" } }).events);
+  events.push(...parser.flushPartial().events);
+  events.push(...parser.push({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "!" } }).events);
+  events.push(...parser.push({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read", kind: "read", status: "completed" }).events);
+  events.push(...parser.push({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Done." } }).events);
+  const tail = parser.end();
+  events.push(...tail.events);
+  assert.deepEqual(
+    events.map((event) => [event.kind, event.text, event.delta ?? false]),
+    [
+      ["text", "Hello ", true],
+      ["text", "\nworld", true],
+      ["text", "!", true],
+      ["tool", "读取 Read", false],
+      ["text", "Done.", false],
+    ],
+  );
+  // The summary is the last text block, whether it streamed or not.
+  assert.equal(tail.result, "Done.");
+});
+
 test("non-JSON lines are kept as raw output", () => {
   const parser = createOutputParser("codex");
   const all = feedAll(parser, ["warning: something odd", "{not json"]);
@@ -309,13 +414,21 @@ function direct() {
 }
 
 function feedAll(parser: ReturnType<typeof createOutputParser>, lines: string[]) {
+  return collect(parser, lines.map((line) => () => parser.feed(line)));
+}
+
+function pushAll(parser: ReturnType<typeof createOutputParser>, updates: Record<string, unknown>[]) {
+  return collect(parser, updates.map((update) => () => parser.push(update)));
+}
+
+function collect(parser: ReturnType<typeof createOutputParser>, steps: (() => ReturnType<typeof parser.feed>)[]) {
   const events: ParsedEvent[] = [];
   let sessionId: string | undefined;
   let modelLabel: string | undefined;
   let result: string | undefined;
   let isError: boolean | undefined;
-  for (const line of lines) {
-    const parsed = parser.feed(line);
+  for (const step of steps) {
+    const parsed = step();
     events.push(...parsed.events);
     sessionId = parsed.sessionId ?? sessionId;
     modelLabel = parsed.modelLabel ?? modelLabel;

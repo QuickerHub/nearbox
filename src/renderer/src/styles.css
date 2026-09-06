@@ -1144,6 +1144,17 @@ a {
   font-size: 11.5px;
 }
 
+/* A sub-run another agent delegated: set in from the conversation it belongs to. */
+.run--delegated {
+  margin-left: 18px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line-strong);
+}
+
+.run--delegated .handoff__text .icon {
+  color: var(--accent);
+}
+
 .handoff__line {
   flex: 1;
   height: 1px;
@@ -2219,6 +2230,66 @@ a {
   line-height: 1.5;
 }
 
+.menu__note--warn {
+  color: var(--warn);
+}
+
+/* Head and foot stay put; only the catalog in the middle scrolls. */
+.menu__panel--split {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.menu__head,
+.menu__foot {
+  flex: 0 0 auto;
+}
+
+.menu__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.menu__heading--row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-right: 4px;
+}
+
+.menu__heading-btn {
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+}
+
+.menu__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  margin: 2px 4px 4px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  color: var(--muted);
+}
+
+.menu__search input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  outline: none;
+}
+
 .menu__segment {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2254,6 +2325,71 @@ a {
   border-color: var(--warn);
   background: var(--warn-soft);
   color: var(--warn);
+}
+
+/* An on/off row (e.g. "允许委派"): label and explanation left, switch right. */
+.menu__toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% - 12px);
+  margin: 0 6px 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-soft);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.menu__toggle-text {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.menu__toggle-text span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.menu__toggle-switch {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--line-strong);
+  position: relative;
+  transition: background 0.15s;
+}
+
+.menu__toggle-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+
+.menu__toggle--on {
+  border-color: var(--line-strong);
+  background: var(--bg-active);
+}
+
+.menu__toggle--on .menu__toggle-switch {
+  background: var(--accent);
+}
+
+.menu__toggle--on .menu__toggle-switch::after {
+  transform: translateX(12px);
 }
 
 /* ------------------------------------------------------------------- modal */
@@ -2461,6 +2597,19 @@ a {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--mono);
+}
+
+.agent-table__models {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  line-height: 1.4;
+}
+
+.agent-table__models--warn {
+  color: var(--warn);
 }
 
 .agent-table__controls {
@@ -2839,8 +2988,9 @@ a {
 .remote__bar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  gap: 8px;
+  padding: 6px 10px;
+  padding-top: calc(6px + env(safe-area-inset-top));
   border-bottom: 1px solid var(--line);
   background: var(--bg-panel);
 }
@@ -2881,37 +3031,156 @@ a {
 
 .remote__stats {
   flex: 0 0 auto;
+  white-space: nowrap;
 }
 
+/* Quality presets as a segmented control. */
 .remote__presets {
   margin-left: auto;
-  display: flex;
-  gap: 4px;
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-sunken);
 }
 
+.seg {
+  min-height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.seg:hover {
+  color: var(--text);
+}
+
+.seg--on {
+  background: var(--bg-panel);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+}
+
+/* The viewport owns every pointer gesture; the canvas inside is positioned by a transform. */
 .remote__viewport {
   position: relative;
   flex: 1;
   min-height: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px;
-  background: #050505;
   overflow: hidden;
+  background: #050505;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.remote__viewport--input {
+  cursor: crosshair;
 }
 
 .remote__canvas {
-  max-width: 100%;
-  max-height: 100%;
-  width: auto;
-  height: auto;
+  position: absolute;
+  left: 0;
+  top: 0;
   display: block;
+  transform-origin: 0 0;
+  will-change: transform;
   background: #000;
-  border-radius: 6px;
-  box-shadow: var(--shadow-pop);
-  touch-action: none;
-  cursor: crosshair;
+  pointer-events: none;
+}
+
+.remote__canvas--empty {
+  visibility: hidden;
+}
+
+/* Floating zoom cluster; it sits on the letterbox on a portrait phone. */
+.remote__zoom {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(20, 20, 20, 0.78);
+  color: #e6e6e6;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+}
+
+.remote__zoom-btn,
+.remote__zoom-level {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.remote__zoom-btn {
+  width: 32px;
+}
+
+.remote__zoom-btn:disabled {
+  opacity: 0.35;
+}
+
+.remote__zoom-btn:not(:disabled):active {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.remote__zoom-level {
+  min-width: 48px;
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.remote__zoom-level:active {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.remote__hint {
+  position: absolute;
+  left: 50%;
+  top: 10px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 20px);
+  padding: 6px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(20, 20, 20, 0.78);
+  color: #e6e6e6;
+  font-size: 12px;
+  white-space: nowrap;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  animation: fade-in 0.25s ease-out;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -4px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
 .remote__overlay {
@@ -2934,11 +3203,13 @@ a {
   max-width: 360px;
 }
 
+/* ------------------------------------------------ remote control: footer */
+
 .remote__controls {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px 12px calc(10px + env(safe-area-inset-bottom));
+  padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
   background: var(--bg-panel);
 }
@@ -2949,17 +3220,154 @@ a {
 
 .remote__modes {
   display: flex;
+  align-items: center;
   gap: 6px;
 }
 
+.remote__sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--line-strong);
+}
+
+.remote__collapse {
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
+}
+
+/* Pill toggles for pointer modes and sticky modifiers. */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg-soft);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.toggle .icon {
+  color: var(--muted);
+}
+
+.toggle:hover {
+  border-color: var(--line-strong);
+  background: var(--bg-hover);
+}
+
+.toggle--on,
+.toggle--on:hover {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.toggle--on .icon {
+  color: inherit;
+}
+
+.toggle--key {
+  min-width: 46px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+/* Key strip: groups of keycaps in two rows, scrolling sideways on narrow screens. */
 .remote__keys {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 10px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  padding: 1px 1px 3px;
+  margin: -1px -1px -3px;
+  -webkit-overflow-scrolling: touch;
 }
 
-.remote__keys .mini-btn {
-  min-height: 30px;
+.remote__keys::-webkit-scrollbar {
+  display: none;
+}
+
+.keygroup {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(2, 34px);
+  gap: 5px;
+  flex: 0 0 auto;
+}
+
+.keygroup--nav {
+  grid-auto-flow: row;
+  grid-template-columns: repeat(3, auto);
+}
+
+.key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-bottom-color: var(--line-strong);
+  border-radius: 8px;
+  background: var(--bg-soft);
+  color: var(--text);
+  box-shadow: 0 1px 0 var(--line-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.key:hover {
+  background: var(--bg-hover);
+}
+
+.key:active {
+  transform: translateY(1px);
+  background: var(--bg-active);
+  box-shadow: none;
+}
+
+.key--combo {
+  font-size: 11.5px;
+}
+
+.key__part {
+  display: inline-flex;
+  align-items: center;
+}
+
+.key__plus {
+  margin: 0 2px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* Arrows read better a little larger. */
+.keygroup--nav .key:nth-child(2),
+.keygroup--nav .key:nth-child(4),
+.keygroup--nav .key:nth-child(5),
+.keygroup--nav .key:nth-child(6) {
+  font-size: 15px;
 }
 
 .remote__text {
@@ -2969,12 +3377,25 @@ a {
 
 .remote__text input {
   flex: 1;
-  min-height: 34px;
+  min-width: 0;
+  min-height: 36px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 9px;
   background: var(--bg-soft);
   padding: 7px 10px;
   font-size: 16px; /* keeps iOS from zooming the viewport on focus */
+}
+
+.remote__text input:focus-visible {
+  outline: none;
+  border-color: var(--line-strong);
+}
+
+.primary--icon {
+  min-height: 36px;
+  padding: 0 12px;
+  gap: 5px;
+  flex: 0 0 auto;
 }
 
 @media (max-width: 640px) {
@@ -2982,6 +3403,41 @@ a {
     display: none;
   }
   .remote__title strong {
-    max-width: 32vw;
+    max-width: 30vw;
+  }
+  .remote__bar .icon-btn {
+    width: 32px;
+    height: 32px;
+  }
+  .seg {
+    padding: 0 8px;
+  }
+  .toggle {
+    padding: 0 9px;
+  }
+  .remote__zoom {
+    right: 8px;
+    bottom: 8px;
   }
 }
+
+@media (max-width: 380px) {
+  .remote__title strong {
+    display: none;
+  }
+}
+
+/* A phone on its side: one row of keys so the picture keeps most of the height. */
+@media (max-height: 480px) {
+  .remote__controls {
+    gap: 6px;
+    padding-top: 6px;
+  }
+  .keygroup {
+    grid-template-rows: 34px;
+  }
+  .keygroup--nav {
+    grid-template-columns: repeat(6, auto);
+  }
+}
+

@@ -5,7 +5,9 @@ import {
   Bot,
   Brain,
   Check,
+  ChevronDown,
   ChevronRight,
+  ChevronUp,
   Circle,
   CircleAlert,
   Copy,
@@ -31,6 +33,8 @@ import {
   Monitor,
   Moon,
   MoreHorizontal,
+  Mouse,
+  MousePointerClick,
   Paperclip,
   Pencil,
   Play,
@@ -44,6 +48,7 @@ import {
   Send,
   Settings,
   Smartphone,
+  Sparkles,
   Square,
   Sun,
   SunMoon,
@@ -53,6 +58,8 @@ import {
   Wrench,
   X,
   Zap,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import type { ThemeMode } from "../theme";
 import type { ToolKind } from "@shared/protocol";
@@ -110,7 +117,14 @@ export type IconName =
   | "radar"
   | "folder-up"
   | "home"
-  | "drive";
+  | "drive"
+  | "sparkles"
+  | "zoom-in"
+  | "zoom-out"
+  | "mouse"
+  | "click"
+  | "chevron-up"
+  | "chevron-down";
 
 const ICONS: Record<IconName, LucideIcon> = {
   inbox: Inbox,
@@ -166,6 +180,13 @@ const ICONS: Record<IconName, LucideIcon> = {
   "folder-up": FolderUp,
   home: Home,
   drive: HardDrive,
+  sparkles: Sparkles,
+  "zoom-in": ZoomIn,
+  "zoom-out": ZoomOut,
+  mouse: Mouse,
+  click: MousePointerClick,
+  "chevron-up": ChevronUp,
+  "chevron-down": ChevronDown,
 };
 
 export const TOOL_ICONS: Record<ToolKind, IconName> = {

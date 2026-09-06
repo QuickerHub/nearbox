@@ -58,6 +58,13 @@ export interface ClientHandle {
   discoverRemoteDevices(): Promise<DeviceCandidate[]>;
   listRemoteDirectory(id: string, path: string): Promise<RemoteDirListing>;
   refreshAgents(): Promise<AgentInfo[]>;
+  /** Tell the PC which agent (and conversation) the next message goes to, so it can have the process ready. */
+  warmAgent(input: { agent: AgentKind; projectId: string; resumeRunId?: string }): Promise<void>;
+  /**
+   * Re-ask the CLI (one agent, or every installed one) which models it offers.
+   * The host skips CLIs asked within the last minute unless `force` is set.
+   */
+  refreshModels(agent?: AgentKind, force?: boolean): Promise<AgentInfo[]>;
   updateSettings(patch: Partial<HostSettings>): Promise<HostSettings>;
   refreshInvite(): Promise<void>;
   setHost(host: string): Promise<void>;
@@ -248,6 +255,8 @@ export async function connectClient(
     discoverRemoteDevices: async () => (await post<{ candidates: DeviceCandidate[] }>("/api/remote-devices/discover")).candidates,
     listRemoteDirectory: (id, path) => post(`/api/remote-devices/${encodeURIComponent(id)}/ls`, { path }),
     refreshAgents: async () => (await post<{ agents: AgentInfo[] }>("/api/agents/refresh")).agents,
+    warmAgent: (input) => post<{ ok: true }>("/api/agents/warm", input).then(() => undefined),
+    refreshModels: async (agent, force) => (await post<{ agents: AgentInfo[] }>("/api/agents/models/refresh", { agent, force })).agents,
     updateSettings: (body) => post("/api/settings", body),
     refreshInvite: () => post("/api/invite").then(() => undefined),
     setHost: (host) => post("/api/host", { host }).then(() => undefined),

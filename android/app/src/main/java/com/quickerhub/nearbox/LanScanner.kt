@@ -1,17 +1,15 @@
 package com.quickerhub.nearbox
 
+import android.content.Context
 import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.HttpURLConnection
-import java.net.Inet4Address
 import java.net.InetSocketAddress
-import java.net.NetworkInterface
 import java.net.SocketTimeoutException
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
-import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -24,15 +22,17 @@ data class FoundHost(
     val pin: String?,
 )
 
+/** One scan of the LAN for Nearbox hosts. Single use: create a new scanner for every scan. */
 class LanScanner(
+    context: Context,
     private val onHost: (FoundHost) -> Unit,
     private val onStatus: (String) -> Unit,
 ) {
+    private val context = context.applicationContext
     private val io = Executors.newFixedThreadPool(24)
     private val running = AtomicBoolean(false)
     private val seen = ConcurrentHashMap<String, FoundHost>()
     private var udp: DatagramSocket? = null
-    private var jobs: List<Future<*>> = emptyList()
 
     fun start(lastHost: String?) {
         if (!running.compareAndSet(false, true)) {
@@ -40,10 +40,8 @@ class LanScanner(
         }
         seen.clear()
         onStatus("正在查找同一网络上的电脑…")
-        jobs = listOf(
-            io.submit { listenUdp() },
-            io.submit { scanHttp(lastHost) },
-        )
+        io.submit { listenUdp() }
+        io.submit { scanHttp(lastHost) }
     }
 
     fun stop() {
@@ -53,13 +51,7 @@ class LanScanner(
         } catch (_: Exception) {
         }
         udp = null
-        jobs.forEach { it.cancel(true) }
-        jobs = emptyList()
-    }
-
-    fun refresh(lastHost: String?) {
-        stop()
-        start(lastHost)
+        io.shutdownNow()
     }
 
     private fun listenUdp() {
@@ -77,7 +69,7 @@ class LanScanner(
                     socket.receive(packet)
                     val text = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
                     val source = packet.address.hostAddress ?: continue
-                    accept(text, source)
+                    parseHost(text, source, HTTP_PORT)?.let(::publish)
                 } catch (_: SocketTimeoutException) {
                     /* keep listening */
                 } catch (_: Exception) {
@@ -92,64 +84,57 @@ class LanScanner(
     }
 
     private fun scanHttp(lastHost: String?) {
+        val mine = Lan.localAddresses(context)
         val targets = LinkedHashSet<String>()
         if (!lastHost.isNullOrBlank()) {
             targets.add(lastHost)
         }
         targets.add("10.0.2.2")
-        targets.addAll(localSubnetHosts())
+        for (address in mine) {
+            val parts = address.hostAddress?.split(".") ?: continue
+            if (parts.size != 4) {
+                continue
+            }
+            val prefix = "${parts[0]}.${parts[1]}.${parts[2]}"
+            for (tail in 1..254) {
+                targets.add("$prefix.$tail")
+            }
+        }
         val pending = AtomicInteger(targets.size)
         onStatus("正在扫描局域网（${targets.size} 个地址）…")
         for (host in targets) {
             if (!running.get()) {
                 return
             }
-            io.submit {
-                try {
-                    probeHttp(host)
-                } finally {
-                    if (pending.decrementAndGet() <= 0 && running.get()) {
-                        if (seen.isEmpty()) {
-                            onStatus("没有找到电脑。确认 Nearbox 已打开，或改用扫码。")
-                        } else {
-                            onStatus("找到 ${seen.size} 台电脑，点一下即可配对")
+            // The PC we used last time is by far the likeliest hit; give it room when the sweep floods the network.
+            val timeout = if (host == lastHost) LAST_HOST_TIMEOUT_MS else SWEEP_TIMEOUT_MS
+            try {
+                io.submit {
+                    try {
+                        probe(host, HTTP_PORT, timeout)?.let(::publish)
+                    } finally {
+                        if (pending.decrementAndGet() <= 0 && running.get()) {
+                            if (seen.isEmpty()) {
+                                onStatus(nothingFound(mine.mapNotNull { it.hostAddress }))
+                            } else {
+                                onStatus("找到 ${seen.size} 台电脑，点一下即可配对")
+                            }
                         }
                     }
                 }
-            }
-        }
-    }
-
-    private fun probeHttp(host: String) {
-        val url = URL("http://$host:$HTTP_PORT/api/discover")
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            connectTimeout = 350
-            readTimeout = 350
-            requestMethod = "GET"
-            useCaches = false
-        }
-        try {
-            if (conn.responseCode != 200) {
+            } catch (_: Exception) {
+                /* stopped while queueing */
                 return
             }
-            accept(conn.inputStream.bufferedReader(Charsets.UTF_8).readText(), host)
-        } catch (_: Exception) {
-            /* not a Nearbox host */
-        } finally {
-            conn.disconnect()
         }
     }
 
-    private fun accept(raw: String, connectHost: String) {
-        val info = parseDiscover(raw) ?: return
-        val host = FoundHost(
-            name = info.optString("name", connectHost),
-            connectHost = connectHost,
-            port = info.optInt("port", HTTP_PORT),
-            version = info.optString("version", ""),
-            token = info.optString("token").ifBlank { info.optString("pin") }.ifBlank { null },
-            pin = info.optString("pin").ifBlank { null },
-        )
+    private fun nothingFound(mine: List<String>): String {
+        val where = if (mine.isEmpty()) "" else "（手机 IP ${mine.joinToString(" / ")}）"
+        return "没有找到电脑$where。请确认电脑上的 Nearbox 已打开，并且手机和电脑连的是同一个 Wi-Fi；也可以扫码连接。"
+    }
+
+    private fun publish(host: FoundHost) {
         val key = "${host.connectHost}:${host.port}"
         if (seen.put(key, host) == null) {
             onHost(host)
@@ -157,48 +142,54 @@ class LanScanner(
         }
     }
 
-    private fun parseDiscover(raw: String): JSONObject? {
-        return try {
-            val obj = JSONObject(raw)
-            if (obj.optString("service") != "nearbox") null else obj
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    private fun localSubnetHosts(): List<String> {
-        val hosts = ArrayList<String>()
-        val interfaces = NetworkInterface.getNetworkInterfaces() ?: return hosts
-        for (nic in interfaces) {
-            if (!nic.isUp || nic.isLoopback) {
-                continue
-            }
-            for (address in nic.inetAddresses) {
-                if (address !is Inet4Address || address.isLoopbackAddress) {
-                    continue
-                }
-                val parts = address.hostAddress?.split(".") ?: continue
-                if (parts.size != 4) {
-                    continue
-                }
-                val prefix = "${parts[0]}.${parts[1]}.${parts[2]}"
-                if (!isPrivatePrefix(parts[0].toInt(), parts[1].toInt())) {
-                    continue
-                }
-                for (tail in 1..254) {
-                    hosts.add("$prefix.$tail")
-                }
-            }
-        }
-        return hosts.distinct()
-    }
-
-    private fun isPrivatePrefix(a: Int, b: Int): Boolean {
-        return a == 10 || (a == 172 && b in 16..31) || (a == 192 && b == 168)
-    }
-
     companion object {
         const val HTTP_PORT = 17831
         const val DISCOVERY_PORT = 17832
+        private const val SWEEP_TIMEOUT_MS = 350
+        private const val LAST_HOST_TIMEOUT_MS = 1500
+
+        /** Asks one address whether a Nearbox host answers there. Blocking; call it off the main thread. */
+        fun probe(host: String, port: Int, timeoutMs: Int): FoundHost? {
+            val conn = try {
+                (URL("http://$host:$port/api/discover").openConnection() as HttpURLConnection).apply {
+                    connectTimeout = timeoutMs
+                    readTimeout = timeoutMs
+                    requestMethod = "GET"
+                    useCaches = false
+                }
+            } catch (_: Exception) {
+                return null
+            }
+            return try {
+                if (conn.responseCode != 200) {
+                    null
+                } else {
+                    parseHost(conn.inputStream.bufferedReader(Charsets.UTF_8).readText(), host, port)
+                }
+            } catch (_: Exception) {
+                null
+            } finally {
+                conn.disconnect()
+            }
+        }
+
+        private fun parseHost(raw: String, connectHost: String, fallbackPort: Int): FoundHost? {
+            val info = try {
+                JSONObject(raw)
+            } catch (_: Exception) {
+                return null
+            }
+            if (info.optString("service") != "nearbox") {
+                return null
+            }
+            return FoundHost(
+                name = info.optString("name").ifBlank { connectHost },
+                connectHost = connectHost,
+                port = info.optInt("port", fallbackPort),
+                version = info.optString("version", ""),
+                token = info.optString("token").ifBlank { info.optString("pin") }.ifBlank { null },
+                pin = info.optString("pin").ifBlank { null },
+            )
+        }
     }
 }

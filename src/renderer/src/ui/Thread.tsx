@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { AGENT_LABELS, type AgentRun, type HostSnapshot, STATUS_LABELS, type Task, type TaskNote } from "@shared/protocol";
+import { AGENT_LABELS, type AgentKind, type AgentRun, type HostSnapshot, STATUS_LABELS, type Task, type TaskNote } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatRelative } from "../lib/format";
 import { FileStrip } from "./Attachments";
@@ -63,8 +63,9 @@ export function Thread({ snapshot, client, task, onDeleted, children }: ThreadPr
   const project = snapshot.projects.find((item) => item.id === task.projectId);
   const runsById = useMemo(() => new Map(snapshot.runs.map((run) => [run.id, run])), [snapshot.runs]);
   const lastRunNoteId = [...task.notes].reverse().find((note) => note.kind === "run")?.id;
-  // Once an agent has taken a turn here, the task is that agent's conversation.
-  const turns = useMemo(() => snapshot.runs.filter((run) => run.taskId === task.id), [snapshot.runs, task.id]);
+  // Once an agent has taken a turn here, the task is that agent's conversation. Sub-runs it
+  // delegated to other agents show in the thread but are not turns of that conversation.
+  const turns = useMemo(() => snapshot.runs.filter((run) => run.taskId === task.id && !run.parentRunId), [snapshot.runs, task.id]);
   const conversationAgent = turns.at(-1)?.agent;
 
   const save = async (patch: Parameters<ClientHandle["updateTask"]>[1]) => {
@@ -228,11 +229,13 @@ export function Thread({ snapshot, client, task, onDeleted, children }: ThreadPr
 
           {task.notes.map((note) => {
             const run = note.runId ? runsById.get(note.runId) : undefined;
+            const parent = run?.parentRunId ? runsById.get(run.parentRunId) : undefined;
             return (
               <ThreadItem
                 key={note.id}
                 note={note}
                 run={run}
+                delegatedFrom={parent?.agent}
                 projectName={run ? snapshot.projects.find((item) => item.id === run.projectId)?.name : undefined}
                 client={client}
                 mine={note.from.id === client.self.id}
@@ -251,6 +254,7 @@ export function Thread({ snapshot, client, task, onDeleted, children }: ThreadPr
 function ThreadItem({
   note,
   run,
+  delegatedFrom,
   projectName,
   client,
   mine,
@@ -258,6 +262,8 @@ function ThreadItem({
 }: {
   note: TaskNote;
   run?: AgentRun;
+  /** The agent that started `run` through `nearbox ask`, when it is a sub-run. */
+  delegatedFrom?: AgentKind;
   projectName?: string;
   client: ClientHandle;
   mine: boolean;
@@ -287,6 +293,7 @@ function ThreadItem({
         run={run}
         client={client}
         opensConversation={!run.resumedFromRunId}
+        delegatedFrom={delegatedFrom}
         projectName={projectName}
         onStop={(runId) => void client.cancelRun(runId)}
         initiallyOpen={newest && run.status !== "succeeded"}

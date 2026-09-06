@@ -11,10 +11,13 @@ import { WebSocket, WebSocketServer } from "ws";
 import { buildDiscoverInfo, DISCOVERY_PORT, type DiscoverInfo } from "@shared/discover";
 import {
   type Actor,
+  AGENT_KINDS,
+  AGENT_LABELS,
   type AgentKind,
   type ClientToHost,
   DEFAULT_LIMITS,
   DEFAULT_PORT,
+  type DelegateInput,
   type DeviceInfo,
   type DispatchInput,
   type FileMeta,
@@ -208,10 +211,14 @@ export class LanServer extends EventEmitter {
       socket.destroy();
       return;
     }
-    let session: PairedSession;
+    let session: PairedSession & { runScope?: string };
     try {
       session = this.authorize(req, new URL(req.url ?? "/", "http://nearbox.local"));
     } catch {
+      socket.destroy();
+      return;
+    }
+    if (session.runScope !== undefined) {
       socket.destroy();
       return;
     }
@@ -449,6 +456,38 @@ export class LanServer extends EventEmitter {
     const actor = actorOf(session.device);
     const segments = path.split("/").filter(Boolean); // ["api", ...]
 
+    // ----- delegation (what an agent's `nearbox` command calls; also usable by paired clients)
+    if (segments[1] === "runs" && segments[2] && (segments.length === 3 || segments[3] === "children" || segments[3] === "delegate")) {
+      const scope = session.runScope;
+      const tail = segments[3];
+      const runId = decodeURIComponent(segments[2]);
+      if (!tail && method === "GET") {
+        const run = this.hub.findRun(runId, scope);
+        if (!run) {
+          throw Object.assign(new Error("没有这个运行。"), { code: "NOT_FOUND" });
+        }
+        const wait = Number(url.searchParams.get("wait") ?? "0") || 0;
+        this.writeJson(res, await this.hub.waitForRun(run, wait));
+        return;
+      }
+      if (scope !== undefined && scope !== runId) {
+        throw Object.assign(new Error("这个令牌只能操作它自己的运行。"), { code: "UNAUTHORIZED" });
+      }
+      if (tail === "children" && method === "GET") {
+        this.writeJson(res, { runs: this.hub.childRuns(runId) });
+        return;
+      }
+      if (tail === "delegate" && method === "POST") {
+        const body = await readJson<DelegateInput>(req);
+        this.assertTextLength(String(body.prompt ?? ""));
+        this.writeJson(res, this.hub.delegate(runId, body));
+        return;
+      }
+    }
+    if (session.runScope !== undefined) {
+      throw Object.assign(new Error("这个令牌只能用于委派子任务。"), { code: "UNAUTHORIZED" });
+    }
+
     if (path === "/api/state" && method === "GET") {
       this.writeJson(res, { ...this.snapshot(), sessionToken: session.token, self: session.device });
       return;
@@ -629,6 +668,19 @@ export class LanServer extends EventEmitter {
       this.writeJson(res, { agents: await this.hub.refreshAgents() });
       return;
     }
+    if (path === "/api/agents/warm" && method === "POST") {
+      // Fire and forget: the composer says which agent (and conversation) the next message is for.
+      const body = await readJson<{ agent?: string; projectId?: string; resumeRunId?: string }>(req);
+      this.hub.warmAgent(body);
+      this.writeJson(res, { ok: true });
+      return;
+    }
+    if (path === "/api/agents/models/refresh" && method === "POST") {
+      const body = await readJson<{ agent?: AgentKind; force?: boolean }>(req);
+      const agent = AGENT_KINDS.includes(body.agent as AgentKind) ? (body.agent as AgentKind) : undefined;
+      this.writeJson(res, { agents: await this.hub.refreshModels(agent, Boolean(body.force)) });
+      return;
+    }
     if (path === "/api/settings" && method === "POST") {
       const body = await readJson<Partial<HostSettings>>(req);
       this.writeJson(res, this.hub.updateSettings(body));
@@ -753,9 +805,12 @@ export class LanServer extends EventEmitter {
 
   private bindSocket(socket: WebSocket, req: http.IncomingMessage): void {
     const url = new URL(req.url ?? "/", "http://nearbox.local");
-    let session: PairedSession;
+    let session: PairedSession & { runScope?: string };
     try {
       session = this.authorize(req, url);
+      if (session.runScope !== undefined) {
+        throw new Error("这个令牌只能用于委派子任务。");
+      }
     } catch (error) {
       sendSocket(socket, {
         type: "error",
@@ -840,7 +895,7 @@ export class LanServer extends EventEmitter {
     }
   }
 
-  private authorize(req: http.IncomingMessage, url: URL): PairedSession {
+  private authorize(req: http.IncomingMessage, url: URL): PairedSession & { runScope?: string } {
     const token = bearerToken(req) || url.searchParams.get("token") || url.searchParams.get("t") || "";
     if (token && token === this.desktopSecret) {
       return {
@@ -856,6 +911,16 @@ export class LanServer extends EventEmitter {
     const existing = this.sessions.get(token);
     if (existing) {
       return existing;
+    }
+    // An agent's `nearbox` command: a token minted for one run, good only for the delegation routes.
+    const scopedRunId = token ? this.hub.runner.runIdForToken(token) : undefined;
+    const scopedRun = scopedRunId ? this.hub.findRun(scopedRunId) : undefined;
+    if (scopedRunId && scopedRun) {
+      return {
+        token,
+        device: { id: `agent:${scopedRunId}`, name: AGENT_LABELS[scopedRun.agent], role: "desktop", online: true },
+        runScope: scopedRunId,
+      };
     }
     if (this.invite && (token === this.invite.token || token === this.invite.pin) && !inviteExpired(this.invite)) {
       const deviceId = `phone-${randomBytes(6).toString("hex")}`;

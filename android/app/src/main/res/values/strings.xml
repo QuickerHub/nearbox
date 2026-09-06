@@ -9,7 +9,9 @@
     <string name="refresh">重新查找</string>
     <string name="scanning">正在查找同一网络上的电脑…</string>
     <string name="manual">也可以手动输入</string>
-    <string name="hint">自动查找同一 Wi-Fi 上的电脑，点一下配对；也可以扫描电脑上的二维码。</string>
+    <string name="hint">手机和电脑连同一个 Wi-Fi 后会自动找到电脑，点一下配对；也可以扫描电脑上的二维码。</string>
+    <string name="hint_mobile_data">手机正在用移动数据，没有连接 Wi-Fi，所以找不到电脑。请先连上电脑所在的 Wi-Fi，连上后会自动重试。</string>
+    <string name="hint_no_wifi">手机没有连接 Wi-Fi，所以找不到电脑。请先连上电脑所在的 Wi-Fi，连上后会自动重试。</string>
     <string name="scan_prompt">对准电脑「设置 → 连接手机」里的二维码</string>
     <string name="camera_needed">扫码需要相机权限</string>
 </resources>

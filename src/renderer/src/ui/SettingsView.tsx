@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AGENT_KINDS, AGENT_LABELS, type AgentKind, type HostSnapshot } from "@shared/protocol";
+import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type AgentKind, canListModels, type HostSnapshot, modelsForAgent } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatRelative } from "../lib/format";
 import { type ThemeMode, themeLabel } from "../theme";
@@ -202,6 +202,7 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
             {AGENT_KINDS.map((kind) => {
               const info = snapshot.agents.find((item) => item.kind === kind);
               const conf = settings.agents[kind];
+              const models = modelsForAgent(kind, info);
               return (
                 <div className="agent-table__row" key={kind}>
                   <div className="agent-table__name">
@@ -210,6 +211,7 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
                     <span className="muted small agent-table__cmd" title={info?.command}>
                       {info?.available ? info.command : info?.detail ?? "未检测"}
                     </span>
+                    {info?.available ? <ModelCatalogStatus info={info} client={client} /> : null}
                   </div>
                   <div className="agent-table__controls">
                     <select value={conf?.access ?? "safe"} onChange={(event) => patchAgent(kind, { access: event.target.value as "safe" | "full" })}>
@@ -219,13 +221,22 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
                     <input
                       key={`${kind}-model-${conf?.model ?? ""}`}
                       defaultValue={conf?.model ?? ""}
-                      placeholder="默认模型"
+                      placeholder="默认模型（留空由 CLI 决定）"
+                      list={`agent-models-${kind}`}
+                      title="派发时没有在输入框上方选模型的话就用这个"
                       onBlur={(event) => {
                         if ((event.target.value ?? "") !== (conf?.model ?? "")) {
                           patchAgent(kind, { model: event.target.value });
                         }
                       }}
                     />
+                    <datalist id={`agent-models-${kind}`}>
+                      {models.map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.label ?? model.id}
+                        </option>
+                      ))}
+                    </datalist>
                     {desktop ? (
                       <input
                         key={`${kind}-cmd-${conf?.command ?? ""}`}
@@ -341,5 +352,38 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
       </div>
       </section>
     </div>
+  );
+}
+
+/** One line under an installed agent: how many models its CLI reported, when, and a way to ask again. */
+function ModelCatalogStatus({ info, client }: { info: AgentInfo; client: ClientHandle }): JSX.Element {
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = () => {
+    setRefreshing(true);
+    void client
+      .refreshModels(info.kind, true)
+      .catch(() => undefined)
+      .finally(() => setRefreshing(false));
+  };
+  if (!canListModels(info.kind)) {
+    return <span className="muted small agent-table__models">不提供模型列表，模型名手动填写</span>;
+  }
+  const count = info.models?.length ?? 0;
+  const when = formatRelative(info.modelsCheckedAt);
+  return (
+    <span className={info.modelsError ? "small agent-table__models agent-table__models--warn" : "muted small agent-table__models"}>
+      {info.modelsError
+        ? count
+          ? `模型列表刷新失败（沿用 ${when || "之前"}的 ${count} 个）：${info.modelsError}`
+          : `模型列表获取失败：${info.modelsError}`
+        : count
+          ? `可选模型 ${count} 个 · ${when || "刚刚"}更新`
+          : refreshing
+            ? "正在获取模型列表…"
+            : "还没有获取到模型列表"}
+      <button type="button" className="link-btn link-btn--muted" disabled={refreshing} onClick={refresh}>
+        {refreshing ? "获取中…" : "刷新"}
+      </button>
+    </span>
   );
 }

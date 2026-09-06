@@ -1,8 +1,25 @@
 import { useEffect, useRef, useState } from "react";
-import { AGENT_LABELS, type AgentAccess, type AgentKind, type FileMeta, type HostSnapshot, isRunActive, MAX_FILES_PER_MESSAGE, type Task } from "@shared/protocol";
+import {
+  AGENT_LABELS,
+  type AgentAccess,
+  type AgentInfo,
+  type AgentKind,
+  type AgentModel,
+  canListModels,
+  type FileMeta,
+  filterModels,
+  type HostSnapshot,
+  isRunActive,
+  MAX_FILES_PER_MESSAGE,
+  modelLabel,
+  modelsForAgent,
+  modelsNeedRefresh,
+  normalizeModelId,
+  type Task,
+} from "@shared/protocol";
 import { type DraftAttachment, extractFiles, stageFiles, stageNotice } from "../lib/attachments";
 import type { ClientHandle } from "../lib/client";
-import { formatBytes } from "../lib/format";
+import { formatBytes, formatRelative } from "../lib/format";
 import { planSend, type SendAction, type SendPlan } from "../lib/plan";
 import { Lightbox } from "./Attachments";
 import { Icon, type IconName } from "./Icons";
@@ -12,6 +29,10 @@ export interface ComposerChips {
   projectId: string;
   agent: AgentKind | "";
   access: AgentAccess;
+  /** Model id for the agent's `--model`; "" leaves it to the settings default, then the CLI's own default. */
+  model: string;
+  /** The agent may hand sub-tasks to the other agents on this PC through the `nearbox` command. */
+  delegate: boolean;
 }
 
 /** One message as the user composed it: words plus the files already uploaded to the PC. */
@@ -280,7 +301,16 @@ export function ChatComposer({
         />
         <div className="composer__bar">
           <ProjectMenu snapshot={snapshot} client={client} projectId={project?.id ?? ""} onPick={(projectId) => onChips({ projectId })} />
-          <AgentMenu snapshot={snapshot} agent={chips.agent} access={chips.access} onPick={(agent, access) => onChips({ agent, access })} />
+          <AgentMenu
+            snapshot={snapshot}
+            agent={chips.agent}
+            access={chips.access}
+            delegate={chips.delegate}
+            remoteProject={Boolean(project?.deviceId)}
+            onPick={(agent, access) => onChips({ agent, access })}
+            onDelegate={(delegate) => onChips({ delegate })}
+          />
+          {chips.agent ? <ModelMenu snapshot={snapshot} client={client} agent={chips.agent} model={chips.model} onPick={(model) => onChips({ model })} /> : null}
           <input
             ref={fileRef}
             type="file"
@@ -410,23 +440,26 @@ function ProjectMenu({
                 选择文件夹…
               </button>
             ) : null}
-            <form
-              className="menu__form-row"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void add(path, close);
-              }}
-            >
+            {/* Not a <form>: nested inside the composer's form its onSubmit never fires and the page reloads instead. */}
+            <div className="menu__form-row">
               <input
                 value={path}
                 placeholder={desktop ? "或粘贴路径，如 D:\\source\\my-app" : "电脑上的目录路径，如 D:\\source\\my-app"}
                 onChange={(event) => setPath(event.target.value)}
                 onPointerDown={(event) => event.stopPropagation()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    // Enter here must add the project, not submit the composer.
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void add(path, close);
+                  }
+                }}
               />
-              <button type="submit" className="ghost" disabled={busy || !path.trim()}>
+              <button type="button" className="ghost" disabled={busy || !path.trim()} onClick={() => void add(path, close)}>
                 添加
               </button>
-            </form>
+            </div>
             {error ? <p className="alert">{error}</p> : null}
           </div>
         </>
@@ -445,17 +478,25 @@ function AgentMenu({
   snapshot,
   agent,
   access,
+  delegate,
+  remoteProject,
   onPick,
+  onDelegate,
 }: {
   snapshot: HostSnapshot;
   agent: AgentKind | "";
   access: AgentAccess;
+  delegate: boolean;
+  /** The chosen project is on another computer, where the `nearbox` command does not exist. */
+  remoteProject: boolean;
   onPick(agent: AgentKind | "", access: AgentAccess): void;
+  onDelegate(delegate: boolean): void;
 }): JSX.Element {
-  const label = agent ? `${AGENT_LABELS[agent]}${access === "full" ? " · 完全放开" : ""}` : "只记录";
+  const label = agent ? `${AGENT_LABELS[agent]}${access === "full" ? " · 完全放开" : ""}${delegate && !remoteProject ? " · 可委派" : ""}` : "只记录";
   const anyAvailable = snapshot.agents.some((item) => item.available);
   const defaultAccess = (kind: AgentKind): AgentAccess => snapshot.settings.agents[kind]?.access ?? "safe";
   const notes = (agent && ACCESS_NOTES[agent]) || DEFAULT_ACCESS_NOTES;
+  const others = snapshot.agents.filter((info) => info.available && info.kind !== agent).map((info) => AGENT_LABELS[info.kind]);
   return (
     <Menu icon={agent ? "bolt" : "edit"} label={label} tone={agent ? (access === "full" ? "warn" : "default") : "muted"} title="谁来执行">
       {(close) => (
@@ -500,10 +541,236 @@ function AgentMenu({
                   <span>{notes.full}</span>
                 </button>
               </div>
+              <MenuDivider />
+              <MenuHeading>协作</MenuHeading>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={delegate && !remoteProject}
+                className={delegate && !remoteProject ? "menu__toggle menu__toggle--on" : "menu__toggle"}
+                disabled={remoteProject}
+                onClick={() => onDelegate(!delegate)}
+              >
+                <span className="menu__toggle-text">
+                  允许委派给其他 Agent
+                  <span>
+                    {remoteProject
+                      ? "项目在另一台电脑上时不可用"
+                      : others.length
+                        ? `它可以用 nearbox 命令把子任务交给 ${others.join(" / ")}，等对方做完拿回答；安全模式下的 cursor-agent 跑不了命令，用不上`
+                        : "这台电脑上没有别的 Agent 可以委派，也可以交给同类的另一个会话"}
+                  </span>
+                </span>
+                <span className="menu__toggle-switch" aria-hidden />
+              </button>
             </>
           ) : null}
         </>
       )}
     </Menu>
+  );
+}
+
+/** Catalogs longer than this get a search box. */
+const SEARCHABLE_FROM = 8;
+
+/**
+ * Which model the chosen agent runs with. Appears next to the agent chip once
+ * an agent is picked; "默认" hands the choice back to the settings, then the CLI.
+ */
+function ModelMenu({
+  snapshot,
+  client,
+  agent,
+  model,
+  onPick,
+}: {
+  snapshot: HostSnapshot;
+  client: ClientHandle;
+  agent: AgentKind;
+  model: string;
+  onPick(model: string): void;
+}): JSX.Element {
+  const info = snapshot.agents.find((item) => item.kind === agent);
+  const models = modelsForAgent(agent, info);
+  const settingsDefault = snapshot.settings.agents[agent]?.model ?? "";
+  const cliDefault = models.find((item) => item.isDefault);
+  // A model the CLI itself listed is a safe pick; anything else (typed, or dropped since) gets flagged.
+  const unlisted = Boolean(model) && Boolean(info?.models?.length) && !models.some((item) => item.id === model);
+  const label = model ? modelLabel(models, model) : settingsDefault ? modelLabel(models, settingsDefault) : cliDefault?.label ?? cliDefault?.id ?? "默认模型";
+  const title = unlisted
+    ? `${model} 不在 ${AGENT_LABELS[agent]} 当前的模型列表里，可能已下线或拼写有误`
+    : model
+      ? `这次用 ${model}`
+      : settingsDefault
+        ? `设置里的默认模型：${settingsDefault}`
+        : `模型由 ${AGENT_LABELS[agent]} 自己决定`;
+  return (
+    <Menu icon="sparkles" label={label} title={title} tone={unlisted ? "warn" : model ? "default" : "muted"} panelClassName="menu__panel--split">
+      {(close) => (
+        <ModelPanel
+          agent={agent}
+          info={info}
+          models={models}
+          model={model}
+          unlisted={unlisted}
+          settingsDefault={settingsDefault}
+          client={client}
+          onPick={(next) => {
+            onPick(next);
+            close();
+          }}
+        />
+      )}
+    </Menu>
+  );
+}
+
+function ModelPanel({
+  agent,
+  info,
+  models,
+  model,
+  unlisted,
+  settingsDefault,
+  client,
+  onPick,
+}: {
+  agent: AgentKind;
+  info: AgentInfo | undefined;
+  models: AgentModel[];
+  model: string;
+  /** The current pick is not in the list the CLI reported. */
+  unlisted: boolean;
+  settingsDefault: string;
+  client: ClientHandle;
+  onPick(model: string): void;
+}): JSX.Element {
+  const [query, setQuery] = useState("");
+  const [custom, setCustom] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const desktop = client.surface === "desktop";
+  const listable = canListModels(agent) && Boolean(info?.available);
+  const searchable = models.length >= SEARCHABLE_FROM;
+  const shown = filterModels(models, query);
+  const known = models.some((item) => item.id === model);
+  const customId = normalizeModelId(custom);
+
+  const refresh = (force: boolean) => {
+    setRefreshing(true);
+    void client
+      .refreshModels(agent, force)
+      .catch(() => undefined)
+      .finally(() => setRefreshing(false));
+  };
+
+  // Opening the picker on a stale or missing catalog re-asks the CLI; the host ignores repeats within a minute.
+  useEffect(() => {
+    if (info && modelsNeedRefresh(info)) {
+      refresh(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening
+  }, []);
+
+  // Inputs here live inside the composer's <form>: Enter must never send the message.
+  const stop = (event: { stopPropagation(): void }) => event.stopPropagation();
+
+  const source = listable
+    ? info?.modelsError
+      ? info.models?.length
+        ? `刷新失败，沿用 ${formatRelative(info.modelsCheckedAt) || "之前"}的列表：${info.modelsError}`
+        : `获取失败：${info.modelsError}`
+      : info?.models?.length
+        ? `列表来自 ${AGENT_LABELS[agent]} 命令行，${formatRelative(info.modelsCheckedAt) || "刚刚"}更新`
+        : refreshing
+          ? `正在向 ${AGENT_LABELS[agent]} 询问可用的模型…`
+          : null
+    : canListModels(agent)
+      ? null
+      : `${AGENT_LABELS[agent]} 不提供模型列表；可以输入别名（如 sonnet、opus）或完整模型名。`;
+
+  return (
+    <>
+      <div className="menu__head">
+        <div className="menu__heading menu__heading--row">
+          <span>模型 · {AGENT_LABELS[agent]}</span>
+          {listable ? (
+            <button type="button" className="icon-btn icon-btn--plain menu__heading-btn" onClick={() => refresh(true)} disabled={refreshing} title="重新从命令行工具获取模型列表">
+              {refreshing ? <span className="spinner spinner--small" /> : <Icon name="refresh" size={13} />}
+            </button>
+          ) : null}
+        </div>
+        {searchable ? (
+          <div className="menu__search">
+            <Icon name="search" size={14} />
+            <input
+              value={query}
+              autoFocus={desktop}
+              placeholder="搜索模型…"
+              onChange={(event) => setQuery(event.target.value)}
+              onPointerDown={stop}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (shown[0]) {
+                    onPick(shown[0].id);
+                  }
+                }
+              }}
+            />
+          </div>
+        ) : null}
+      </div>
+      <div className="menu__list">
+        {!query ? (
+          <MenuItem
+            icon="sparkles"
+            label="默认"
+            sub={settingsDefault ? `设置里的默认模型：${settingsDefault}` : `由 ${AGENT_LABELS[agent]} 自己决定`}
+            on={!model}
+            onClick={() => onPick("")}
+          />
+        ) : null}
+        {model && !known && !query ? (
+          <MenuItem label={model} sub={unlisted ? `不在 ${AGENT_LABELS[agent]} 当前的模型列表里` : "手动输入的模型"} on onClick={() => onPick(model)} />
+        ) : null}
+        {shown.map((item) => (
+          <MenuItem
+            key={item.id}
+            label={item.label ?? item.id}
+            sub={item.label ? `${item.id}${item.isDefault ? " · CLI 默认" : ""}` : item.isDefault ? "CLI 默认" : undefined}
+            on={item.id === model}
+            onClick={() => onPick(item.id)}
+          />
+        ))}
+        {searchable && !shown.length ? <p className="menu__note">没有匹配的模型，可以在下面直接输入。</p> : null}
+      </div>
+      <div className="menu__foot">
+        <MenuDivider />
+        {/* Not a <form>: one nested inside the composer's form never gets its onSubmit, but the browser still navigates. */}
+        <div className="menu__form-row menu__form">
+          <input
+            value={custom}
+            placeholder="其他模型 ID…"
+            onChange={(event) => setCustom(event.target.value)}
+            onPointerDown={stop}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                event.stopPropagation();
+                if (customId) {
+                  onPick(customId);
+                }
+              }
+            }}
+          />
+          <button type="button" className="ghost" disabled={!customId} onClick={() => customId && onPick(customId)}>
+            使用
+          </button>
+        </div>
+        {source ? <p className={info?.modelsError ? "menu__note menu__note--warn" : "menu__note"}>{source}</p> : null}
+      </div>
+    </>
   );
 }
