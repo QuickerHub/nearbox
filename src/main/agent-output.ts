@@ -1,7 +1,23 @@
 import type { AgentAccess, AgentKind, RunEventKind, ToolCall, ToolKind, ToolStatus } from "@shared/protocol";
+import {
+  asArray,
+  basenameOf,
+  clipHead,
+  clipTail,
+  compact,
+  describeArgs,
+  describeCursorResult,
+  firstLine,
+  isRecord,
+  MAX_TOOL_INPUT,
+  toolKindOf,
+} from "../shared/tools.ts";
+
+export { toolKindOf } from "../shared/tools.ts";
 
 // Pure helpers: how each agent CLI is invoked and how its JSONL output is read.
-// No Node/Electron imports here so the logic stays unit-testable.
+// No Node/Electron imports here so the logic stays unit-testable; the tool
+// normalization lives in shared/tools.ts because the renderer needs it too.
 
 export interface ResolvedCommand {
   /** What we actually spawn. */
@@ -211,11 +227,6 @@ export interface OutputParser {
   feed(line: string): ParseResult;
   end(): ParseResult;
 }
-
-/** Longest tool output kept per event; shell output keeps its tail, everything else its head. */
-const MAX_TOOL_OUTPUT = 8_000;
-const MAX_TOOL_INPUT = 1_500;
-const MAX_TOOL_FILES = 200;
 
 interface Sink {
   push(into: ParsedEvent[], kind: RunEventKind, text: string): void;
@@ -745,217 +756,8 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, 
 }
 
 // ---------------------------------------------------------------------------
-// Tool normalization
+// Parser-side helpers (tool normalization itself lives in shared/tools.ts)
 // ---------------------------------------------------------------------------
-
-/** Map whatever a CLI calls a tool onto our small set of kinds. */
-export function toolKindOf(rawName: string): ToolKind {
-  const id = rawName
-    .trim()
-    .replace(/ToolCall$/i, "")
-    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-    .replace(/[\s-]+/g, "_")
-    .toLowerCase();
-  if (/^(shell|bash|run_command|run_terminal_cmd|command_execution|execute|terminal|powershell|cmd|exec)$/.test(id)) {
-    return "shell";
-  }
-  if (/^(read|read_file|readfile|view|cat|view_file|read_files)$/.test(id)) {
-    return "read";
-  }
-  if (/^(write|write_file|writefile|create_file|create|save_file)$/.test(id)) {
-    return "write";
-  }
-  if (/^(edit|edit_file|editfile|str_replace|strreplace|str_replace_editor|apply_patch|multi_edit|multiedit|search_replace|patch|notebook_edit)$/.test(id)) {
-    return "edit";
-  }
-  if (/^(delete|delete_file|deletefile|remove|rm)$/.test(id)) {
-    return "delete";
-  }
-  if (/^(glob|find_files|file_search|find)$/.test(id)) {
-    return "glob";
-  }
-  if (/^(grep|search|codebase_search|sem_search|semsearch|ripgrep|grep_search|search_files|search_code)$/.test(id)) {
-    return "grep";
-  }
-  if (/^(ls|list_dir|list|list_directory|listdir|tree)$/.test(id)) {
-    return "ls";
-  }
-  if (/^(web_search|websearch|search_web|fetch|web_fetch|webfetch|fetch_url|browse|read_url|http)$/.test(id)) {
-    return "web";
-  }
-  if (/^(task|agent|subagent|sub_agent|spawn_agent)$/.test(id)) {
-    return "task";
-  }
-  if (/^(todo|todo_write|todowrite|todo_list|update_todos|todo_read|todoread|update_plan|plan)$/.test(id)) {
-    return "todo";
-  }
-  if (/^(mcp|mcp_tool_call|mcp_tool)$/.test(id) || id.startsWith("mcp_")) {
-    return "mcp";
-  }
-  return "other";
-}
-
-const PATH_KEYS = ["path", "file_path", "filePath", "target_file", "targetFile", "relativeWorkspacePath", "relative_workspace_path", "file", "filename", "notebook_path"];
-const DIR_KEYS = ["targetDirectory", "target_directory", "workingDirectory", "working_directory", "cwd", "dir", "directory", "path"];
-const PATTERN_KEYS = ["globPattern", "glob_pattern", "pattern", "query", "regex", "search"];
-const WEB_KEYS = ["query", "url", "search_term", "searchTerm", "q"];
-
-/** Turn a call's arguments into subject/command/input, independent of which CLI produced them. */
-function describeArgs(
-  rawName: string,
-  args: Record<string, unknown>,
-  description?: string,
-  kindOverride?: ToolKind,
-): Partial<ToolCall> & Pick<ToolCall, "name" | "kind"> {
-  const kind = kindOverride && kindOverride !== "other" ? kindOverride : toolKindOf(rawName);
-  const call: Partial<ToolCall> & Pick<ToolCall, "name" | "kind"> = { name: rawName, kind };
-  const desc = description ?? pickString(args, ["description", "explanation"]);
-  if (desc) {
-    call.description = desc;
-  }
-  switch (kind) {
-    case "shell": {
-      const command = pickString(args, ["command", "cmd", "script"]);
-      call.command = command || undefined;
-      call.subject = command || undefined;
-      call.cwd = pickString(args, DIR_KEYS.filter((key) => key !== "path")) || undefined;
-      break;
-    }
-    case "read":
-    case "write":
-    case "edit":
-    case "delete": {
-      const path = pickString(args, PATH_KEYS);
-      call.subject = path ? basenameOf(path) : undefined;
-      call.files = path ? [path] : undefined;
-      break;
-    }
-    case "ls": {
-      const path = pickString(args, DIR_KEYS);
-      call.subject = path || undefined;
-      call.cwd = path || undefined;
-      break;
-    }
-    case "glob":
-    case "grep": {
-      call.subject = pickString(args, PATTERN_KEYS) || undefined;
-      call.cwd = pickString(args, DIR_KEYS) || undefined;
-      break;
-    }
-    case "web":
-      call.subject = pickString(args, WEB_KEYS) || undefined;
-      break;
-    case "task":
-      call.subject = pickString(args, ["description", "title"]) || firstLine(pickString(args, ["prompt", "task"])) || undefined;
-      break;
-    case "todo": {
-      const todos = asArray(args.todos ?? args.items ?? args.plan)
-        .filter(isRecord)
-        .map((todo) => {
-          const status = String(todo.status ?? "");
-          const mark = status === "completed" || todo.completed === true ? "☑" : status === "in_progress" ? "◐" : "☐";
-          return `${mark} ${String(todo.content ?? todo.text ?? todo.step ?? todo.title ?? "")}`;
-        });
-      call.subject = todos.length ? `${todos.length} 项` : undefined;
-      call.output = todos.join("\n") || undefined;
-      break;
-    }
-    case "mcp":
-      call.subject = pickString(args, ["tool", "name", "toolName", "tool_name"]) || undefined;
-      break;
-    default: {
-      const hint = pickString(args, [...PATH_KEYS, ...PATTERN_KEYS, ...WEB_KEYS, "command", "name", "title"]);
-      call.subject = hint || undefined;
-    }
-  }
-  if (!call.subject && !call.command && Object.keys(args).length) {
-    call.input = clipHead(prettyArgs(args), MAX_TOOL_INPUT);
-  }
-  return call;
-}
-
-/** cursor-agent wraps results as { success | failure | error | rejected: {...} }. */
-function describeCursorResult(kind: ToolKind, result: unknown): Partial<ToolCall> {
-  if (!isRecord(result)) {
-    return { status: "ok" };
-  }
-  const outcome = Object.keys(result)[0] ?? "success";
-  const body = isRecord(result[outcome]) ? (result[outcome] as Record<string, unknown>) : {};
-  const status: ToolStatus = outcome === "success" ? "ok" : outcome === "rejected" ? "rejected" : "error";
-  const patch: Partial<ToolCall> = { status };
-  if (status === "rejected") {
-    patch.error = pickString(body, ["reason", "message"]) || "命令被拦截：安全模式下不允许执行，需要「完全放开」";
-    return patch;
-  }
-  switch (kind) {
-    case "shell": {
-      const stdout = pickString(body, ["interleavedOutput", "stdout", "output"]);
-      const stderr = pickString(body, ["stderr"]);
-      const combined = stdout && stderr && !stdout.includes(stderr) ? `${stdout}\n${stderr}` : stdout || stderr;
-      patch.output = combined.trim() ? clipTail(combined) : undefined;
-      patch.exitCode = typeof body.exitCode === "number" ? body.exitCode : undefined;
-      if (status === "ok" && patch.exitCode !== undefined && patch.exitCode !== 0) {
-        patch.status = "error";
-      }
-      if (body.aborted === true) {
-        patch.error = "命令被中止";
-      }
-      break;
-    }
-    case "edit":
-    case "write": {
-      patch.diff = typeof body.diffString === "string" && body.diffString.trim() ? clipHead(body.diffString) : undefined;
-      patch.linesAdded = typeof body.linesAdded === "number" ? body.linesAdded : undefined;
-      patch.linesRemoved = typeof body.linesRemoved === "number" ? body.linesRemoved : undefined;
-      if (typeof body.path === "string" && body.path) {
-        patch.files = [body.path];
-      }
-      break;
-    }
-    case "read": {
-      patch.output = typeof body.content === "string" ? clipHead(body.content) : undefined;
-      break;
-    }
-    case "glob":
-    case "ls": {
-      const files = asArray(body.files ?? body.entries ?? body.results)
-        .map((item) => (typeof item === "string" ? cleanGlobPath(item) : isRecord(item) ? String(item.path ?? item.name ?? "") : ""))
-        .filter(Boolean);
-      if (files.length) {
-        patch.files = files.slice(0, MAX_TOOL_FILES);
-        const total = typeof body.totalFiles === "number" ? body.totalFiles : files.length;
-        patch.output = `${files.slice(0, MAX_TOOL_FILES).join("\n")}${total > MAX_TOOL_FILES ? `\n… 共 ${total} 个` : ""}`;
-      } else if (typeof body.content === "string") {
-        patch.output = clipHead(body.content);
-      }
-      break;
-    }
-    case "task": {
-      const steps = asArray(body.conversationSteps).filter(isRecord);
-      const answer = [...steps].reverse().find((step) => isRecord(step.assistantMessage) && typeof step.assistantMessage.text === "string");
-      const text = answer && isRecord(answer.assistantMessage) ? String(answer.assistantMessage.text) : pickString(body, ["result", "text", "output"]);
-      patch.output = text ? clipHead(text) : undefined;
-      break;
-    }
-    default: {
-      const text = pickString(body, ["content", "text", "output", "result", "message"]);
-      patch.output = text ? clipHead(text) : Object.keys(body).length ? clipHead(prettyArgs(body)) : undefined;
-    }
-  }
-  if (status === "error") {
-    const nested = isRecord(body.error) ? pickString(body.error, ["error", "message"]) : "";
-    patch.error = nested || pickString(body, ["error", "message", "reason", "stderr"]) || `${outcome}`;
-    if (kind === "shell" && !patch.output && patch.error) {
-      patch.output = clipTail(patch.error);
-    }
-  }
-  return patch;
-}
-
-/** cursor-agent's glob results come back as "../.\src\App.jsx" style paths. */
-function cleanGlobPath(path: string): string {
-  return path.replace(/^\.\.[\\/]/, "").replace(/^\.[\\/]/, "");
-}
 
 /** codex wraps every command in an explicit pwsh call on Windows; show what the agent meant. */
 function unwrapPwsh(command: string): string {
@@ -1008,33 +810,6 @@ function simpleDiff(oldText: string, newText: string): string {
   return [...removed, ...added].join("\n");
 }
 
-function prettyArgs(args: Record<string, unknown>): string {
-  const shallow: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(args)) {
-    if (value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0)) {
-      continue;
-    }
-    shallow[key] = value;
-  }
-  try {
-    return JSON.stringify(shallow, null, 2);
-  } catch {
-    return String(args);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// small helpers
-// ---------------------------------------------------------------------------
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
 function textOf(block: unknown): string {
   if (typeof block === "string") {
     return block;
@@ -1045,50 +820,9 @@ function textOf(block: unknown): string {
   return "";
 }
 
-function pickString(record: Record<string, unknown>, keys: string[]): string {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value;
-    }
-  }
-  return "";
-}
-
-function basenameOf(path: string): string {
-  const cleaned = path.replace(/[\\/]+$/, "");
-  const index = Math.max(cleaned.lastIndexOf("/"), cleaned.lastIndexOf("\\"));
-  return index >= 0 ? cleaned.slice(index + 1) || cleaned : cleaned;
-}
-
-function firstLine(text: string): string {
-  return text.replace(/\r\n/g, "\n").split("\n").find((line) => line.trim())?.trim() ?? "";
-}
-
-function compact(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-}
-
 export function truncate(value: string, max: number): string {
   const text = value.replace(/\r\n/g, "\n");
   return text.length > max ? `${text.slice(0, max)}…` : text;
-}
-
-function clipHead(value: string, max = MAX_TOOL_OUTPUT): string {
-  const text = value.replace(/\r\n/g, "\n");
-  return text.length > max ? `${text.slice(0, max)}\n… 已省略 ${text.length - max} 个字符` : text;
-}
-
-function clipTail(value: string, max = MAX_TOOL_OUTPUT): string {
-  const text = value.replace(/\r\n/g, "\n");
-  return text.length > max ? `… 已省略前 ${text.length - max} 个字符\n${text.slice(text.length - max)}` : text;
 }
 
 function formatDuration(ms: number): string {

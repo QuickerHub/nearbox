@@ -44,11 +44,32 @@ Nearbox 是一个跑在自己电脑上的任务管理器：手机随手记下想
 选好 Agent 和项目、在空白处直接输入并回车，等于新建任务并立刻派发；不选 Agent 就只是记一下。
 派发时任务自动进入「进行中」，什么时候算完由你点「完成」决定。
 
+### 任务交给 Agent 之后，就是和它的一段会话
+
+第一次派发时 Nearbox 把任务标题、描述、备注和附件整理成提示词交给 Agent；之后在这条任务里再输入的每句话，
+都会通过 CLI 的续聊参数（`cursor-agent --resume` / `codex exec resume` / `claude -r` …）发进**同一个会话**，
+Agent 记得前面做过什么。任务头部会标出「Cursor Agent · 3 轮」这样的会话归属；Agent 还在干活时发的消息会排队，
+等这一轮结束后自动接上。一条任务里每个 Agent 各有一段会话：换 Agent 芯片是另起一段，切回来又接着原来的。
+想抛掉上下文重来，点输入框下方的「改为新会话」。
+
+对话里每一轮都按 Cursor 的方式折叠：进行中时展开、实时滚动，结束后收成一行「工作了 36s · 5 步」，只留 Agent 的回答。
+点开能看到每一步：终端命令是带输出的小卡片，改文件带 diff，连续的读取 / 搜索合并成「读取了 4 个文件」，
+被拦截、失败的调用有明显标记。
+
+### 图片和文字一起发
+
+截图直接粘贴、拖进输入框，或点回形针选文件，它们会先以缩略图挂在输入框上方（点开可预览，× 或 Ctrl+Z 撤掉），
+再和文字一起作为**一条消息**发出去：对话里是图文混排的一个气泡；只记录时文字成为任务标题和描述、图片成为第一条消息。
+交给 Agent 时这条消息会拆成它能吃的形式：文字原样发送，后面附一段「## 附件」列出每张图在电脑上的绝对路径
+（Cursor Agent / Claude Code 会用读文件工具看图）；Codex 额外通过 `-i` 直接把图片传给模型。一条消息最多 8 个文件。
+
 ## 关于 Agent 的权限
 
 Agent 芯片的菜单里可选两种模式：
 
 - **安全模式**（默认）：Agent 可以改项目目录内的文件，危险命令按各 CLI 自己的策略拦截或询问失败。
+  注意 cursor-agent 在无人值守模式下没有人可以点「允许」，所以安全模式里它会拒绝**所有**终端命令（读写文件不受影响）；
+  需要它跑命令、装依赖、起服务时请切到完全放开。
 - **完全放开**：所有命令直接执行（对应 `--force` / `--dangerously-bypass-approvals-and-sandbox` / `bypassPermissions` 等）。
 
 每个 Agent 的默认模式、默认模型、命令路径都能在「设置」里改。同一个项目一次只跑一个 Agent，其余排队；不同项目之间的并发上限也在设置里。
@@ -113,12 +134,13 @@ Electron 主进程（托盘常驻）
     /api/tasks     增删改、备注、派发、默认提示词
     /api/runs      事件回放、取消、继续对话
     /api/projects  登记目录
-    /api/upload    图片 / 文件挂到任务
+    /api/files     上传图片 / 文件拿到 id，随后由 tasks / notes / dispatch 请求用 fileIds 引用
+    /api/upload    一步到位：文件直接挂到任务（脚本用）
     /app/nearbox.apk  同版本 Android 薄壳
 
 Agent 适配（src/main/agent-output.ts）
   cursor-agent -p --output-format stream-json
-  codex exec --json（提示词走 stdin）
+  codex exec --json（提示词走 stdin，图片走 -i）
   grok --prompt-file --output-format streaming-json
   claude -p --output-format stream-json（提示词走 stdin）
   opencode run --format json

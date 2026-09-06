@@ -38,8 +38,9 @@ function run(overrides: Partial<AgentRun> = {}): AgentRun {
   };
 }
 
-function input(overrides: Partial<PlanInput> = {}): PlanInput {
-  const latestRun = overrides.latestRun;
+/** `latestRun` is shorthand for a history of exactly that one run. */
+function input(overrides: Partial<PlanInput> & { latestRun?: AgentRun } = {}): PlanInput {
+  const { latestRun, ...rest } = overrides;
   return {
     draft: "hello",
     agent: "codex",
@@ -48,7 +49,7 @@ function input(overrides: Partial<PlanInput> = {}): PlanInput {
     projectId: "p1",
     projectName: "nearbox",
     runs: latestRun ? [latestRun] : [],
-    ...overrides,
+    ...rest,
   };
 }
 
@@ -86,7 +87,7 @@ test("a message while the agent is busy is queued behind the running turn", () =
 test("the chain is followed to the newest queued turn", () => {
   const running = run({ id: "r1", status: "running", sessionId: "sess-1" });
   const queued = run({ id: "r2", status: "queued", sessionId: undefined, resumedFromRunId: "r1" });
-  const plan = planSend(input({ task: task(), latestRun: queued, runs: [running, queued] }));
+  const plan = planSend(input({ task: task(), runs: [running, queued] }));
   assert.equal(plan.action, "reply");
   assert.equal(plan.resumeRunId, "r2");
 });
@@ -95,6 +96,19 @@ test("switching agent or project, or a session-less previous run, starts a new c
   assert.equal(planSend(input({ task: task(), latestRun: run(), agent: "cursor", agentLabel: "Cursor" })).action, "note-run");
   assert.equal(planSend(input({ task: task(), latestRun: run(), projectId: "p2" })).action, "note-run");
   assert.equal(planSend(input({ task: task(), latestRun: run({ sessionId: undefined }) })).action, "note-run");
+});
+
+test("each agent keeps its own conversation in a task; switching back resumes it", () => {
+  const codexTurn = run({ id: "r1", agent: "codex", sessionId: "codex-sess" });
+  const cursorTurn = run({ id: "r2", agent: "cursor", sessionId: "cursor-sess", createdAt: "2026-09-06T00:01:00.000Z" });
+  const runs = [codexTurn, cursorTurn];
+  const backToCodex = planSend(input({ task: task(), runs }));
+  assert.equal(backToCodex.action, "reply");
+  assert.equal(backToCodex.resumeRunId, "r1");
+  const cursor = planSend(input({ task: task(), runs, agent: "cursor", agentLabel: "Cursor" }));
+  assert.equal(cursor.resumeRunId, "r2");
+  // Another task's runs are never picked up.
+  assert.equal(planSend(input({ task: task({ id: "t2" }), runs })).action, "note-run");
 });
 
 test("asking for a fresh session skips the existing conversation and offers the way back", () => {
@@ -119,4 +133,21 @@ test("empty draft on a fresh task runs it as-is; empty draft in a conversation s
 
 test("task without an agent picked only records", () => {
   assert.equal(planSend(input({ task: task(), agent: "" })).action, "note");
+});
+
+test("pictures alone are a message everywhere words are", () => {
+  const pictures = { draft: "", attachments: 2 };
+  assert.equal(planSend(input({ ...pictures, agent: "" })).enabled, true);
+  assert.equal(planSend(input(pictures)).enabled, true);
+  assert.equal(planSend(input({ ...pictures, task: task(), agent: "" })).enabled, true);
+  const reply = planSend(input({ ...pictures, task: task(), latestRun: run() }));
+  assert.equal(reply.action, "reply");
+  assert.equal(reply.enabled, true);
+  // A fresh task with only pictures attaches them first, then runs, instead of running the bare task.
+  const first = planSend(input({ ...pictures, task: task() }));
+  assert.equal(first.action, "note-run");
+  assert.equal(first.label, "发送");
+  assert.match(first.hint, /这些附件/);
+  const busy = planSend(input({ ...pictures, task: task(), latestRun: run({ status: "running", sessionId: undefined }), fresh: true }));
+  assert.equal(busy.action, "note-run");
 });

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AGENT_LABELS, type AgentAccess, type AgentKind, type HostSnapshot, isRunActive, splitCapture, type Task } from "@shared/protocol";
+import { titleForFiles } from "./lib/attachments";
 import { connectClient, pairWithPin, type ClientHandle } from "./lib/client";
 import type { SendPlan } from "./lib/plan";
 import { useRoute } from "./lib/router";
 import { applyTheme, cycleTheme, readThemeMode, themeLabel, type ThemeMode } from "./theme";
-import { ChatComposer, type ComposerChips } from "./ui/ChatComposer";
+import { ChatComposer, type ComposerChips, type OutgoingMessage } from "./ui/ChatComposer";
 import { Icon, ThemeIcon } from "./ui/Icons";
 import { RemoteView } from "./ui/RemoteView";
 import { SettingsView } from "./ui/SettingsView";
@@ -210,21 +211,27 @@ export function App(): JSX.Element {
     }
   };
 
-  const send = async (plan: SendPlan, text: string) => {
+  /**
+   * One message from the composer becomes: a task (text as title/details, files
+   * as its first message), a note (text + files together), or an agent turn
+   * (the hub splits it into words + file paths for the CLI).
+   */
+  const send = async (plan: SendPlan, message: OutgoingMessage) => {
     if (!client) {
       return;
     }
+    const { text, files } = message;
+    const fileIds = files.map((file) => file.id);
     const dispatchInput = { agent: chips.agent as AgentKind, projectId: chips.projectId, access: chips.access };
+    const captured = text ? splitCapture(text) : { title: titleForFiles(files), details: "" };
     switch (plan.action) {
       case "capture": {
-        const { title, details } = splitCapture(text);
-        const created = await client.createTask({ title, details, status: "inbox", projectId: chips.projectId || null });
+        const created = await client.createTask({ ...captured, status: "inbox", projectId: chips.projectId || null, fileIds });
         flash(`已记录「${created.title}」，${isDesktop ? "在左侧列表里" : "在下方列表里"}。`);
         return;
       }
       case "create-run": {
-        const { title, details } = splitCapture(text);
-        const created = await client.createTask({ title, details, status: "todo", projectId: chips.projectId, agent: chips.agent || null });
+        const created = await client.createTask({ ...captured, status: "todo", projectId: chips.projectId, agent: chips.agent || null, fileIds });
         try {
           await client.dispatch(created.id, dispatchInput);
         } finally {
@@ -233,33 +240,22 @@ export function App(): JSX.Element {
         return;
       }
       case "note":
-        await client.addNote(task!.id, text);
+        await client.addNote(task!.id, { text, fileIds });
         return;
       case "run":
         await client.dispatch(task!.id, dispatchInput);
         setFreshFor(null);
         return;
       case "note-run":
-        await client.addNote(task!.id, text);
+        // The note rides along in the generated prompt, files included.
+        await client.addNote(task!.id, { text, fileIds });
         await client.dispatch(task!.id, dispatchInput);
         setFreshFor(null);
         return;
       case "reply":
         // The hub queues this behind the running turn if there is one and resolves the session when it starts.
-        await client.dispatch(task!.id, { ...dispatchInput, prompt: text, resumeRunId: plan.resumeRunId });
+        await client.dispatch(task!.id, { ...dispatchInput, prompt: text, fileIds, resumeRunId: plan.resumeRunId });
         return;
-    }
-  };
-
-  const uploadFiles = async (files: File[]) => {
-    if (!client) {
-      return;
-    }
-    for (const file of files) {
-      await client.upload(file, task?.id);
-    }
-    if (!task) {
-      flash(files.length === 1 ? `已收到「${files[0]!.name}」，存为一条任务。` : `已收到 ${files.length} 个文件。`);
     }
   };
 
@@ -334,7 +330,6 @@ export function App(): JSX.Element {
       chips={chips}
       onChips={onChips}
       onSend={send}
-      onFiles={uploadFiles}
       onStop={activeRun ? () => void client.cancelRun(activeRun.id) : undefined}
       fresh={Boolean(task) && freshFor === task!.id}
       onFresh={(value) => setFreshFor(value && task ? task.id : null)}

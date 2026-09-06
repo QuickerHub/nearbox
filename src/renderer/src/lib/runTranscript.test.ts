@@ -91,6 +91,35 @@ test("legacy text-only tool events still pair up", () => {
   assert.equal(tools[1]?.output, "boom");
 });
 
+test("legacy cursor-agent lines become real rows even when the JSON was cut short", () => {
+  const items = buildTranscript([
+    ev(1, "tool", 'glob {"targetDirectory":"C:\\\\Users\\\\ldy\\\\proj\\\\terminals","globPattern":"*.txt"}'),
+    ev(2, "tool", 'glob {"targetDirectory":"D:\\\\Work\\\\test","globPattern":"package.json"}'),
+    ev(3, "tool", '完成 glob: {"error":{"error":"Path does not exist: C:\\\\Users\\\\ldy\\\\proj\\\\terminals"}}'),
+    ev(4, "tool", '完成 glob: {"success":{"pattern":"","path":"D:\\\\Work\\\\test","files":["../.\\\\package.json"],"totalFiles":1}}'),
+    // Truncated by the old logger mid-string: arguments are salvaged as far as they go.
+    ev(5, "tool", 'shell {"command":"dir","workingDirectory":"D:\\\\Work\\\\test","timeout":30000,"toolCallId":"call-00390b23-0e38-4dcf-a885-8acc632fb0fc-13\nfc_ozCXi1i-3LY…'),
+    ev(6, "tool", '完成 shell: {"rejected":{"command":"dir","workingDirectory":"D:\\\\Work\\\\test","reason":"","isReadonly":false}}'),
+    ev(7, "tool", 'task {"description":"Restart Vite server","prompt":"Restart the Vite dev server for the project…'),
+    ev(8, "tool", '完成 task: {"success":{"conversationSteps":[{"assistantMessage":{"text":"先检查本机是否…'),
+  ]);
+  const tools = items.filter((item): item is Extract<typeof item, { type: "tool" }> => item.type === "tool").map((item) => item.tool);
+  assert.deepEqual(
+    tools.map((tool) => [tool.kind, tool.subject, tool.status]),
+    [
+      ["glob", "*.txt", "error"],
+      ["glob", "package.json", "ok"],
+      ["shell", "dir", "rejected"],
+      ["task", "Restart Vite server", "ok"],
+    ],
+  );
+  assert.equal(tools[0]?.error, "Path does not exist: C:\\Users\\ldy\\proj\\terminals");
+  assert.deepEqual(tools[1]?.files, ["package.json"]);
+  assert.equal(tools[2]?.command, "dir");
+  assert.equal(tools[2]?.cwd, "D:\\Work\\test");
+  assert.match(tools[2]?.error ?? "", /拦截/);
+});
+
 test("labels read naturally", () => {
   assert.equal(toolVerb({ kind: "read", status: "running" }), "读取");
   assert.equal(toolVerb({ kind: "read", status: "ok" }), "读取了");

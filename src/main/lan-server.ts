@@ -17,12 +17,14 @@ import {
   DEFAULT_PORT,
   type DeviceInfo,
   type DispatchInput,
+  type FileMeta,
   type HostSettings,
   type HostSnapshot,
   type HostToClient,
   type InviteInfo,
   isImageMediaType,
   newId,
+  type NoteInput,
   PROTOCOL_VERSION,
   type RemoteDeviceInput,
   type RemoteDevicePatch,
@@ -35,7 +37,7 @@ import { receiveToInbox } from "./files";
 import type { TaskHub } from "./hub";
 import { isLoopbackOrPrivate, listPrivateLanAddresses, normalizeRemoteIp } from "./network";
 import type { RemoteControlHub } from "./remote";
-import type { PairedSession } from "./store";
+import type { PairedSession, StoredFile } from "./store";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -479,7 +481,8 @@ export class LanServer extends EventEmitter {
     }
     if (path === "/api/tasks" && method === "POST") {
       const body = await readJson<TaskInput>(req);
-      this.writeJson(res, this.hub.createTask(actor, body));
+      this.assertTextLength(String(body.details ?? ""));
+      this.writeJson(res, this.hub.createTask(actor, { ...body, fileIds: stringList(body.fileIds) }));
       return;
     }
     if (segments[1] === "tasks" && segments[2]) {
@@ -507,7 +510,8 @@ export class LanServer extends EventEmitter {
       }
       if (tail === "dispatch" && method === "POST") {
         const body = await readJson<DispatchInput>(req);
-        this.writeJson(res, this.hub.dispatch(actor, taskId, body));
+        this.assertTextLength(String(body.prompt ?? ""));
+        this.writeJson(res, this.hub.dispatch(actor, taskId, { ...body, fileIds: stringList(body.fileIds) }));
         return;
       }
     }
@@ -918,6 +922,14 @@ function phoneNameFromUa(userAgent: string | undefined): string {
     return "Android 手机";
   }
   return "手机";
+}
+
+/** Only strings survive; anything else in a JSON body is a client mistake we would rather ignore than store. */
+function stringList(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
 }
 
 function safeSegment(name: string): string {

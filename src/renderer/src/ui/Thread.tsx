@@ -1,7 +1,8 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { type AgentRun, type HostSnapshot, STATUS_LABELS, type Task, type TaskNote } from "@shared/protocol";
+import { AGENT_LABELS, type AgentRun, type HostSnapshot, STATUS_LABELS, type Task, type TaskNote } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
-import { formatBytes, formatRelative } from "../lib/format";
+import { formatRelative } from "../lib/format";
+import { FileStrip } from "./Attachments";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
 import { RunBlock } from "./RunBlock";
@@ -62,6 +63,9 @@ export function Thread({ snapshot, client, task, onDeleted, children }: ThreadPr
   const project = snapshot.projects.find((item) => item.id === task.projectId);
   const runsById = useMemo(() => new Map(snapshot.runs.map((run) => [run.id, run])), [snapshot.runs]);
   const lastRunNoteId = [...task.notes].reverse().find((note) => note.kind === "run")?.id;
+  // Once an agent has taken a turn here, the task is that agent's conversation.
+  const turns = useMemo(() => snapshot.runs.filter((run) => run.taskId === task.id), [snapshot.runs, task.id]);
+  const conversationAgent = turns.at(-1)?.agent;
 
   const save = async (patch: Parameters<ClientHandle["updateTask"]>[1]) => {
     setError(null);
@@ -156,6 +160,15 @@ export function Thread({ snapshot, client, task, onDeleted, children }: ThreadPr
         </div>
         <p className="thread__meta muted small">
           {task.createdBy.name} · {formatRelative(task.createdAt)} 创建 · {STATUS_LABELS[task.status]}
+          {conversationAgent ? (
+            <>
+              {" · "}
+              <span className="thread__agent" title={`这条任务是和 ${AGENT_LABELS[conversationAgent]} 的一段对话，继续输入会接着同一个会话说`}>
+                <Icon name="bolt" size={11} />
+                {AGENT_LABELS[conversationAgent]} · {turns.length} 轮
+              </span>
+            </>
+          ) : null}
           {project ? (
             <>
               {" · "}
@@ -280,31 +293,15 @@ function ThreadItem({
       />
     );
   }
-  const fileUrl = note.file ? client.fileUrl(note.file.id) : undefined;
-  const image = note.file && /^image\//.test(note.file.mediaType) && fileUrl;
+  // Pictures above the words, the way the message was composed.
   return (
     <article className={mine ? "bubble bubble--user" : "bubble bubble--user bubble--other"}>
       <div className="bubble__head">
         <span>{note.from.name}</span>
         <span className="muted">{formatRelative(note.createdAt)}</span>
       </div>
+      {note.files?.length ? <FileStrip files={note.files} client={client} /> : null}
       {note.text ? <Markdown text={note.text} className="bubble__text" /> : null}
-      {image ? (
-        <a className="bubble__image" href={fileUrl} target="_blank" rel="noreferrer">
-          <img src={fileUrl} alt={note.file?.name ?? "图片"} loading="lazy" />
-        </a>
-      ) : null}
-      {note.file && !image ? (
-        <a className="file-card" href={fileUrl} target="_blank" rel="noreferrer">
-          <span className="file-card__icon">
-            <Icon name="file" size={18} />
-          </span>
-          <span>
-            <strong>{note.file.name}</strong>
-            <span>{formatBytes(note.file.byteLength)}</span>
-          </span>
-        </a>
-      ) : null}
     </article>
   );
 }

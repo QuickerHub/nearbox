@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adaptive icon foreground: a round-capped "N" whose right stem is topped by the green
+  "online" dot used throughout the UI. Everything stays inside the 66dp safe circle so no
+  launcher mask (circle, squircle, rounded square, teardrop) clips it.
+  The diagonal is drawn slightly thinner than the stems so all three strokes look equally heavy.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:pathData="M36,36 L72,72"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="9.5"
+        android:strokeLineCap="round" />
+
+    <path
+        android:pathData="M36,72 L36,36"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="10.5"
+        android:strokeLineCap="round" />
+
+    <path
+        android:pathData="M72,72 L72,53"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="10.5"
+        android:strokeLineCap="round" />
+
+    <path
+        android:pathData="M72,28.5 A7.5,7.5 0 1 1 72,43.5 A7.5,7.5 0 1 1 72,28.5 Z"
+        android:fillColor="#FF22C55E" />
+</vector>

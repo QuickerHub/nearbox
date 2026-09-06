@@ -75,6 +75,12 @@ export interface RunManagerOptions {
   attachmentsFor(run: AgentRun): RunAttachment[];
   /** Images sent with this turn, as paths where the agent runs, for CLIs that take images as arguments. */
   imagesFor(run: AgentRun): string[];
+  /**
+   * What to send when a follow-up finds nothing to resume (the turn it was
+   * queued behind never produced a session): the task's context plus the
+   * message, so the agent does not receive a bare "and also fix X".
+   */
+  promptWithoutSession(run: AgentRun): string;
   onRunChanged(run: AgentRun): void;
   onRunFinished(run: AgentRun): void;
   onEvent(runId: string, event: RunEvent): void;
@@ -224,10 +230,9 @@ export class RunManager extends EventEmitter {
       return;
     }
 
+    const resumeSessionId = this.resolveResume(run);
     const promptFile = join(this.options.runsDir, `${run.id}.prompt.md`);
     await writeFile(promptFile, run.prompt, "utf8");
-    // Resolved now rather than at dispatch time: the previous turn may still have been running when this one was queued.
-    const resumeSessionId = run.resumedFromRunId ? sessionIdAlongChain(this.options.listRuns(), run.resumedFromRunId) : undefined;
     const invocation = buildInvocation(run.agent, command, {
       prompt: run.prompt,
       cwd: run.cwd,
@@ -239,9 +244,6 @@ export class RunManager extends EventEmitter {
     });
 
     this.append(run, "status", `启动 ${AGENT_LABELS[run.agent]} · ${run.access === "full" ? "完全放开" : "安全模式"} · ${run.cwd}`);
-    if (run.resumedFromRunId && !resumeSessionId) {
-      this.append(run, "status", "上一轮没有留下可继续的会话，这条消息将作为新会话发送。");
-    }
 
     let child: ChildProcess;
     try {
@@ -289,7 +291,7 @@ export class RunManager extends EventEmitter {
 
     const paths = remoteRunPaths(device, run.id);
     state.remote = { device, pidFile: paths.pidFile };
-    const resumeSessionId = run.resumedFromRunId ? sessionIdAlongChain(this.options.listRuns(), run.resumedFromRunId) : undefined;
+    const resumeSessionId = this.resolveResume(run);
     const quote = isWindowsDevice(device) ? quoteForCmd : shQuote;
     const built = buildShellCommandLine(
       run.agent,
@@ -311,9 +313,6 @@ export class RunManager extends EventEmitter {
       "status",
       `在 ${device.name} 上启动 ${AGENT_LABELS[run.agent]} · ${run.access === "full" ? "完全放开" : "安全模式"} · ${run.cwd}`,
     );
-    if (run.resumedFromRunId && !resumeSessionId) {
-      this.append(run, "status", "上一轮没有留下可继续的会话，这条消息将作为新会话发送。");
-    }
 
     try {
       if (!(await directoryExists(device, run.cwd))) {
@@ -354,6 +353,26 @@ export class RunManager extends EventEmitter {
       return;
     }
     this.attach(state, child, built.stdin);
+  }
+
+  /**
+   * The session this turn continues, looked up now rather than at dispatch
+   * time because the previous turn may still have been running when this one
+   * was queued. When the chain never produced a session the message is sent
+   * as a new conversation, with the task's context put back in front of it.
+   */
+  private resolveResume(run: AgentRun): string | undefined {
+    if (!run.resumedFromRunId) {
+      return undefined;
+    }
+    const sessionId = sessionIdAlongChain(this.options.listRuns(), run.resumedFromRunId);
+    if (sessionId) {
+      return sessionId;
+    }
+    run.prompt = this.options.promptWithoutSession(run);
+    this.options.onRunChanged(run);
+    this.append(run, "status", "上一轮没有建立可继续的会话，这条消息连同任务说明作为新会话发送。");
+    return undefined;
   }
 
   private attach(state: ActiveRun, child: ChildProcess, stdin: string | undefined): void {

@@ -121,7 +121,7 @@ function TaskItem({
   onClick(): void;
 }): JSX.Element {
   const active = run ? isRunActive(run) : false;
-  const attachments = task.notes.filter((note) => note.file).length;
+  const attachments = task.notes.reduce((count, note) => count + (note.files?.length ?? 0), 0);
   return (
     <button
       type="button"

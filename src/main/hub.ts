@@ -71,6 +71,7 @@ export class TaskHub extends EventEmitter {
       resolveDevice: (deviceId) => this.resolveDevice(deviceId),
       attachmentsFor: (run) => this.attachmentsFor(run),
       imagesFor: (run) => imagePaths(this.promptAttachments(run.attachments ?? [], run.deviceId)),
+      promptWithoutSession: (run) => this.promptWithoutSession(run),
       onRunChanged: (run) => {
         this.touchTaskForRun(run);
         this.store.save();
@@ -555,7 +556,7 @@ export class TaskHub extends EventEmitter {
 
   // ------------------------------------------------------------------ runs
 
-  defaultPrompt(taskId: string, projectId?: string): string {
+  defaultPrompt(taskId: string, projectId?: string, latestMessage?: string): string {
     const task = this.requireTask(taskId);
     const project = projectId ? this.projects.find((item) => item.id === projectId) : undefined;
     const lines: string[] = [`# 任务：${task.title}`, ""];
@@ -569,6 +570,9 @@ export class TaskHub extends EventEmitter {
     // Remote runs copy the files over before the agent starts, so the prompt names their destination.
     const files = task.notes.flatMap((note) => note.files ?? []);
     lines.push(...attachmentSection(this.promptAttachments(files, project?.deviceId), Boolean(project?.deviceId)));
+    if (latestMessage) {
+      lines.push("## 这次要做的", latestMessage, "");
+    }
     lines.push(
       "## 要求",
       project ? `- 当前工作目录就是项目「${project.name}」（${project.path}），只改这个项目里的文件。` : "- 只改当前工作目录里的文件。",
@@ -657,6 +661,14 @@ export class TaskHub extends EventEmitter {
     this.changed();
     this.runner.pump();
     return run;
+  }
+
+  /** A follow-up whose conversation turned out not to exist: task context first, then what the user just said. */
+  private promptWithoutSession(run: AgentRun): string {
+    if (!this.tasks.some((task) => task.id === run.taskId)) {
+      return run.prompt;
+    }
+    return this.defaultPrompt(run.taskId, run.projectId, run.prompt);
   }
 
   reply(from: Actor, runId: string, text: string): AgentRun {

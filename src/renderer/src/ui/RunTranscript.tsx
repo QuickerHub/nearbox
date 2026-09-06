@@ -11,6 +11,8 @@ interface RunTranscriptProps {
   durationLabel: string;
   /** The run ended badly; diagnostics open by default. */
   failed: boolean;
+  /** The user asked to see the record; start with the work section open. */
+  defaultOpen?: boolean;
 }
 
 /**
@@ -18,7 +20,7 @@ interface RunTranscriptProps {
  * While the turn is live the work section stays open and follows along; when
  * it finishes it folds down to a single line, like Cursor does.
  */
-export function RunTranscript({ events, active, durationLabel, failed }: RunTranscriptProps): JSX.Element {
+export function RunTranscript({ events, active, durationLabel, failed, defaultOpen }: RunTranscriptProps): JSX.Element {
   const transcript = useMemo(() => summarizeTranscript(buildTranscript(events)), [events]);
   const { work, answer, toolCount, running } = transcript;
   const busyWith = running.at(-1);
@@ -26,7 +28,7 @@ export function RunTranscript({ events, active, durationLabel, failed }: RunTran
   return (
     <div className="turn">
       {work.length ? (
-        <WorkFold live={active} toolCount={toolCount} durationLabel={durationLabel} failed={failed}>
+        <WorkFold live={active} toolCount={toolCount} durationLabel={durationLabel} failed={failed} defaultOpen={Boolean(defaultOpen)}>
           {work.map((row) => (
             <WorkItem key={`${row.type}-${row.seq}`} row={row} failed={failed} />
           ))}
@@ -81,16 +83,19 @@ function WorkFold({
   toolCount,
   durationLabel,
   failed,
+  defaultOpen,
   children,
 }: {
   live: boolean;
   toolCount: number;
   durationLabel: string;
   failed: boolean;
+  defaultOpen: boolean;
   children: ReactNode;
 }): JSX.Element {
-  const [open, setOpen] = useState(live || failed);
-  const [pinned, setPinned] = useState(false);
+  const [open, setOpen] = useState(live || failed || defaultOpen);
+  // Opened by request: stays put when the turn finishes instead of snapping shut.
+  const [pinned, setPinned] = useState(defaultOpen);
   useEffect(() => {
     if (!pinned) {
       setOpen(live || failed);

@@ -5,10 +5,12 @@ import {
   type DeviceCandidate,
   type DeviceInfo,
   type DispatchInput,
+  type FileMeta,
   type HostSettings,
   type HostSnapshot,
   type HostToClient,
   newId,
+  type NoteInput,
   type Project,
   type RemoteDevice,
   type RemoteDeviceInput,
@@ -38,8 +40,9 @@ export interface ClientHandle {
   createTask(input: TaskInput): Promise<Task>;
   updateTask(id: string, patch: TaskPatch): Promise<Task>;
   deleteTask(id: string): Promise<void>;
-  addNote(taskId: string, text: string): Promise<TaskNote>;
-  upload(file: File, taskId?: string): Promise<{ task: Task; note: TaskNote }>;
+  addNote(taskId: string, input: NoteInput): Promise<TaskNote>;
+  /** Put a file on the PC and get its id; the message that names the id comes in a second request. */
+  uploadFile(file: File): Promise<FileMeta>;
   defaultPrompt(taskId: string, projectId?: string): Promise<string>;
   dispatch(taskId: string, input: DispatchInput): Promise<AgentRun>;
   runEvents(runId: string, after?: number): Promise<RunEvent[]>;
@@ -221,8 +224,8 @@ export async function connectClient(
     createTask: (input) => post("/api/tasks", input),
     updateTask: (id, body) => patch(`/api/tasks/${encodeURIComponent(id)}`, body),
     deleteTask: (id) => remove(`/api/tasks/${encodeURIComponent(id)}`),
-    addNote: (taskId, text) => post(`/api/tasks/${encodeURIComponent(taskId)}/notes`, { text }),
-    upload: (file, taskId) => uploadFile(origin, token, file, taskId),
+    addNote: (taskId, input) => post(`/api/tasks/${encodeURIComponent(taskId)}/notes`, input),
+    uploadFile: (file) => uploadFile(origin, token, file),
     defaultPrompt: async (taskId, projectId) => {
       const query = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
       const result = await json<{ prompt: string }>(`/api/tasks/${encodeURIComponent(taskId)}/prompt${query}`);
@@ -260,20 +263,38 @@ export function pairWithPin(pin: string): void {
   window.location.replace(url.toString());
 }
 
-async function uploadFile(origin: string, token: string, file: File, taskId?: string): Promise<{ task: Task; note: TaskNote }> {
-  const params = new URLSearchParams({ name: file.name, token });
-  if (taskId) {
-    params.set("taskId", taskId);
+const IMAGE_EXTENSIONS: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+
+/** A pasted screenshot arrives as a File named "image.png" or "" with a possibly empty type; give it a real name. */
+function uploadName(file: File): string {
+  if (file.name && file.name !== "image.png") {
+    return file.name;
   }
-  const response = await fetch(`${origin}/api/upload?${params.toString()}`, {
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  const ext = Object.entries(IMAGE_EXTENSIONS).find(([, type]) => type === file.type)?.[0] ?? "png";
+  return `截图-${stamp}.${ext}`;
+}
+
+function uploadType(file: File, name: string): string {
+  if (file.type) {
+    return file.type;
+  }
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return IMAGE_EXTENSIONS[ext] ?? "application/octet-stream";
+}
+
+async function uploadFile(origin: string, token: string, file: File): Promise<FileMeta> {
+  const name = uploadName(file);
+  const params = new URLSearchParams({ name, token });
+  const response = await fetch(`${origin}/api/files?${params.toString()}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
-      "Content-Type": file.type || "application/octet-stream",
+      "Content-Type": uploadType(file, name),
     },
     body: file,
   });
-  const body = (await response.json().catch(() => null)) as ({ task: Task; note: TaskNote } & { message?: string }) | null;
+  const body = (await response.json().catch(() => null)) as (FileMeta & { message?: string }) | null;
   if (!response.ok || !body) {
     throw new Error(body?.message ?? "上传失败。");
   }

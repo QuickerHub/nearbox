@@ -162,9 +162,11 @@ function Detail({ tool }: { tool: ToolCall }): JSX.Element {
 }
 
 export function DiffView({ diff }: { diff: string }): JSX.Element {
+  // The file is already named in the row above; the `---/+++` header pair only repeats it.
+  const lines = diffLines(diff).filter((line) => line.tag !== "meta");
   return (
     <pre className="diff">
-      {diffLines(diff).map((line, index) => (
+      {lines.map((line, index) => (
         <span key={index} className={`diff__line diff__line--${line.tag}`}>
           {line.text || " "}
           {"\n"}

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed-icon layer (Android 13+). Same mark as the foreground; the launcher applies the tint. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:pathData="M36,36 L72,72"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="9.5"
+        android:strokeLineCap="round" />
+
+    <path
+        android:pathData="M36,72 L36,36"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="10.5"
+        android:strokeLineCap="round" />
+
+    <path
+        android:pathData="M72,72 L72,53"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="10.5"
+        android:strokeLineCap="round" />
+
+    <path
+        android:pathData="M72,28.5 A7.5,7.5 0 1 1 72,43.5 A7.5,7.5 0 1 1 72,28.5 Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

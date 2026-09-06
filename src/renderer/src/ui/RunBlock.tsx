@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AGENT_LABELS, type AgentRun, isRunActive, type RunEvent } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatDuration, formatRelative } from "../lib/format";
+import { FileStrip } from "./Attachments";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
 import { RunTranscript } from "./RunTranscript";
@@ -25,6 +26,8 @@ export function RunBlock({ run, client, opensConversation, projectName, onStop, 
   const active = isRunActive(run);
   const queued = run.status === "queued";
   const [open, setOpen] = useState(active || Boolean(initiallyOpen));
+  // Set when the user asked to see the record, so the fold opens as soon as it loads instead of needing a second click.
+  const [expanded, setExpanded] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
   const [events, setEvents] = useState<RunEvent[] | null>(null);
   const [, setTick] = useState(0);
@@ -91,6 +94,8 @@ export function RunBlock({ run, client, opensConversation, projectName, onStop, 
   const failed = run.status === "failed";
   // A failure whose "answer" is the error text is shown once, in the outcome line.
   const answer = run.summary && run.summary !== run.error ? run.summary : undefined;
+  // A generated prompt hides behind "提示词"; what the user typed (or attached) is always a bubble.
+  const typed = run.message !== undefined || Boolean(run.attachments?.length);
 
   return (
     <article className={`run run--${run.status}`}>
@@ -110,15 +115,18 @@ export function RunBlock({ run, client, opensConversation, projectName, onStop, 
           </span>
           <span className="handoff__line" />
         </div>
-      ) : (
+      ) : null}
+      {!opensConversation || typed ? (
         <div className="bubble bubble--user">
           <div className="bubble__head">
             <span>{run.requestedBy.name}</span>
             <span className="muted">{formatRelative(run.createdAt)}</span>
           </div>
-          <Markdown text={run.prompt} className="bubble__text" />
+          {run.attachments?.length ? <FileStrip files={run.attachments} client={client} /> : null}
+          {/* The user's words; `prompt` additionally lists the file paths for the agent. */}
+          {(run.message ?? run.prompt) ? <Markdown text={run.message ?? run.prompt} className="bubble__text" /> : null}
         </div>
-      )}
+      ) : null}
 
       {showPrompt ? <pre className="run__prompt">{run.prompt}</pre> : null}
 
@@ -132,14 +140,24 @@ export function RunBlock({ run, client, opensConversation, projectName, onStop, 
         </div>
       ) : open ? (
         events === null ? (
-          <p className="muted small run__loading">正在读取记录…</p>
+          <button type="button" className="fold__head fold__head--lazy" disabled>
+            <span className="spinner spinner--small fold__spinner" />
+            <span className="fold__label">正在读取记录…</span>
+          </button>
         ) : (
-          <RunTranscript events={events} active={active} durationLabel={duration} failed={failed} />
+          <RunTranscript events={events} active={active} durationLabel={duration} failed={failed} defaultOpen={expanded} />
         )
       ) : (
         <>
           {run.startedAt ? (
-            <button type="button" className="fold__head fold__head--lazy" onClick={() => setOpen(true)}>
+            <button
+              type="button"
+              className="fold__head fold__head--lazy"
+              onClick={() => {
+                setExpanded(true);
+                setOpen(true);
+              }}
+            >
               <Icon name="chevron" size={12} className="fold__chevron" />
               <span className="fold__label">{duration ? `工作了 ${duration}` : "过程"}</span>
             </button>
@@ -161,15 +179,6 @@ export function RunBlock({ run, client, opensConversation, projectName, onStop, 
         <div className="run__outcome muted">
           <Icon name="stop" size={11} />
           <span>{run.error && run.error !== "已取消" ? run.error : "已停止"}</span>
-        </div>
-      ) : null}
-
-      {run.status === "running" ? (
-        <div className="run__tools">
-          <button type="button" className="link-btn link-btn--danger" onClick={() => onStop(run.id)}>
-            <Icon name="stop" size={11} />
-            停止
-          </button>
         </div>
       ) : null}
     </article>

@@ -1,4 +1,5 @@
 import type { RunEvent, ToolCall, ToolKind, ToolStatus } from "../../../shared/protocol";
+import { describeArgs, describeCursorResult, looseJson } from "../../../shared/tools.ts";
 
 export type TranscriptItem =
   | { type: "thinking"; text: string; seq: number }
@@ -258,29 +259,38 @@ export function diffLines(diff: string): { tag: "add" | "del" | "hunk" | "meta" 
 // ---------------------------------------------------------------------------
 
 /**
- * Old logs only have a text line per tool event ("read {…}", "完成 read: {…}",
- * "$ npm test", "命令结束 (exit 0)"). Completions fold into the nearest
- * still-running legacy tool; everything else starts a new generic row.
+ * Old logs only have a text line per tool event: "glob {…args…}" when a call
+ * starts and "完成 glob: {…result…}" when it ends (or "$ npm test" and
+ * "命令结束 (exit 0)" in the oldest ones). The JSON was often cut short and
+ * the call ids were lost, so arguments are salvaged as far as they go and a
+ * completion is paired with the oldest still-running call of the same name.
  */
 function legacyTool(text: string, seq: number, items: readonly TranscriptItem[]): ToolCall | null {
   const trimmed = text.replace(/\r\n/g, "\n").trim();
   if (!trimmed) {
     return null;
   }
-  const completion = /^(完成 |结果:|命令结束)/.test(trimmed);
-  if (completion) {
-    const open = [...items].reverse().find((item) => item.type === "tool" && item.tool.status === "running" && item.tool.id.startsWith("legacy-"));
-    if (open?.type === "tool") {
-      const exit = /\(exit (-?\d+)\)/.exec(trimmed);
-      const exitCode = exit ? Number(exit[1]) : undefined;
-      const failed = exitCode !== undefined && exitCode !== 0;
-      return {
-        ...open.tool,
-        status: failed ? "error" : "ok",
-        exitCode,
-        output: trimmed.replace(/^(完成 [^:：]*[:：]\s*|结果:\s*|命令结束[^\n]*\n?)/, "") || undefined,
-      };
+  const done = /^完成 ([A-Za-z][\w.-]*)[:：]\s*([\s\S]*)$/.exec(trimmed);
+  if (done) {
+    const open = oldestRunningLegacy(items, done[1]!);
+    if (!open) {
+      return null;
     }
+    return { ...open, ...describeCursorResult(open.kind, legacyResult(done[2]!)) };
+  }
+  if (/^(结果:|命令结束)/.test(trimmed)) {
+    const open = oldestRunningLegacy(items);
+    if (!open) {
+      return null;
+    }
+    const exit = /\(exit (-?\d+)\)/.exec(trimmed);
+    const exitCode = exit ? Number(exit[1]) : undefined;
+    return {
+      ...open,
+      status: exitCode !== undefined && exitCode !== 0 ? "error" : "ok",
+      exitCode,
+      output: trimmed.replace(/^(结果:\s*|命令结束[^\n]*\n?)/, "") || undefined,
+    };
   }
   if (trimmed.startsWith("$ ")) {
     const [command = "", ...rest] = trimmed.slice(2).split("\n");
@@ -289,6 +299,10 @@ function legacyTool(text: string, seq: number, items: readonly TranscriptItem[])
   const named = /^([A-Za-z][\w.-]*)\s+([\s\S]*)$/.exec(trimmed);
   const name = named?.[1] ?? "tool";
   const detail = named?.[2] ?? trimmed;
+  const args = looseJson(detail);
+  if (args) {
+    return { id: `legacy-${seq}`, status: "running", ...describeArgs(name, args) };
+  }
   return {
     id: `legacy-${seq}`,
     name,
@@ -297,6 +311,30 @@ function legacyTool(text: string, seq: number, items: readonly TranscriptItem[])
     subject: detail.replace(/\s+/g, " ").slice(0, 80),
     input: detail,
   };
+}
+
+function oldestRunningLegacy(items: readonly TranscriptItem[], name?: string): ToolCall | undefined {
+  const running = items
+    .filter((item): item is Extract<TranscriptItem, { type: "tool" }> => item.type === "tool" && item.tool.status === "running" && item.tool.id.startsWith("legacy-"))
+    .map((item) => item.tool);
+  return (name && running.find((tool) => tool.name === name)) || running[0];
+}
+
+/**
+ * cursor-agent's result wrapper `{ success | rejected | error: {…} }`, rebuilt
+ * from a possibly truncated line: the outcome is the first key, the body is
+ * whatever complete fields survived.
+ */
+function legacyResult(text: string): unknown {
+  const parsed = looseJson(text);
+  const outcome = /^\{\s*"(success|rejected|error|failure)"/.exec(text.trim())?.[1];
+  if (!outcome) {
+    return parsed;
+  }
+  if (parsed && outcome in parsed) {
+    return parsed;
+  }
+  return { [outcome]: parsed ?? {} };
 }
 
 function joinText(left: string, right: string): string {
