@@ -4,6 +4,7 @@ copyright: Copyright © QuickerHub
 artifactName: Nearbox-${version}-${os}-${arch}.${ext}
 directories:
   output: release
+  buildResources: build
 files:
   - out/**/*
 extraResources:
@@ -11,7 +12,9 @@ extraResources:
     to: .
     filter:
       - nearbox.apk
+      - icons/**
 win:
+  icon: build/icon.png
   target:
     - target: nsis
       arch:
@@ -19,7 +22,7 @@ win:
     - target: zip
       arch:
         - x64
-  signAndEditExecutable: false
+  signAndEditExecutable: true
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true

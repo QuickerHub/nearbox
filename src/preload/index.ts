@@ -1,28 +1,29 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { HostSnapshot, InviteInfo, ChatMessage } from "../shared/protocol";
 
 export interface NearboxDesktopApi {
   isDesktop: true;
-  bootstrap(): Promise<{ snapshot: HostSnapshot; desktopSecret: string; port: number }>;
-  refreshInvite(): Promise<InviteInfo | null>;
-  setHost(host: string): Promise<HostSnapshot | null>;
-  sendText(text: string): Promise<ChatMessage | null>;
-  openInbox(): Promise<void>;
-  onSnapshot(listener: (snapshot: HostSnapshot) => void): () => void;
+  bootstrap(): Promise<{ desktopSecret: string; port: number; version: string }>;
+  pickFolder(): Promise<string | null>;
+  openPath(path: string): Promise<void>;
+  showInFolder(path: string): Promise<void>;
+  openExternal(url: string): Promise<void>;
+  openInEditor(path: string): Promise<boolean>;
+  onNavigate(listener: (hash: string) => void): () => void;
 }
 
 const api: NearboxDesktopApi = {
   isDesktop: true,
   bootstrap: () => ipcRenderer.invoke("nearbox:bootstrap"),
-  refreshInvite: () => ipcRenderer.invoke("nearbox:refresh-invite"),
-  setHost: (host) => ipcRenderer.invoke("nearbox:set-host", host),
-  sendText: (text) => ipcRenderer.invoke("nearbox:send-text", text),
-  openInbox: () => ipcRenderer.invoke("nearbox:open-inbox"),
-  onSnapshot: (listener) => {
-    const handler = (_event: unknown, snapshot: HostSnapshot) => listener(snapshot);
-    ipcRenderer.on("nearbox:snapshot", handler);
+  pickFolder: () => ipcRenderer.invoke("nearbox:pick-folder"),
+  openPath: (path) => ipcRenderer.invoke("nearbox:open-path", path),
+  showInFolder: (path) => ipcRenderer.invoke("nearbox:show-in-folder", path),
+  openExternal: (url) => ipcRenderer.invoke("nearbox:open-external", url),
+  openInEditor: (path) => ipcRenderer.invoke("nearbox:open-in-editor", path),
+  onNavigate: (listener) => {
+    const handler = (_event: unknown, hash: string) => listener(hash);
+    ipcRenderer.on("nearbox:navigate", handler);
     return () => {
-      ipcRenderer.removeListener("nearbox:snapshot", handler);
+      ipcRenderer.removeListener("nearbox:navigate", handler);
     };
   },
 };

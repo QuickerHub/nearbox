@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.view.View
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -42,6 +43,15 @@ class MainActivity : AppCompatActivity() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 return false
             }
+
+            override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                if (!request.isForMainFrame) {
+                    return
+                }
+                binding.webView.visibility = View.GONE
+                binding.pairing.visibility = View.VISIBLE
+                Toast.makeText(this@MainActivity, "连不上电脑，请确认电脑端已打开并在同一 Wi-Fi", Toast.LENGTH_LONG).show()
+            }
         }
         binding.webView.webChromeClient = object : WebChromeClient() {
             override fun onShowFileChooser(
@@ -56,12 +66,28 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        handleIntent(intent)
+        if (!handleIntent(intent)) {
+            reopenLastHost()
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIntent(intent)
+    }
+
+    /**
+     * The web app remembers its paired session in WebView storage, so a plain launch can go
+     * straight back to the last PC without a token. If that session is gone, the page itself
+     * shows the PIN screen.
+     */
+    private fun reopenLastHost() {
+        val host = prefs().getString(KEY_HOST, "").orEmpty()
+        if (host.isBlank()) {
+            return
+        }
+        val port = prefs().getInt(KEY_PORT, 17831)
+        showWeb("http://$host:$port/")
     }
 
     override fun onBackPressed() {
@@ -72,15 +98,17 @@ class MainActivity : AppCompatActivity() {
         super.onBackPressed()
     }
 
-    private fun handleIntent(intent: Intent?) {
-        val uri = intent?.data ?: return
+    private fun handleIntent(intent: Intent?): Boolean {
+        val uri = intent?.data ?: return false
         if (uri.scheme == "nearbox" && uri.host == "connect") {
             openSession(uri.getQueryParameter("host"), uri.getQueryParameter("port"), uri.getQueryParameter("t"))
-            return
+            return true
         }
         if (uri.scheme == "http" || uri.scheme == "https") {
             openSession(uri.host, uri.port.takeIf { it > 0 }?.toString(), uri.getQueryParameter("t") ?: uri.getQueryParameter("pin"))
+            return true
         }
+        return false
     }
 
     private fun connectFromForm() {
@@ -114,9 +142,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val port = portText?.toIntOrNull() ?: 17831
-        prefs().edit().putString(KEY_HOST, safeHost).apply()
+        prefs().edit().putString(KEY_HOST, safeHost).putInt(KEY_PORT, port).apply()
         binding.hostInput.setText(safeHost)
-        val url = "http://$safeHost:$port/?t=${Uri.encode(tokenValue)}"
+        showWeb("http://$safeHost:$port/?t=${Uri.encode(tokenValue)}")
+    }
+
+    private fun showWeb(url: String) {
         binding.pairing.visibility = View.GONE
         binding.webView.visibility = View.VISIBLE
         binding.webView.loadUrl(url)
@@ -126,5 +157,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val KEY_HOST = "last_host"
+        private const val KEY_PORT = "last_port"
     }
 }

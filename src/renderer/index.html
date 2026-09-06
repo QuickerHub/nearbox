@@ -3,13 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#f3f5f8" />
-    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#141414" />
+    <meta name="color-scheme" content="dark light" />
     <title>Nearbox</title>
     <script>
       (() => {
-        const mode = localStorage.getItem("nearbox.theme") || "system";
-        const dark = mode === "dark" || (mode !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        const mode = localStorage.getItem("nearbox.theme") || "dark";
+        const dark = mode !== "light" && (mode === "dark" || matchMedia("(prefers-color-scheme: dark)").matches);
         document.documentElement.dataset.theme = dark ? "dark" : "light";
         document.documentElement.style.colorScheme = dark ? "dark" : "light";
       })();

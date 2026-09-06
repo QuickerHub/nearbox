@@ -7,7 +7,7 @@ export function readThemeMode(): ThemeMode {
   if (stored === "light" || stored === "dark" || stored === "system") {
     return stored;
   }
-  return "system";
+  return "dark";
 }
 
 export function resolvedTheme(mode: ThemeMode): "light" | "dark" {
@@ -25,7 +25,7 @@ export function applyTheme(mode: ThemeMode): "light" | "dark" {
   window.localStorage.setItem(STORAGE_KEY, mode);
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) {
-    meta.setAttribute("content", resolved === "dark" ? "#111318" : "#f3f5f8");
+    meta.setAttribute("content", resolved === "dark" ? "#141414" : "#f4f4f4");
   }
   return resolved;
 }

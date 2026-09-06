@@ -1,7 +1,7 @@
 {
   "name": "nearbox",
   "productName": "Nearbox",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "局域网里手机和电脑互传消息、图片和文件。",
   "main": "./out/main/index.js",
   "type": "module",
@@ -13,13 +13,14 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "node --experimental-strip-types --test src/main/network.test.ts src/shared/version.test.ts",
+    "test": "node --experimental-strip-types --test src/main/network.test.ts src/main/agent-output.test.ts src/shared/version.test.ts src/renderer/src/lib/runTranscript.test.ts",
     "preview": "electron-vite preview",
     "android:sync": "node scripts/sync-android-version.mjs",
     "release:check": "node scripts/check-release-version.mjs",
     "dist:win": "npm run android:sync && npm run build && electron-builder --win"
   },
   "dependencies": {
+    "lucide-react": "^1.41.0",
     "qrcode": "^1.5.4",
     "ws": "^8.18.3"
   },

@@ -8,21 +8,29 @@ import { EventEmitter } from "node:events";
 import QRCode from "qrcode";
 import { WebSocket, WebSocketServer } from "ws";
 import {
+  type Actor,
+  type AgentKind,
+  type ClientToHost,
   DEFAULT_LIMITS,
   DEFAULT_PORT,
-  type ChatMessage,
-  type ClientToHost,
   type DeviceInfo,
+  type DispatchInput,
+  type HostSettings,
   type HostSnapshot,
   type HostToClient,
   type InviteInfo,
   isImageMediaType,
   newId,
   PROTOCOL_VERSION,
+  type RunEvent,
   type ShareLimits,
+  type TaskInput,
+  type TaskPatch,
 } from "@shared/protocol";
 import { receiveToInbox } from "./files";
+import type { TaskHub } from "./hub";
 import { isLoopbackOrPrivate, listPrivateLanAddresses, normalizeRemoteIp } from "./network";
+import type { PairedSession } from "./store";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -36,16 +44,13 @@ const MIME: Record<string, string> = {
   ".gif": "image/gif",
   ".woff2": "font/woff2",
   ".json": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
 };
-
-interface Session {
-  token: string;
-  device: DeviceInfo;
-}
 
 interface SocketBinding {
   socket: WebSocket;
   deviceId: string;
+  runs: Set<string>;
 }
 
 export class LanServer extends EventEmitter {
@@ -54,24 +59,25 @@ export class LanServer extends EventEmitter {
   readonly limits: ShareLimits = { ...DEFAULT_LIMITS };
   readonly hostName = hostname() || "这台电脑";
 
+  private readonly hub: TaskHub;
   private readonly desktopSecret: string;
   private readonly rendererRoot: string | null;
   private readonly vitePort: number;
   private readonly appVersion: string;
   private readonly apkPath: string | null;
   private readonly stagingDir: string;
-  private readonly filesById = new Map<string, { path: string; name: string; mediaType: string }>();
-  private readonly sessions = new Map<string, Session>();
+  private readonly sessions = new Map<string, PairedSession>();
   private readonly sockets = new Set<SocketBinding>();
-  private readonly messages: ChatMessage[] = [];
   private readonly devices = new Map<string, DeviceInfo>();
   private server: http.Server | null = null;
   private wss: WebSocketServer | null = null;
   private selectedHost = "";
   private invite: InviteInfo | null = null;
   private listenError: string | undefined;
+  private snapshotTimer: NodeJS.Timeout | null = null;
 
   constructor(options: {
+    hub: TaskHub;
     userData: string;
     rendererRoot: string | null;
     vitePort: number;
@@ -81,6 +87,7 @@ export class LanServer extends EventEmitter {
     port?: number;
   }) {
     super();
+    this.hub = options.hub;
     this.port = options.port ?? DEFAULT_PORT;
     this.rendererRoot = options.rendererRoot;
     this.vitePort = options.vitePort;
@@ -95,13 +102,20 @@ export class LanServer extends EventEmitter {
       role: "desktop",
       online: true,
     });
+    for (const session of this.hub.store.state.sessions) {
+      this.sessions.set(session.token, session);
+      this.devices.set(session.device.id, { ...session.device, online: false });
+    }
+    this.hub.on("changed", () => this.scheduleSnapshot());
+    this.hub.on("run-event", (runId: string, event: RunEvent) => this.broadcastRunEvent(runId, event));
   }
 
   async start(): Promise<void> {
     await mkdir(this.inboxDir, { recursive: true });
     await mkdir(this.stagingDir, { recursive: true });
     const addresses = listPrivateLanAddresses();
-    this.selectedHost = addresses[0] ?? "";
+    const preferred = this.hub.settings.preferredHost;
+    this.selectedHost = (preferred && addresses.includes(preferred) ? preferred : addresses[0]) ?? "";
     if (!this.selectedHost) {
       this.listenError = "没有找到可用的局域网地址。请确认电脑已连上 Wi-Fi 或以太网。";
     }
@@ -163,9 +177,14 @@ export class LanServer extends EventEmitter {
       port: this.port,
       invite: this.invite,
       devices: [...this.devices.values()],
-      messages: this.messages.slice(-200),
+      tasks: this.hub.tasks,
+      projects: this.hub.projects,
+      runs: this.hub.runs.slice(-120),
+      agents: this.hub.agents,
+      settings: this.hub.settings,
       limits: this.limits,
       inboxDir: this.inboxDir,
+      dataDir: this.hub.dataDir,
       appVersion: this.appVersion,
       protocolVersion: PROTOCOL_VERSION,
       apkAvailable: this.apkPath !== null,
@@ -173,13 +192,18 @@ export class LanServer extends EventEmitter {
     };
   }
 
+  onlinePhones(): number {
+    return [...this.devices.values()].filter((device) => device.role === "phone" && device.online).length;
+  }
+
   async setSelectedHost(host: string): Promise<HostSnapshot> {
     if (!listPrivateLanAddresses().includes(host)) {
       throw new Error("只能选择当前电脑上的局域网地址。");
     }
     this.selectedHost = host;
+    this.hub.settings.preferredHost = host;
+    this.hub.store.save();
     await this.refreshInvite();
-    this.broadcastSnapshot();
     return this.snapshot();
   }
 
@@ -205,71 +229,27 @@ export class LanServer extends EventEmitter {
       apkUrl,
       apkQrDataUrl,
     };
-    this.broadcastSnapshot();
+    this.scheduleSnapshot();
     return this.invite;
   }
 
-  sendDesktopText(text: string, id = newId()): ChatMessage {
-    return this.acceptText(
-      {
-        id: "desktop",
-        name: this.hostName,
-        role: "desktop",
-      },
-      id,
-      text,
-    );
+  forgetDevice(deviceId: string): void {
+    for (const [token, session] of this.sessions) {
+      if (session.device.id === deviceId) {
+        this.sessions.delete(token);
+      }
+    }
+    for (const binding of this.sockets) {
+      if (binding.deviceId === deviceId) {
+        binding.socket.close();
+      }
+    }
+    this.devices.delete(deviceId);
+    this.persistSessions();
+    this.scheduleSnapshot();
   }
 
-  private acceptText(
-    from: Pick<DeviceInfo, "id" | "name" | "role">,
-    id: string,
-    text: string,
-  ): ChatMessage {
-    const trimmed = text.replace(/\r\n/g, "\n").trim();
-    if (!trimmed) {
-      throw Object.assign(new Error("消息不能为空。"), { code: "EMPTY" });
-    }
-    if (trimmed.length > this.limits.maxTextChars) {
-      throw Object.assign(new Error("文字太长了。"), { code: "TEXT_TOO_LONG" });
-    }
-    const existing = this.messages.find((item) => item.id === id);
-    if (existing) {
-      return existing;
-    }
-    const message: ChatMessage = {
-      id,
-      from,
-      kind: "text",
-      text: trimmed,
-      createdAt: new Date().toISOString(),
-      status: "sent",
-    };
-    this.messages.push(message);
-    this.touchDevice(from.id);
-    this.broadcast({ type: "message", message });
-    this.broadcastSnapshot();
-    return message;
-  }
-
-  private acceptFileMessage(
-    from: Pick<DeviceInfo, "id" | "name" | "role">,
-    file: { id: string; name: string; mediaType: string; byteLength: number },
-  ): ChatMessage {
-    const message: ChatMessage = {
-      id: newId(),
-      from,
-      kind: isImageMediaType(file.mediaType) ? "image" : "file",
-      file,
-      createdAt: new Date().toISOString(),
-      status: "sent",
-    };
-    this.messages.push(message);
-    this.touchDevice(from.id);
-    this.broadcast({ type: "message", message });
-    this.broadcastSnapshot();
-    return message;
-  }
+  // ------------------------------------------------------------------ HTTP
 
   private async handleHttp(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     try {
@@ -279,11 +259,12 @@ export class LanServer extends EventEmitter {
         return;
       }
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "nearbox.local"}`);
-      if (req.method === "OPTIONS") {
+      const method = req.method ?? "GET";
+      if (method === "OPTIONS") {
         res.writeHead(204, corsHeaders(req)).end();
         return;
       }
-      if (url.pathname === "/api/app" && req.method === "GET") {
+      if (url.pathname === "/api/app" && method === "GET") {
         this.writeJson(res, {
           version: this.appVersion,
           protocol: PROTOCOL_VERSION,
@@ -292,110 +273,233 @@ export class LanServer extends EventEmitter {
         });
         return;
       }
-      if (url.pathname === "/app/nearbox.apk" && req.method === "GET") {
-        if (!this.apkPath) {
-          res.writeHead(404).end("当前电脑端没有附带 Android 安装包。");
-          return;
-        }
-        const info = await stat(this.apkPath);
-        res.writeHead(200, {
-          "Content-Type": "application/vnd.android.package-archive",
-          "Content-Length": info.size,
-          "Content-Disposition": `attachment; filename="Nearbox-${this.appVersion}.apk"`,
-          "Cache-Control": "no-store",
-        });
-        createReadStream(this.apkPath).pipe(res);
+      if (url.pathname === "/app/nearbox.apk" && method === "GET") {
+        await this.serveApk(res);
         return;
       }
-      if (url.pathname === "/api/state" && req.method === "GET") {
-        this.writeJson(res, this.publicSnapshot(this.authorize(req, url)));
+      if (url.pathname.startsWith("/api/")) {
+        await this.handleApi(req, res, url, method);
         return;
       }
-      if (url.pathname === "/api/invite" && req.method === "POST") {
-        this.requireDesktop(req, url);
-        this.writeJson(res, await this.refreshInvite());
-        return;
-      }
-      if (url.pathname === "/api/host" && req.method === "POST") {
-        this.requireDesktop(req, url);
-        const body = await readJson<{ host: string }>(req);
-        this.writeJson(res, await this.setSelectedHost(String(body.host ?? "")));
-        return;
-      }
-      if (url.pathname === "/api/text" && req.method === "POST") {
-        const session = this.authorize(req, url);
-        const body = await readJson<{ id?: string; text?: string }>(req);
-        const message = this.acceptText(session.device, body.id || newId(), String(body.text ?? ""));
-        this.writeJson(res, message);
-        return;
-      }
-      if (url.pathname === "/api/upload" && req.method === "POST") {
-        const session = this.authorize(req, url);
-        const fileName = decodeURIComponent(url.searchParams.get("name") ?? "file");
-        const mediaType = req.headers["content-type"] || "application/octet-stream";
-        const kind = isImageMediaType(mediaType) ? "image" : "file";
-        const maxBytes = kind === "image" ? this.limits.maxImageBytes : this.limits.maxFileBytes;
-        const saved = await receiveToInbox({
-          request: req,
-          inboxDir: join(this.inboxDir, safeSegment(session.device.name)),
-          stagingDir: this.stagingDir,
-          fileName,
-          mediaType,
-          maxBytes,
-        });
-        const fileId = newId();
-        const storedPath = join(this.inboxDir, safeSegment(session.device.name), saved.storedName);
-        this.filesById.set(fileId, {
-          path: storedPath,
-          name: saved.storedName,
-          mediaType: saved.mediaType,
-        });
-        const message = this.acceptFileMessage(session.device, {
-          id: fileId,
-          name: saved.storedName,
-          mediaType: saved.mediaType,
-          byteLength: saved.byteLength,
-        });
-        this.writeJson(res, message);
-        return;
-      }
-      if (url.pathname.startsWith("/api/files/") && req.method === "GET") {
-        this.authorize(req, url);
-        const fileId = url.pathname.slice("/api/files/".length);
-        const file = this.filesById.get(fileId);
-        if (!file || !existsSync(file.path)) {
-          res.writeHead(404).end("文件不存在");
-          return;
-        }
-        const info = await stat(file.path);
-        res.writeHead(200, {
-          "Content-Type": file.mediaType,
-          "Content-Length": info.size,
-          "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(file.name)}`,
-          "Cache-Control": "private, max-age=3600",
-        });
-        createReadStream(file.path).pipe(res);
-        return;
-      }
-
       if (this.rendererRoot) {
-        await this.serveRenderer(req, res, url.pathname);
+        await this.serveRenderer(res, url.pathname);
         return;
       }
       this.proxyVite(req, res);
     } catch (error) {
       const code = (error as { code?: string }).code;
       const status =
-        code === "UNAUTHORIZED" ? 401 : code === "FILE_TOO_LARGE" ? 413 : code === "FILE_FORBIDDEN" ? 415 : 400;
+        code === "UNAUTHORIZED"
+          ? 401
+          : code === "NOT_FOUND"
+            ? 404
+            : code === "FILE_TOO_LARGE"
+              ? 413
+              : code === "FILE_FORBIDDEN"
+                ? 415
+                : 400;
       this.writeJson(res, { ok: false, message: error instanceof Error ? error.message : String(error) }, status);
     }
   }
 
-  private async serveRenderer(
+  private async handleApi(
     req: http.IncomingMessage,
     res: http.ServerResponse,
-    pathname: string,
+    url: URL,
+    method: string,
   ): Promise<void> {
+    const path = url.pathname;
+    const session = this.authorize(req, url);
+    const actor = actorOf(session.device);
+    const segments = path.split("/").filter(Boolean); // ["api", ...]
+
+    if (path === "/api/state" && method === "GET") {
+      this.writeJson(res, { ...this.snapshot(), sessionToken: session.token, self: session.device });
+      return;
+    }
+    if (path === "/api/invite" && method === "POST") {
+      this.requireDesktop(session);
+      this.writeJson(res, await this.refreshInvite());
+      return;
+    }
+    if (path === "/api/host" && method === "POST") {
+      this.requireDesktop(session);
+      const body = await readJson<{ host: string }>(req);
+      this.writeJson(res, await this.setSelectedHost(String(body.host ?? "")));
+      return;
+    }
+    if (path === "/api/devices/forget" && method === "POST") {
+      this.requireDesktop(session);
+      const body = await readJson<{ deviceId: string }>(req);
+      this.forgetDevice(String(body.deviceId ?? ""));
+      this.writeJson(res, { ok: true });
+      return;
+    }
+
+    // ----- capture / tasks
+    if (path === "/api/capture" && method === "POST") {
+      const body = await readJson<{ id?: string; text?: string }>(req);
+      this.assertTextLength(String(body.text ?? ""));
+      this.writeJson(res, this.hub.capture(actor, String(body.text ?? ""), body.id || newId()));
+      return;
+    }
+    if (path === "/api/tasks" && method === "POST") {
+      const body = await readJson<TaskInput>(req);
+      this.writeJson(res, this.hub.createTask(actor, body));
+      return;
+    }
+    if (segments[1] === "tasks" && segments[2]) {
+      const taskId = decodeURIComponent(segments[2]);
+      const tail = segments[3];
+      if (!tail && method === "PATCH") {
+        const body = await readJson<TaskPatch>(req);
+        this.writeJson(res, this.hub.updateTask(actor, taskId, body));
+        return;
+      }
+      if (!tail && method === "DELETE") {
+        this.hub.deleteTask(taskId);
+        this.writeJson(res, { ok: true });
+        return;
+      }
+      if (tail === "notes" && method === "POST") {
+        const body = await readJson<{ text?: string }>(req);
+        this.assertTextLength(String(body.text ?? ""));
+        this.writeJson(res, this.hub.addNote(actor, taskId, String(body.text ?? "")));
+        return;
+      }
+      if (tail === "prompt" && method === "GET") {
+        this.writeJson(res, { prompt: this.hub.defaultPrompt(taskId, url.searchParams.get("projectId") ?? undefined) });
+        return;
+      }
+      if (tail === "dispatch" && method === "POST") {
+        const body = await readJson<DispatchInput>(req);
+        this.writeJson(res, this.hub.dispatch(actor, taskId, body));
+        return;
+      }
+    }
+
+    // ----- uploads / files
+    if (path === "/api/upload" && method === "POST") {
+      const fileName = decodeURIComponent(url.searchParams.get("name") ?? "file");
+      const taskId = url.searchParams.get("taskId") || null;
+      const mediaType = req.headers["content-type"] || "application/octet-stream";
+      const kind = isImageMediaType(mediaType) ? "image" : "file";
+      const maxBytes = kind === "image" ? this.limits.maxImageBytes : this.limits.maxFileBytes;
+      const deviceDir = join(this.inboxDir, safeSegment(session.device.name));
+      const saved = await receiveToInbox({
+        request: req,
+        inboxDir: deviceDir,
+        stagingDir: this.stagingDir,
+        fileName,
+        mediaType,
+        maxBytes,
+      });
+      const fileId = newId();
+      const result = this.hub.attachFile(
+        actor,
+        taskId,
+        { id: fileId, name: saved.storedName, mediaType: saved.mediaType, byteLength: saved.byteLength },
+        { path: join(deviceDir, saved.storedName), name: saved.storedName, mediaType: saved.mediaType },
+      );
+      this.writeJson(res, result);
+      return;
+    }
+    if (segments[1] === "files" && segments[2] && method === "GET") {
+      const file = this.hub.fileById(decodeURIComponent(segments[2]));
+      if (!file || !existsSync(file.path)) {
+        res.writeHead(404).end("文件不存在");
+        return;
+      }
+      const info = await stat(file.path);
+      res.writeHead(200, {
+        "Content-Type": file.mediaType,
+        "Content-Length": info.size,
+        "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+        "Cache-Control": "private, max-age=3600",
+      });
+      createReadStream(file.path).pipe(res);
+      return;
+    }
+
+    // ----- projects
+    if (path === "/api/projects" && method === "POST") {
+      const body = await readJson<{ path: string; name?: string; defaultAgent?: AgentKind | null }>(req);
+      this.writeJson(res, this.hub.addProject(body));
+      return;
+    }
+    if (segments[1] === "projects" && segments[2]) {
+      const projectId = decodeURIComponent(segments[2]);
+      if (method === "PATCH") {
+        const body = await readJson<{ name?: string; defaultAgent?: AgentKind | null }>(req);
+        this.writeJson(res, this.hub.updateProject(projectId, body));
+        return;
+      }
+      if (method === "DELETE") {
+        this.hub.removeProject(projectId);
+        this.writeJson(res, { ok: true });
+        return;
+      }
+    }
+
+    // ----- runs
+    if (segments[1] === "runs" && segments[2]) {
+      const runId = decodeURIComponent(segments[2]);
+      const tail = segments[3];
+      if (tail === "events" && method === "GET") {
+        const after = Number(url.searchParams.get("after") ?? "0") || 0;
+        this.writeJson(res, { events: await this.hub.runEvents(runId, after) });
+        return;
+      }
+      if (tail === "cancel" && method === "POST") {
+        this.hub.cancelRun(runId);
+        this.writeJson(res, { ok: true });
+        return;
+      }
+      if (tail === "reply" && method === "POST") {
+        const body = await readJson<{ text?: string }>(req);
+        this.assertTextLength(String(body.text ?? ""));
+        this.writeJson(res, this.hub.reply(actor, runId, String(body.text ?? "")));
+        return;
+      }
+    }
+
+    // ----- agents / settings
+    if (path === "/api/agents/refresh" && method === "POST") {
+      this.writeJson(res, { agents: await this.hub.refreshAgents() });
+      return;
+    }
+    if (path === "/api/settings" && method === "POST") {
+      const body = await readJson<Partial<HostSettings>>(req);
+      this.writeJson(res, this.hub.updateSettings(body));
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: false, message: "接口不存在" }));
+  }
+
+  private assertTextLength(text: string): void {
+    if (text.length > this.limits.maxTextChars) {
+      throw Object.assign(new Error("文字太长了。"), { code: "TEXT_TOO_LONG" });
+    }
+  }
+
+  private async serveApk(res: http.ServerResponse): Promise<void> {
+    if (!this.apkPath) {
+      res.writeHead(404).end("当前电脑端没有附带 Android 安装包。");
+      return;
+    }
+    const info = await stat(this.apkPath);
+    res.writeHead(200, {
+      "Content-Type": "application/vnd.android.package-archive",
+      "Content-Length": info.size,
+      "Content-Disposition": `attachment; filename="Nearbox-${this.appVersion}.apk"`,
+      "Cache-Control": "no-store",
+    });
+    createReadStream(this.apkPath).pipe(res);
+  }
+
+  private async serveRenderer(res: http.ServerResponse, pathname: string): Promise<void> {
     const root = this.rendererRoot;
     if (!root) {
       res.writeHead(404).end();
@@ -411,10 +515,9 @@ export class LanServer extends EventEmitter {
     const body = await readFile(file);
     res.writeHead(200, {
       "Content-Type": MIME[extname(file)] ?? "application/octet-stream",
-      "Cache-Control": "no-cache",
+      "Cache-Control": file.endsWith("index.html") ? "no-cache" : "public, max-age=86400",
     });
     res.end(body);
-    void req;
   }
 
   private proxyVite(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -465,11 +568,13 @@ export class LanServer extends EventEmitter {
     proxy.end();
   }
 
+  // ------------------------------------------------------------- WebSocket
+
   private bindSocket(socket: WebSocket, req: http.IncomingMessage): void {
     const url = new URL(req.url ?? "/", "http://nearbox.local");
-    let session: Session;
+    let session: PairedSession;
     try {
-      session = this.authorizeFromParams(req, url);
+      session = this.authorize(req, url);
     } catch (error) {
       sendSocket(socket, {
         type: "error",
@@ -480,19 +585,25 @@ export class LanServer extends EventEmitter {
       return;
     }
 
-    session.device.online = true;
-    session.device.lastSeenAt = new Date().toISOString();
-    this.devices.set(session.device.id, session.device);
-    const binding = { socket, deviceId: session.device.id };
+    const device = this.devices.get(session.device.id) ?? session.device;
+    device.online = true;
+    device.lastSeenAt = new Date().toISOString();
+    this.devices.set(device.id, device);
+    const binding: SocketBinding = { socket, deviceId: device.id, runs: new Set() };
     this.sockets.add(binding);
-    sendSocket(socket, { type: "ready", self: session.device, snapshot: this.snapshot() });
-    this.broadcastSnapshot();
+    sendSocket(socket, { type: "ready", self: device, snapshot: this.snapshot() });
+    this.scheduleSnapshot();
 
     socket.on("message", (raw) => {
       try {
         const event = JSON.parse(String(raw)) as ClientToHost;
-        if (event.type === "send-text") {
-          this.acceptText(session.device, event.id || newId(), event.text);
+        if (event.type === "capture") {
+          this.assertTextLength(event.text);
+          this.hub.capture(actorOf(device), event.text, event.id || newId());
+        } else if (event.type === "subscribe-run") {
+          binding.runs.add(event.runId);
+        } else if (event.type === "unsubscribe-run") {
+          binding.runs.delete(event.runId);
         }
       } catch (error) {
         sendSocket(socket, {
@@ -504,29 +615,51 @@ export class LanServer extends EventEmitter {
     });
     socket.on("close", () => {
       this.sockets.delete(binding);
-      const stillOnline = [...this.sockets].some((item) => item.deviceId === session.device.id);
-      if (!stillOnline && session.device.id !== "desktop") {
-        session.device.online = false;
-        session.device.lastSeenAt = new Date().toISOString();
-        this.devices.set(session.device.id, session.device);
-        this.broadcastSnapshot();
+      const stillOnline = [...this.sockets].some((item) => item.deviceId === device.id);
+      if (!stillOnline && device.id !== "desktop") {
+        device.online = false;
+        device.lastSeenAt = new Date().toISOString();
+        this.scheduleSnapshot();
       }
     });
   }
 
-  private authorize(req: http.IncomingMessage, url: URL): Session {
-    return this.authorizeFromParams(req, url);
+  private broadcastRunEvent(runId: string, event: RunEvent): void {
+    const payload = JSON.stringify({ type: "run-event", runId, event } satisfies HostToClient);
+    for (const binding of this.sockets) {
+      if (binding.runs.has(runId) && binding.socket.readyState === WebSocket.OPEN) {
+        binding.socket.send(payload);
+      }
+    }
   }
 
-  private requireDesktop(req: http.IncomingMessage, url: URL): Session {
-    const session = this.authorizeFromParams(req, url);
+  /** Snapshots are coalesced so a burst of changes produces one broadcast. */
+  private scheduleSnapshot(): void {
+    if (this.snapshotTimer) {
+      return;
+    }
+    this.snapshotTimer = setTimeout(() => {
+      this.snapshotTimer = null;
+      const snapshot = this.snapshot();
+      const payload = JSON.stringify({ type: "snapshot", snapshot } satisfies HostToClient);
+      for (const binding of this.sockets) {
+        if (binding.socket.readyState === WebSocket.OPEN) {
+          binding.socket.send(payload);
+        }
+      }
+      this.emit("snapshot", snapshot);
+    }, 60);
+  }
+
+  // ------------------------------------------------------------------ auth
+
+  private requireDesktop(session: PairedSession): void {
     if (session.device.role !== "desktop") {
       throw Object.assign(new Error("仅电脑端可以执行该操作。"), { code: "UNAUTHORIZED" });
     }
-    return session;
   }
 
-  private authorizeFromParams(req: http.IncomingMessage, url: URL): Session {
+  private authorize(req: http.IncomingMessage, url: URL): PairedSession {
     const token = bearerToken(req) || url.searchParams.get("token") || url.searchParams.get("t") || "";
     if (token && token === this.desktopSecret) {
       return {
@@ -552,37 +685,21 @@ export class LanServer extends EventEmitter {
         online: true,
         lastSeenAt: new Date().toISOString(),
       };
-      const session = { token: randomBytes(18).toString("base64url"), device };
+      const session: PairedSession = { token: randomBytes(18).toString("base64url"), device };
       this.sessions.set(session.token, session);
       this.devices.set(device.id, device);
+      this.persistSessions();
       return session;
     }
     throw Object.assign(new Error("邀请已失效，请重新扫电脑上的二维码。"), { code: "UNAUTHORIZED" });
   }
 
-  private publicSnapshot(session: Session): HostSnapshot & { sessionToken: string } {
-    return { ...this.snapshot(), sessionToken: session.token };
-  }
-
-  private broadcastSnapshot(): void {
-    this.broadcast({ type: "snapshot", snapshot: this.snapshot() });
-    this.emit("snapshot", this.snapshot());
-  }
-
-  private broadcast(event: HostToClient): void {
-    const payload = JSON.stringify(event);
-    for (const binding of this.sockets) {
-      if (binding.socket.readyState === WebSocket.OPEN) {
-        binding.socket.send(payload);
-      }
-    }
-  }
-
-  private touchDevice(deviceId: string): void {
-    const device = this.devices.get(deviceId);
-    if (device) {
-      device.lastSeenAt = new Date().toISOString();
-    }
+  private persistSessions(): void {
+    this.hub.store.state.sessions = [...this.sessions.values()].map((session) => ({
+      token: session.token,
+      device: { ...session.device, online: false },
+    }));
+    this.hub.store.save();
   }
 
   private writeJson(res: http.ServerResponse, body: unknown, status = 200): void {
@@ -594,6 +711,10 @@ export class LanServer extends EventEmitter {
     });
     res.end(JSON.stringify(body));
   }
+}
+
+function actorOf(device: DeviceInfo): Actor {
+  return { id: device.id, name: device.name, role: device.role };
 }
 
 function sendSocket(socket: WebSocket, event: HostToClient): void {
@@ -629,11 +750,14 @@ function safeSegment(name: string): string {
 
 async function readJson<T>(req: http.IncomingMessage): Promise<T> {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    if (chunks.reduce((sum, item) => sum + item.length, 0) > 64 * 1024) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > 1024 * 1024) {
       throw new Error("请求过大。");
     }
+    chunks.push(buffer);
   }
   const raw = Buffer.concat(chunks).toString("utf8") || "{}";
   return JSON.parse(raw) as T;
@@ -643,6 +767,6 @@ function corsHeaders(req: http.IncomingMessage): http.OutgoingHttpHeaders {
   return {
     "Access-Control-Allow-Origin": req.headers.origin ?? "*",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
   };
 }

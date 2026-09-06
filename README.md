@@ -1,91 +1,128 @@
 # Nearbox
 
-电脑和手机在同一局域网里互传消息、图片和文件。独立软件，不依赖 Quicker。
+手机记想法，电脑跑 Agent。
 
-电脑端是 Electron 窗口。手机可以用系统相机扫码打开网页，也可以装一个薄壳 Android App。会话 UI 始终由电脑下发，所以更新 Windows 就等于更新手机界面。
+Nearbox 是一个跑在自己电脑上的任务管理器：手机随手记下想法和要做的事，电脑端把任务派给本机装好的编程 Agent（Cursor Agent、Codex、Grok Build、Claude Code、opencode）去干活，结果和实时日志两边都能看。独立软件，不依赖 Quicker，也不经过任何云端服务器。
 
-## 为什么做成独立软件
+## 它解决什么
 
-Quicker 仓库里的 Remote /「手机连接」和 [PR #610](https://github.com/QuickerOrg/Quicker/pull/610) 的互传，都绑在 Quicker Host、Headless Bridge 和 Android WebView 上。这条路重、难发布，也不适合当日常工具用。
+- 想法总是在路上、床上、饭桌上冒出来，电脑不在手边 —— 手机打开 Nearbox 一句话记下，回到电脑前它已经在收集箱里。
+- 有了环境（电脑开着、在家里的 Wi-Fi）就能开工 —— 在手机上把任务派给某个 Agent，指定项目目录，电脑立刻开跑，手机上看进度。
+- Agent 干完后要有人跟进 —— 每次运行的总结写回任务时间线，还能「继续对话」让同一个会话接着改。
 
-Nearbox 只做一件事：
+## 使用方式
 
-1. 电脑在局域网拉起 HTTP + WebSocket
-2. 手机扫码加入
-3. 两边在同一条会话里发文字、图片、文件
+### 电脑端（Windows）
 
-从现有实现里带走的部分：
+1. 从 [Releases](https://github.com/QuickerHub/nearbox/releases) 装最新的 `Nearbox-x.y.z-win-x64.exe`。
+2. 打开后它常驻托盘。「项目」里添加代码目录；「设置」里能看到检测到的 Agent CLI。
+3. Agent 需要你先在本机安装并登录对应的命令行工具（任意一个即可）：
+   - `cursor-agent`（Cursor）
+   - `codex`（OpenAI Codex CLI）
+   - `grok`（Grok Build）
+   - `claude`（Claude Code）
+   - `opencode`
 
-- PR #610 的会话模型：气泡、图文/文件、按设备落盘
-- `Quicker.Remote` 的传输边界：只绑私有网段、staging 后改名、可执行文件拒绝、不自动打开接收内容
+### 手机端
 
-刻意丢掉的部分：Quicker 身份、动作执行、Agent、Android 原生壳、mTLS / SPKI。
+1. 手机和电脑连同一 Wi-Fi。
+2. 电脑「设置 → 连接手机」显示二维码和 6 位验证码。手机用系统相机扫码，或浏览器打开链接输入验证码。
+3. 配对一次就记住了，电脑重启后不用重新扫码。也可以从电脑下载同版本的 Android 薄壳 APK，下次直接从桌面图标打开。
 
-## 使用
+手机界面始终由电脑下发：更新 Windows 安装包就等于更新手机端。
 
-电脑和手机连同一 Wi-Fi（或同一以太网网段）。
+### 一条任务的旅程
+
+```text
+手机：收集箱输入「给登录页加记住密码」  ──►  电脑收集箱出现这条
+电脑或手机：打开任务 → 派给 Agent → 选 Codex + 项目目录 → 开始运行
+电脑：后台启动 codex exec，实时输出流到两端的运行页面
+结束：总结写进任务时间线，系统通知弹出；不满意就在运行页「继续对话」
+```
+
+任务状态：收集箱 → 待办 → 进行中 → 已完成。派发时自动进入「进行中」，什么时候算完由你决定。
+
+## 关于 Agent 的权限
+
+派发时可选两种模式：
+
+- **安全模式**（默认）：Agent 可以改项目目录内的文件，危险命令按各 CLI 自己的策略拦截或询问失败。
+- **完全放开**：所有命令直接执行（对应 `--force` / `--dangerously-bypass-approvals-and-sandbox` / `bypassPermissions` 等）。
+
+每个 Agent 的默认模式、默认模型、命令路径都能在「设置」里改。同一个项目一次只跑一个 Agent，其余排队；不同项目之间的并发上限也在设置里。
+
+已配对的手机可以在这台电脑上启动 Agent、登记目录，请只配对自己的手机，并在「设置」里随时解除。
+
+## 数据在哪
+
+全部在本机用户目录：
+
+- `%APPDATA%\Nearbox\nearbox\data\state.json`：任务、项目、运行记录、配对信息、设置
+- `%APPDATA%\Nearbox\nearbox\data\runs\<id>.jsonl`：每次运行的完整日志
+- `%APPDATA%\Nearbox\nearbox\inbox\<设备名>\`：手机发来的图片和文件
+
+## 开发
 
 ```powershell
 npm install
-npm run dev
+npm run dev        # Electron + Vite 热更新
+npm run typecheck
+npm test
+npm run build && npm start
 ```
 
-窗口左侧出现二维码和 6 位验证码后，用手机扫码，或浏览器打开链接。之后两边可以直接发消息。
+打包：`npm run dist:win`。图标由 `node scripts/make-icons.mjs` 生成。
 
-收到的文件在用户数据目录下的 `nearbox/inbox/<设备名>/`，电脑端点「打开接收文件夹」。
-
-打包预览：
+本地联调时可以固定桌面端密钥，方便用 curl / 浏览器直接调 API：
 
 ```powershell
-npm run build
-npm start
+$env:NEARBOX_DESKTOP_SECRET = "dev-secret"; npm start
+# http://127.0.0.1:17831/api/state?token=dev-secret
 ```
 
 ## 发布
 
-只维护一个版本号：根目录 `package.json`。打 `vX.Y.Z` tag 后，GitHub Actions 会：
+只维护一个版本号：根目录 `package.json`。打 `vX.Y.Z` tag 后 GitHub Actions 会：
 
 1. 检查 tag、`package.json`、`android/version.properties` 是否同一版本
 2. 编 Android 薄壳 APK
 3. 把这份 APK 打进 Windows 安装包
-4. 发布 [GitHub Release](https://github.com/QuickerHub/nearbox/releases)：Windows 安装包 / zip，以及同版本 APK
+4. 发布 [GitHub Release](https://github.com/QuickerHub/nearbox/releases)
 
 ```powershell
-npm version patch --no-git-tag-version
+npm version minor --no-git-tag-version
 npm run android:sync
 git add package.json package-lock.json android/version.properties
 git commit -m "chore: bump version"
-git tag v0.1.1
+git tag v0.2.0
 git push origin main --tags
 ```
-
-tag 必须写成 `v` + `package.json` 的 version，对不上 CI 会直接失败。
-
-更新习惯（从电脑来）：
-
-1. 装新的 Windows 包
-2. 打开 Nearbox，手机扫「连接」码就能用新界面
-3. 只有薄壳本身变了，才让手机扫「安装手机端」码，从这台电脑下载 `/app/nearbox.apk`
-
-不要单独升 Android 去配旧电脑。APK 不带会话页面，也配不上另一版协议。
 
 ## 架构
 
 ```text
-Electron 主进程
-  LanServer  :17831
-    /            同一套 React 页面（电脑窗口 / 手机浏览器）
-    /ws          实时消息
-    /api/text    发文字
-    /api/upload  发文件（原始流，先写 .part 再改名）
-    /api/files   取回已接收文件
-    /app/nearbox.apk  同版本 Android 薄壳（随 Windows 包分发）
+Electron 主进程（托盘常驻）
+  TaskHub        任务 / 项目 / 运行 / 设置，JSON 持久化
+  RunManager     队列（每项目串行）、spawn CLI、解析 JSONL 流、写日志、取消
+  LanServer :17831
+    /              同一套 React 页面（电脑窗口 / 手机浏览器）
+    /ws            快照广播 + 订阅某次运行的实时事件
+    /api/capture   手机 / 电脑快速记录
+    /api/tasks     增删改、备注、派发、默认提示词
+    /api/runs      事件回放、取消、继续对话
+    /api/projects  登记目录
+    /api/upload    图片 / 文件挂到任务
+    /app/nearbox.apk  同版本 Android 薄壳
 
-手机 ──扫码──► http://192.168.x.x:17831/?t=<一次性邀请>
-Android 薄壳只负责打开上述页面，不内嵌另一套 UI
+Agent 适配（src/main/agent-output.ts）
+  cursor-agent -p --output-format stream-json
+  codex exec --json（提示词走 stdin）
+  grok --prompt-file --output-format streaming-json
+  claude -p --output-format stream-json（提示词走 stdin）
+  opencode run --format json
 ```
 
-邀请码 30 分钟有效。配对成功后，手机用会话 token 重连，不必反复扫码。
+Windows 上的 npm / cursor-agent 命令都是 `.cmd` 壳，Node 不能直接 spawn；Nearbox 会解析壳脚本找到真正的 `node.exe + 脚本` 或 `.exe` 来启动，提示词永远不经过 cmd.exe 的命令行。
 
 ## 仓库
 
