@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { BrowserWindow, app, ipcMain, shell } from "electron";
 import { DEFAULT_PORT, type HostSnapshot } from "@shared/protocol";
@@ -51,6 +52,8 @@ async function startHost(): Promise<HostSnapshot> {
     rendererRoot: isDev ? null : join(__dirname, "../renderer"),
     vitePort: 5173,
     desktopSecret,
+    appVersion: app.getVersion(),
+    apkPath: resolveApkPath(),
     port: DEFAULT_PORT,
   });
   await next.start();
@@ -107,3 +110,11 @@ app.on("window-all-closed", () => {
 app.on("before-quit", () => {
   void server?.stop();
 });
+
+function resolveApkPath(): string | null {
+  const candidates = [
+    join(process.resourcesPath, "nearbox.apk"),
+    join(process.cwd(), "resources", "nearbox.apk"),
+  ];
+  return candidates.find((item) => existsSync(item)) ?? null;
+}

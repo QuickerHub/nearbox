@@ -304,6 +304,16 @@ a {
     repeating-linear-gradient(135deg, transparent, transparent 6px, var(--line) 6px, var(--line) 7px);
 }
 
+.qr--apk {
+  width: 148px;
+  height: 148px;
+  margin: 10px auto 0;
+}
+
+.card p {
+  margin-top: 8px;
+}
+
 .pin-row {
   display: flex;
   gap: 6px;

@@ -2,7 +2,7 @@
 
 电脑和手机在同一局域网里互传消息、图片和文件。独立软件，不依赖 Quicker。
 
-电脑端是 Electron 窗口；手机扫二维码用浏览器打开同一套页面。不需要装 Android / iOS 应用。
+电脑端是 Electron 窗口。手机可以用系统相机扫码打开网页，也可以装一个薄壳 Android App。会话 UI 始终由电脑下发，所以更新 Windows 就等于更新手机界面。
 
 ## 为什么做成独立软件
 
@@ -41,6 +41,34 @@ npm run build
 npm start
 ```
 
+## 发布
+
+只维护一个版本号：根目录 `package.json`。打 `vX.Y.Z` tag 后，GitHub Actions 会：
+
+1. 检查 tag、`package.json`、`android/version.properties` 是否同一版本
+2. 编 Android 薄壳 APK
+3. 把这份 APK 打进 Windows 安装包
+4. 发布 [GitHub Release](https://github.com/QuickerHub/nearbox/releases)：Windows 安装包 / zip，以及同版本 APK
+
+```powershell
+npm version patch --no-git-tag-version
+npm run android:sync
+git add package.json package-lock.json android/version.properties
+git commit -m "chore: bump version"
+git tag v0.1.1
+git push origin main --tags
+```
+
+tag 必须写成 `v` + `package.json` 的 version，对不上 CI 会直接失败。
+
+更新习惯（从电脑来）：
+
+1. 装新的 Windows 包
+2. 打开 Nearbox，手机扫「连接」码就能用新界面
+3. 只有薄壳本身变了，才让手机扫「安装手机端」码，从这台电脑下载 `/app/nearbox.apk`
+
+不要单独升 Android 去配旧电脑。APK 不带会话页面，也配不上另一版协议。
+
 ## 架构
 
 ```text
@@ -51,12 +79,14 @@ Electron 主进程
     /api/text    发文字
     /api/upload  发文件（原始流，先写 .part 再改名）
     /api/files   取回已接收文件
+    /app/nearbox.apk  同版本 Android 薄壳（随 Windows 包分发）
 
 手机 ──扫码──► http://192.168.x.x:17831/?t=<一次性邀请>
+Android 薄壳只负责打开上述页面，不内嵌另一套 UI
 ```
 
 邀请码 30 分钟有效。配对成功后，手机用会话 token 重连，不必反复扫码。
 
 ## 仓库
 
-计划放在 [QuickerHub/nearbox](https://github.com/QuickerHub/nearbox)。
+[QuickerHub/nearbox](https://github.com/QuickerHub/nearbox)

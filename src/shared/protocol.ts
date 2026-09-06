@@ -1,4 +1,4 @@
-export const PROTOCOL_VERSION = 1;
+export { PROTOCOL_VERSION } from "./version";
 export const DEFAULT_PORT = 17831;
 
 export type ClientRole = "desktop" | "phone";
@@ -50,6 +50,8 @@ export interface InviteInfo {
   host: string;
   port: number;
   qrDataUrl?: string;
+  apkUrl?: string;
+  apkQrDataUrl?: string;
 }
 
 export interface HostSnapshot {
@@ -63,6 +65,9 @@ export interface HostSnapshot {
   messages: ChatMessage[];
   limits: ShareLimits;
   inboxDir: string;
+  appVersion: string;
+  protocolVersion: number;
+  apkAvailable: boolean;
   listenError?: string;
 }
 

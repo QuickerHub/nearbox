@@ -13,8 +13,11 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "node --experimental-strip-types --test src/main/network.test.ts",
-    "preview": "electron-vite preview"
+    "test": "node --experimental-strip-types --test src/main/network.test.ts src/shared/version.test.ts",
+    "preview": "electron-vite preview",
+    "android:sync": "node scripts/sync-android-version.mjs",
+    "release:check": "node scripts/check-release-version.mjs",
+    "dist:win": "npm run android:sync && npm run build && electron-builder --win"
   },
   "dependencies": {
     "qrcode": "^1.5.4",
@@ -28,6 +31,7 @@
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.0.2",
     "electron": "^37.4.0",
+    "electron-builder": "^26.0.12",
     "electron-vite": "^4.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

@@ -63,6 +63,32 @@ export function PairingPane({
         </div>
       </section>
 
+      {invite?.apkUrl ? (
+        <section className="card">
+          <div className="row">
+            <h2>安装手机端</h2>
+            <span className="muted">v{snapshot.appVersion}</span>
+          </div>
+          <p className="muted">
+            会话页面始终由这台电脑下发。Android 只是薄壳，平时不用更新；真要装或换机，用手机扫下面的码从这台电脑下载同版本 APK。
+          </p>
+          {invite.apkQrDataUrl ? (
+            <img className="qr qr--apk" src={invite.apkQrDataUrl} alt="下载 Android 安装包" />
+          ) : null}
+          <button type="button" className="ghost" onClick={() => void navigator.clipboard.writeText(invite.apkUrl ?? "")}>
+            <CopyIcon />
+            复制安装链接
+          </button>
+        </section>
+      ) : (
+        <section className="card">
+          <h2>手机端</h2>
+          <p className="muted">
+            系统相机扫上面的码即可，不必装 App。打 tag 发布后，Windows 安装包会带上同版本 APK，电脑就能给手机装。
+          </p>
+        </section>
+      )}
+
       <label className="field">
         <span className="label">本机地址</span>
         <select

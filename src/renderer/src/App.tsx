@@ -142,6 +142,8 @@ export function App(): JSX.Element {
             </span>
             <span>·</span>
             <span>{onlinePhones.length ? `${onlinePhones.length} 台手机在线` : "等待手机加入"}</span>
+            <span>·</span>
+            <span>v{snapshot.appVersion}</span>
           </div>
           <div className="chrome__actions">{themeButton}</div>
         </header>

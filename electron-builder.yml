@@ -1,0 +1,28 @@
+appId: com.quickerhub.nearbox
+productName: Nearbox
+copyright: Copyright © QuickerHub
+artifactName: Nearbox-${version}-${os}-${arch}.${ext}
+directories:
+  output: release
+files:
+  - out/**/*
+extraResources:
+  - from: resources
+    to: .
+    filter:
+      - nearbox.apk
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: zip
+      arch:
+        - x64
+  signAndEditExecutable: false
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Nearbox
+asar: true

@@ -18,6 +18,7 @@ import {
   type InviteInfo,
   isImageMediaType,
   newId,
+  PROTOCOL_VERSION,
   type ShareLimits,
 } from "@shared/protocol";
 import { receiveToInbox } from "./files";
@@ -56,6 +57,8 @@ export class LanServer extends EventEmitter {
   private readonly desktopSecret: string;
   private readonly rendererRoot: string | null;
   private readonly vitePort: number;
+  private readonly appVersion: string;
+  private readonly apkPath: string | null;
   private readonly stagingDir: string;
   private readonly filesById = new Map<string, { path: string; name: string; mediaType: string }>();
   private readonly sessions = new Map<string, Session>();
@@ -73,6 +76,8 @@ export class LanServer extends EventEmitter {
     rendererRoot: string | null;
     vitePort: number;
     desktopSecret: string;
+    appVersion: string;
+    apkPath?: string | null;
     port?: number;
   }) {
     super();
@@ -80,6 +85,8 @@ export class LanServer extends EventEmitter {
     this.rendererRoot = options.rendererRoot;
     this.vitePort = options.vitePort;
     this.desktopSecret = options.desktopSecret;
+    this.appVersion = options.appVersion;
+    this.apkPath = options.apkPath && existsSync(options.apkPath) ? options.apkPath : null;
     this.inboxDir = join(options.userData, "inbox");
     this.stagingDir = join(options.userData, "staging");
     this.devices.set("desktop", {
@@ -159,6 +166,9 @@ export class LanServer extends EventEmitter {
       messages: this.messages.slice(-200),
       limits: this.limits,
       inboxDir: this.inboxDir,
+      appVersion: this.appVersion,
+      protocolVersion: PROTOCOL_VERSION,
+      apkAvailable: this.apkPath !== null,
       listenError: this.listenError,
     };
   }
@@ -180,11 +190,10 @@ export class LanServer extends EventEmitter {
     const token = randomBytes(18).toString("base64url");
     const pin = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const url = `http://${this.selectedHost}:${this.port}/?t=${token}`;
-    const qrDataUrl = await QRCode.toDataURL(url, {
-      margin: 1,
-      width: 320,
-      color: { dark: "#111827", light: "#ffffff" },
-    });
+    const qrOptions = { margin: 1, width: 320, color: { dark: "#111827", light: "#ffffff" } };
+    const qrDataUrl = await QRCode.toDataURL(url, qrOptions);
+    const apkUrl = this.apkPath ? `http://${this.selectedHost}:${this.port}/app/nearbox.apk` : undefined;
+    const apkQrDataUrl = apkUrl ? await QRCode.toDataURL(apkUrl, qrOptions) : undefined;
     this.invite = {
       url,
       token,
@@ -193,6 +202,8 @@ export class LanServer extends EventEmitter {
       host: this.selectedHost,
       port: this.port,
       qrDataUrl,
+      apkUrl,
+      apkQrDataUrl,
     };
     this.broadcastSnapshot();
     return this.invite;
@@ -270,6 +281,30 @@ export class LanServer extends EventEmitter {
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "nearbox.local"}`);
       if (req.method === "OPTIONS") {
         res.writeHead(204, corsHeaders(req)).end();
+        return;
+      }
+      if (url.pathname === "/api/app" && req.method === "GET") {
+        this.writeJson(res, {
+          version: this.appVersion,
+          protocol: PROTOCOL_VERSION,
+          apkAvailable: this.apkPath !== null,
+          apkUrl: this.apkPath ? "/app/nearbox.apk" : null,
+        });
+        return;
+      }
+      if (url.pathname === "/app/nearbox.apk" && req.method === "GET") {
+        if (!this.apkPath) {
+          res.writeHead(404).end("当前电脑端没有附带 Android 安装包。");
+          return;
+        }
+        const info = await stat(this.apkPath);
+        res.writeHead(200, {
+          "Content-Type": "application/vnd.android.package-archive",
+          "Content-Length": info.size,
+          "Content-Disposition": `attachment; filename="Nearbox-${this.appVersion}.apk"`,
+          "Cache-Control": "no-store",
+        });
+        createReadStream(this.apkPath).pipe(res);
         return;
       }
       if (url.pathname === "/api/state" && req.method === "GET") {

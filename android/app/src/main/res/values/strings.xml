@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nearbox</string>
+    <string name="host_hint">电脑 IP，例如 192.168.1.8</string>
+    <string name="pin_hint">6 位验证码</string>
+    <string name="connect">连接</string>
+    <string name="paste">粘贴邀请链接</string>
+    <string name="hint">会话页面由电脑下发。把电脑上的验证码填进来，或粘贴扫码得到的链接。</string>
+</resources>
