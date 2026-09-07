@@ -201,6 +201,18 @@ test("cursor-agent shell, edit and rejected calls carry command, diff and reason
   assert.ok(glob[0]?.error?.includes("Path does not exist"));
 });
 
+test("cursor-agent's whole-file diffString is stored as the real hunk, not old+new", () => {
+  const dump = ["--- a/x.ts", "+++ b/x.ts", "@@ -1,3 +1,3 @@", "-const a = 1;", "-const b = 8;", "-const c = 3;", "+const a = 1;", "+const b = 5;", "+const c = 3;"].join("\\n");
+  const parser = createOutputParser("cursor");
+  const all = feedAll(parser, [
+    `{"type":"tool_call","subtype":"completed","call_id":"e2","tool_call":{"editToolCall":{"args":{"path":"D:\\\\p\\\\x.ts"},"result":{"success":{"path":"D:\\\\p\\\\x.ts","linesAdded":3,"linesRemoved":3,"diffString":"${dump}"}}}}}`,
+  ]);
+  const tool = all.events.find((event) => event.tool?.id === "e2")?.tool;
+  assert.equal(tool?.diff, ["@@ -1,3 +1,3 @@", " const a = 1;", "-const b = 8;", "+const b = 5;", " const c = 3;"].join("\n"));
+  assert.equal(tool?.linesAdded, 1);
+  assert.equal(tool?.linesRemoved, 1);
+});
+
 test("claude tool_use / tool_result pairs share an id", () => {
   const parser = createOutputParser("claude");
   const all = feedAll(parser, [
@@ -357,6 +369,7 @@ test("raw ACP session updates from a warm host map like grok's flattened lines",
   ]);
   assert.equal(all.isError, false);
   assert.equal(all.result, "输出是 hi");
+  assert.equal(all.sessionTitle, "Echo");
   // The in_progress tick repeats a status the call already had and is dropped.
   assert.deepEqual(
     all.events.map((event) => event.kind),
@@ -469,6 +482,7 @@ function collect(parser: ReturnType<typeof createOutputParser>, steps: (() => Re
   const events: ParsedEvent[] = [];
   let sessionId: string | undefined;
   let modelLabel: string | undefined;
+  let sessionTitle: string | undefined;
   let result: string | undefined;
   let isError: boolean | undefined;
   for (const step of steps) {
@@ -476,11 +490,12 @@ function collect(parser: ReturnType<typeof createOutputParser>, steps: (() => Re
     events.push(...parsed.events);
     sessionId = parsed.sessionId ?? sessionId;
     modelLabel = parsed.modelLabel ?? modelLabel;
+    sessionTitle = parsed.sessionTitle ?? sessionTitle;
     result = parsed.result ?? result;
     isError = parsed.isError ?? isError;
   }
   const tail = parser.end();
   events.push(...tail.events);
   result = result ?? tail.result;
-  return { events, sessionId, modelLabel, result, isError };
+  return { events, sessionId, modelLabel, sessionTitle, result, isError };
 }

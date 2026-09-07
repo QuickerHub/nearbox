@@ -3,20 +3,29 @@ import type { HostSnapshot, RemoteButton, RemoteControlToHost, RemoteQuality } f
 import type { ClientHandle } from "../lib/client";
 import { connectRemote, type RemoteConnection, type RemoteState } from "../lib/remoteClient";
 import {
+  FULL_CROP,
   MAX_SCALE,
   MIN_SCALE,
+  cropsClose,
   distance,
   fitSize,
+  isFullCrop,
   midpoint,
   pointToFrame,
+  qualityEqual,
+  quantizeCrop,
   refitTransform,
+  streamQuality,
+  visibleCrop,
   wheelZoomFactor,
   zoomAt,
   zoomBetween,
   zoomTo,
+  type CropRect,
   type FramePoint,
   type Point,
   type Size,
+  type StreamQuality,
   type ViewTransform,
 } from "../lib/remoteZoom";
 import { Icon } from "./Icons";
@@ -34,9 +43,9 @@ interface QualityPreset {
 }
 
 const PRESETS: QualityPreset[] = [
-  { id: "smooth", label: "流畅", quality: { quality: 42, fps: 15, maxWidth: 1200 } },
-  { id: "balanced", label: "均衡", quality: { quality: 55, fps: 12, maxWidth: 1440 } },
-  { id: "crisp", label: "清晰", quality: { quality: 72, fps: 10, maxWidth: 1920 } },
+  { id: "smooth", label: "流畅", quality: { quality: 55, fps: 16, maxWidth: 1440 } },
+  { id: "balanced", label: "均衡", quality: { quality: 72, fps: 12, maxWidth: 1920 } },
+  { id: "crisp", label: "清晰", quality: { quality: 86, fps: 10, maxWidth: 2560 } },
 ];
 
 type ModifierCode = "ControlLeft" | "ShiftLeft" | "AltLeft";
@@ -223,6 +232,12 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
   const rightArmedRef = useRef(false);
   const scrollModeRef = useRef(false);
   const supportsInputRef = useRef(true);
+  const presetRef = useRef(PRESETS[1]!);
+  const streamCropRef = useRef<CropRect>({ ...FULL_CROP });
+  const drawnCropRef = useRef<CropRect>({ ...FULL_CROP });
+  const sentQualityRef = useRef<StreamQuality | null>(null);
+  const cropTimerRef = useRef(0);
+  const cropSettleRef = useRef(0);
 
   const [state, setState] = useState<RemoteState>("connecting");
   const [error, setError] = useState<string | null>(null);
@@ -264,14 +279,54 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
       rafRef.current = 0;
       const canvas = canvasRef.current;
       const { t, fit } = layoutRef.current;
+      const crop = drawnCropRef.current;
       if (canvas) {
-        canvas.style.width = `${fit.width}px`;
-        canvas.style.height = `${fit.height}px`;
-        canvas.style.transform = `translate(${t.x}px, ${t.y}px) scale(${t.scale})`;
+        canvas.style.width = `${fit.width * crop.w}px`;
+        canvas.style.height = `${fit.height * crop.h}px`;
+        canvas.style.transform = `translate(${t.x + t.scale * fit.width * crop.x}px, ${t.y + t.scale * fit.height * crop.y}px) scale(${t.scale})`;
       }
       setZoomPct(Math.round(t.scale * 100));
     });
   }, []);
+
+  const pushViewQuality = useCallback(
+    (immediate = false) => {
+      const run = () => {
+        cropTimerRef.current = 0;
+        const { t, fit, viewport } = layoutRef.current;
+        if (viewport.width <= 0 || viewport.height <= 0) {
+          return;
+        }
+        const crop = quantizeCrop(visibleCrop(t, fit, viewport));
+        const next = streamQuality(presetRef.current.quality, crop, viewport, window.devicePixelRatio || 1);
+        if (!sentQualityRef.current || !qualityEqual(sentQualityRef.current, next)) {
+          sentQualityRef.current = next;
+          cropSettleRef.current = performance.now();
+          send({
+            t: "config",
+            quality: next.quality,
+            fps: next.fps,
+            maxWidth: next.maxWidth,
+            crop: next.crop ?? { ...FULL_CROP },
+          });
+        }
+        applyTransform();
+      };
+      if (immediate) {
+        if (cropTimerRef.current) {
+          window.clearTimeout(cropTimerRef.current);
+          cropTimerRef.current = 0;
+        }
+        run();
+        return;
+      }
+      if (cropTimerRef.current) {
+        return;
+      }
+      cropTimerRef.current = window.setTimeout(run, 140);
+    },
+    [applyTransform, send],
+  );
 
   const relayout = useCallback(() => {
     const viewportEl = viewportRef.current;
@@ -285,14 +340,16 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
     layout.fit = fit;
     layout.viewport = viewport;
     applyTransform();
-  }, [applyTransform]);
+    pushViewQuality();
+  }, [applyTransform, pushViewQuality]);
 
   const setTransform = useCallback(
     (t: ViewTransform) => {
       layoutRef.current.t = t;
       applyTransform();
+      pushViewQuality();
     },
-    [applyTransform],
+    [applyTransform, pushViewQuality],
   );
 
   const stepZoom = useCallback(
@@ -322,6 +379,10 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
         window.cancelAnimationFrame(rafRef.current);
         rafRef.current = 0;
       }
+      if (cropTimerRef.current) {
+        window.clearTimeout(cropTimerRef.current);
+        cropTimerRef.current = 0;
+      }
     };
   }, [relayout]);
 
@@ -335,18 +396,55 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
       decode.busy = true;
       void createImageBitmap(blob)
         .then((bitmap) => {
+          const layout = layoutRef.current;
+          const streamCrop = streamCropRef.current;
+          const cropped = !isFullCrop(streamCrop);
+          const settled = performance.now() - cropSettleRef.current > 80;
+          if (layout.frame && !settled) {
+            bitmap.close();
+            decode.busy = false;
+            if (decode.queued) {
+              const next = decode.queued;
+              decode.queued = null;
+              drawFrame(next);
+            }
+            return;
+          }
+          if (cropped && !layout.frame) {
+            bitmap.close();
+            decode.busy = false;
+            if (decode.queued) {
+              const next = decode.queued;
+              decode.queued = null;
+              drawFrame(next);
+            }
+            return;
+          }
           const canvas = canvasRef.current;
           if (canvas) {
             if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
               canvas.width = bitmap.width;
               canvas.height = bitmap.height;
             }
-            canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.imageSmoothingEnabled = true;
+              ctx.imageSmoothingQuality = "high";
+              ctx.drawImage(bitmap, 0, 0);
+            }
           }
-          const layout = layoutRef.current;
-          if (!layout.frame || layout.frame.width !== bitmap.width || layout.frame.height !== bitmap.height) {
-            layout.frame = { width: bitmap.width, height: bitmap.height };
-            relayout();
+          if (!cropped) {
+            if (!layout.frame || layout.frame.width !== bitmap.width || layout.frame.height !== bitmap.height) {
+              layout.frame = { width: bitmap.width, height: bitmap.height };
+              drawnCropRef.current = { ...FULL_CROP };
+              relayout();
+            } else {
+              drawnCropRef.current = { ...FULL_CROP };
+              applyTransform();
+            }
+          } else {
+            drawnCropRef.current = streamCrop;
+            applyTransform();
           }
           bitmap.close();
           framesRef.current += 1;
@@ -362,8 +460,26 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
           decode.busy = false;
         });
     },
-    [relayout],
+    [applyTransform, relayout],
   );
+
+  const acceptHostQuality = useCallback((quality: RemoteQuality) => {
+    const crop = quality.crop ?? FULL_CROP;
+    if (!cropsClose(streamCropRef.current, crop, 0.001)) {
+      streamCropRef.current = { ...crop };
+      cropSettleRef.current = performance.now();
+    }
+    const match = PRESETS.find(
+      (preset) =>
+        !quality.crop &&
+        preset.quality.maxWidth === quality.maxWidth &&
+        preset.quality.quality === quality.quality,
+    );
+    if (match) {
+      setPresetId(match.id);
+      presetRef.current = match;
+    }
+  }, []);
 
   // ------------------------------------------------------------------ connection
 
@@ -392,17 +508,10 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
       onHello: (_display, canInput, quality) => {
         supportsInputRef.current = canInput;
         setSupportsInput(canInput);
-        const match = PRESETS.find((preset) => preset.quality.maxWidth === quality.maxWidth);
-        if (match) {
-          setPresetId(match.id);
-        }
+        acceptHostQuality(quality);
+        pushViewQuality(true);
       },
-      onConfig: (quality) => {
-        const match = PRESETS.find((preset) => preset.quality.maxWidth === quality.maxWidth);
-        if (match) {
-          setPresetId(match.id);
-        }
-      },
+      onConfig: acceptHostQuality,
       onPeers: setControllers,
       onPong: () => undefined,
       onError: (message) => setError(message),
@@ -413,7 +522,7 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
       conn.dispose();
       connRef.current = null;
     };
-  }, [client.origin, client.token, drawFrame]);
+  }, [acceptHostQuality, client.origin, client.token, drawFrame, pushViewQuality]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -934,7 +1043,9 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
 
   const applyPreset = (preset: QualityPreset) => {
     setPresetId(preset.id);
-    send({ t: "config", ...preset.quality });
+    presetRef.current = preset;
+    sentQualityRef.current = null;
+    pushViewQuality(true);
   };
 
   const sendText = () => {

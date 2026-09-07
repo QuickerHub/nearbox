@@ -223,6 +223,8 @@ export interface ParseResult {
   sessionId?: string;
   /** Model name the CLI reported, when it says. */
   modelLabel?: string;
+  /** Conversation title the agent generated (ACP `session_info_update`). */
+  sessionTitle?: string;
   result?: string;
   isError?: boolean;
 }
@@ -625,11 +627,17 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
     case "available_commands":
     case "available_commands_update":
     case "current_mode_update":
-    case "session_info_update":
     case "config_option_update":
     case "user_message_chunk":
     case "usage":
       return;
+    case "session_info_update": {
+      const title = typeof data.title === "string" ? data.title.replace(/\s+/g, " ").trim() : "";
+      if (title) {
+        out.sessionTitle = title;
+      }
+      return;
+    }
     case "thought":
     case "agent_thought_chunk":
       sink.delta(events, "thinking", chunkText(data));

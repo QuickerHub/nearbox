@@ -6,6 +6,7 @@ import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type AgentKind, type AgentMo
 import { MODEL_LIST_ARGS, parseModelList } from "./agent-models";
 import { quoteForCmd, type ResolvedCommand } from "./agent-output";
 import { resolveCursorAgentBundle } from "./cursor-bundle.ts";
+import { ensureCursorAgentHttp1 } from "./cursor-http.ts";
 
 export {
   buildInvocation,
@@ -85,6 +86,8 @@ export function spawnEnv(): NodeJS.ProcessEnv {
   if (!env.NODE_COMPILE_CACHE) {
     env.NODE_COMPILE_CACHE = join(tmpdir(), "nearbox-node-compile-cache");
   }
+  // Long Cursor turns die on HTTP/2's 5 s keepalive ping; flip the CLI onto HTTP/1.1 first.
+  ensureCursorAgentHttp1(env);
   return env;
 }
 

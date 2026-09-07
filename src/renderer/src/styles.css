@@ -157,7 +157,19 @@ a {
 
 .icon {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  vertical-align: middle;
+  overflow: visible;
+}
+
+.icon svg,
+svg.lucide {
   display: block;
+  flex: 0 0 auto;
+  overflow: visible;
 }
 
 /* ------------------------------------------------------------------ shells */
@@ -499,6 +511,12 @@ a {
   width: 34px;
   height: 34px;
   padding: 0;
+  line-height: 0;
+}
+
+button:has(> .icon:only-child),
+a:has(> .icon:only-child) {
+  justify-content: center;
 }
 
 .icon-btn--plain {
@@ -1442,8 +1460,10 @@ a {
 .trow__icon {
   flex: 0 0 auto;
   display: inline-flex;
-  width: 16px;
+  align-items: center;
   justify-content: center;
+  width: 16px;
+  height: 16px;
   color: var(--muted);
   opacity: 0.85;
 }
@@ -2191,11 +2211,13 @@ a {
 .composer__attach {
   width: 30px;
   height: 30px;
+  line-height: 0;
 }
 
 .composer__send {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   min-height: 32px;
   padding: 0 14px;
@@ -2223,6 +2245,7 @@ a {
 .composer__stop {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
   min-height: 32px;
   padding: 0 12px;
@@ -2535,6 +2558,7 @@ a {
   color: var(--text);
   font-size: 12.5px;
   font-weight: 550;
+  line-height: 1;
 }
 
 .chip-btn:hover,
@@ -2556,6 +2580,7 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.25;
 }
 
 .chip-btn__chevron {
@@ -2633,7 +2658,11 @@ a {
 
 .menu-item__icon {
   width: 14px;
+  height: 14px;
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--muted);
 }
 
@@ -2904,6 +2933,7 @@ a {
   width: 24px;
   height: 24px;
   min-height: 24px;
+  line-height: 0;
 }
 
 .menu__search {
@@ -3545,10 +3575,15 @@ a {
 
 .app--phone .thread__actions .ghost {
   width: 34px;
+  height: 34px;
+  min-height: 34px;
   padding: 0;
+  justify-content: center;
+  font-size: 0;
+  line-height: 0;
 }
 
-.app--phone .thread__actions .ghost span {
+.app--phone .thread__actions .ghost > span:not(.icon) {
   display: none;
 }
 
@@ -3617,23 +3652,22 @@ a {
   display: none;
 }
 
-.app--phone .composer__send {
+.app--phone .composer__send,
+.app--phone .composer__stop {
   width: 36px;
+  height: 36px;
   min-height: 36px;
   padding: 0;
   border-radius: 999px;
+  justify-content: center;
+  /* Hidden labels still leave JSX whitespace as a flex item; collapse it. */
+  font-size: 0;
+  line-height: 0;
 }
 
 .app--phone .composer__send-label,
-.app--phone .composer__stop span {
+.app--phone .composer__stop > span:not(.icon) {
   display: none;
-}
-
-.app--phone .composer__stop {
-  width: 36px;
-  min-height: 36px;
-  padding: 0;
-  border-radius: 999px;
 }
 
 .app--phone .bubble {
@@ -3935,6 +3969,7 @@ a {
   will-change: transform;
   background: #000;
   pointer-events: none;
+  image-rendering: high-quality;
 }
 
 .remote__canvas--empty {
@@ -3974,6 +4009,7 @@ a {
 
 .remote__zoom-btn {
   width: 32px;
+  line-height: 0;
 }
 
 .remote__zoom-btn:disabled {
@@ -4078,6 +4114,7 @@ a {
   margin-left: auto;
   width: 30px;
   height: 30px;
+  line-height: 0;
 }
 
 /* Pill toggles for pointer modes and sticky modifiers. */

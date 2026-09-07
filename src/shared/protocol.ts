@@ -469,16 +469,29 @@ export interface RemoteStatus {
 
 export type RemoteButton = "left" | "right" | "middle";
 
+/** Normalized rectangle over the full primary screen; omitted means the whole frame. */
+export interface RemoteCrop {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface RemoteQuality {
   /** JPEG quality, 20-95. */
   quality: number;
   /** Target frames per second, 1-30. */
   fps: number;
-  /** Longest edge of the streamed frame in pixels. */
+  /** Longest edge of the streamed frame in pixels (the crop, when one is set). */
   maxWidth: number;
+  /**
+   * When set, only this region of the screen is encoded. Viewers send it while
+   * zoomed in so the visible area can stay at native-ish resolution.
+   */
+  crop?: RemoteCrop;
 }
 
-export const DEFAULT_REMOTE_QUALITY: RemoteQuality = { quality: 55, fps: 12, maxWidth: 1440 };
+export const DEFAULT_REMOTE_QUALITY: RemoteQuality = { quality: 72, fps: 12, maxWidth: 1920 };
 
 /**
  * Control-channel messages a viewer sends up to the host. Screen frames come
@@ -494,7 +507,7 @@ export type RemoteControlToHost =
   | { t: "key"; code: string; down: boolean }
   | { t: "combo"; codes: string[] }
   | { t: "text"; value: string }
-  | { t: "config"; quality?: number; fps?: number; maxWidth?: number }
+  | { t: "config"; quality?: number; fps?: number; maxWidth?: number; crop?: RemoteCrop }
   | { t: "ping"; ts?: number };
 
 export type RemoteControlToClient =
@@ -621,25 +634,7 @@ export function newId(): string {
   return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
 }
 
-/** First line becomes the title; the rest becomes details. */
-export function splitCapture(text: string): { title: string; details: string } {
-  const normalized = text.replace(/\r\n/g, "\n").trim();
-  const newline = normalized.indexOf("\n");
-  if (newline === -1) {
-    return { title: clampTitle(normalized), details: normalized.length > 120 ? normalized : "" };
-  }
-  const title = normalized.slice(0, newline).trim();
-  const rest = normalized.slice(newline + 1).trim();
-  if (!title) {
-    return { title: clampTitle(rest), details: rest };
-  }
-  return { title: clampTitle(title), details: rest };
-}
-
-function clampTitle(value: string): string {
-  const single = value.replace(/\s+/g, " ").trim();
-  return single.length > 120 ? `${single.slice(0, 117)}…` : single;
-}
+export { adoptSessionTitle, splitCapture } from "./titles";
 
 export function isRunActive(run: Pick<AgentRun, "status">): boolean {
   return run.status === "queued" || run.status === "running";

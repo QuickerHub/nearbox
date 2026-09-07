@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { countChanges, diffLines, unifiedDiff } from "./diff.ts";
+import { countChanges, diffLines, refineRewriteDiff, unifiedDiff } from "./diff.ts";
 
 const FILE = ["import x from 'x';", "", "export function a() {", "  return 1;", "}", "", "export function b() {", "  return 2;", "}", ""].join("\n");
 
@@ -60,4 +60,23 @@ test("a full rewrite of a large file still comes back quickly", () => {
 test("counts ignore file headers but not lines that merely start with dashes", () => {
   const diff = ["--- a/x.sql", "+++ b/x.sql", "@@ -1,2 +1,2 @@", "--- old comment", "+-- new comment", " select 1;"].join("\n");
   assert.deepEqual(countChanges(diff), { added: 1, removed: 1 });
+});
+
+test("a headed whole-file dump is re-diffed; a real hunk and a clipped dump stay as they are", () => {
+  const before = ["const a = 1;", "const b = 8;", "const c = 3;"];
+  const after = ["const a = 1;", "const b = 5;", "const c = 3;"];
+  const dump = ["--- a/x.ts", "+++ b/x.ts", "@@ -1,3 +1,3 @@", ...before.map((line) => `-${line}`), ...after.map((line) => `+${line}`)].join("\n");
+  assert.equal(refineRewriteDiff(dump), ["@@ -1,3 +1,3 @@", " const a = 1;", "-const b = 8;", "+const b = 5;", " const c = 3;"].join("\n"));
+  // Same dump without a header, the shape older logs kept.
+  assert.equal(
+    refineRewriteDiff([...before.map((line) => `-${line}`), ...after.map((line) => `+${line}`)].join("\n")),
+    ["@@ -1,3 +1,3 @@", " const a = 1;", "-const b = 8;", "+const b = 5;", " const c = 3;"].join("\n"),
+  );
+  const real = ["@@ -10,3 +10,3 @@", " select 1;", "--- old", "+-- new", " select 2;"].join("\n");
+  assert.equal(refineRewriteDiff(real), real);
+  const clipped = `-a\n-b\n+a\n… 已省略 120 个字符`;
+  assert.equal(refineRewriteDiff(clipped), clipped);
+  // New / deleted files are already honest (all + or all −) and stay.
+  const created = "--- /dev/null\n+++ b/hello.txt\n+hi\n+there";
+  assert.equal(refineRewriteDiff(created), created);
 });

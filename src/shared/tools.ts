@@ -1,3 +1,4 @@
+import { countChanges, refineRewriteDiff } from "./diff.ts";
 import type { ToolCall, ToolKind, ToolStatus } from "./protocol";
 
 // How a tool call's arguments and result become a ToolCall, independent of the
@@ -167,9 +168,18 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
     }
     case "edit":
     case "write": {
-      patch.diff = typeof body.diffString === "string" && body.diffString.trim() ? clipHead(body.diffString) : undefined;
-      patch.linesAdded = typeof body.linesAdded === "number" ? body.linesAdded : undefined;
-      patch.linesRemoved = typeof body.linesRemoved === "number" ? body.linesRemoved : undefined;
+      const raw = typeof body.diffString === "string" ? body.diffString.trim() : "";
+      if (raw) {
+        // Refine before clipping: a whole-file dump is huge, the real hunk usually is not.
+        const refined = refineRewriteDiff(raw);
+        patch.diff = clipHead(refined);
+        const counts = countChanges(refined);
+        patch.linesAdded = counts.added;
+        patch.linesRemoved = counts.removed;
+      } else {
+        patch.linesAdded = typeof body.linesAdded === "number" ? body.linesAdded : undefined;
+        patch.linesRemoved = typeof body.linesRemoved === "number" ? body.linesRemoved : undefined;
+      }
       if (typeof body.path === "string" && body.path) {
         patch.files = [body.path];
       }

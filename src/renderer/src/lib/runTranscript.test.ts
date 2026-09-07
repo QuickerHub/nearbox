@@ -197,6 +197,15 @@ test("old whole-file diffs (every line removed, then every line added) are re-di
     diffLines(legacy).map((line) => `${line.tag}:${line.text}`),
     ["hunk:@@ -1,3 +1,3 @@", "ctx:const a = 1;", "del:const b = 8;", "add:const b = 5;", "ctx:const c = 3;"],
   );
+  // cursor-agent's dump is the same shape with a unified-diff header; that used to hide the rewrite.
+  const headed = ["--- a/x.ts", "+++ b/x.ts", "@@ -1,4 +1,4 @@", ...before.map((line) => `-${line}`), ...after.map((line) => `+${line}`)].join("\n");
+  assert.deepEqual(
+    diffLines(headed).filter((line) => line.tag !== "meta").map((line) => `${line.tag}:${line.text}`),
+    ["hunk:@@ -1,3 +1,3 @@", "ctx:const a = 1;", "del:const b = 8;", "add:const b = 5;", "ctx:const c = 3;"],
+  );
+  const shown = displayTool(call("e", { kind: "edit", status: "ok", diff: headed, linesAdded: 4, linesRemoved: 4 }));
+  assert.equal(shown.linesAdded, 1);
+  assert.equal(shown.linesRemoved, 1);
   // A cut-off one cannot be rebuilt and is shown as recorded, note included.
   const clipped = `-a\n-b\n+a\n… 已省略 120 个字符`;
   assert.deepEqual(

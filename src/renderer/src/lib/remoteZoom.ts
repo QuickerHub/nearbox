@@ -150,6 +150,134 @@ export function pointToFrame(point: Point, t: ViewTransform, fit: Size): FramePo
   return { x: clamp01(x), y: clamp01(y), inside: x >= 0 && x <= 1 && y >= 0 && y <= 1 };
 }
 
+export interface CropRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export const FULL_CROP: CropRect = { x: 0, y: 0, w: 1, h: 1 };
+
+export function isFullCrop(crop: CropRect): boolean {
+  return crop.x <= 0.001 && crop.y <= 0.001 && crop.w >= 0.998 && crop.h >= 0.998;
+}
+
+/** The portion of the frame currently on screen, padded so a small pan does not re-request. */
+export function visibleCrop(t: ViewTransform, fit: Size, viewport: Size, pad = 0.14): CropRect {
+  const drawnWidth = fit.width * t.scale;
+  const drawnHeight = fit.height * t.scale;
+  if (drawnWidth <= 0 || drawnHeight <= 0 || viewport.width <= 0 || viewport.height <= 0) {
+    return { ...FULL_CROP };
+  }
+  const visibleW = viewport.width / drawnWidth;
+  const visibleH = viewport.height / drawnHeight;
+  if (t.scale <= 1.08 || (visibleW >= 0.9 && visibleH >= 0.9)) {
+    return { ...FULL_CROP };
+  }
+  let x = (0 - t.x) / drawnWidth;
+  let y = (0 - t.y) / drawnHeight;
+  let w = visibleW;
+  let h = visibleH;
+  const padX = w * pad;
+  const padY = h * pad;
+  x -= padX;
+  y -= padY;
+  w += padX * 2;
+  h += padY * 2;
+  if (x < 0) {
+    w += x;
+    x = 0;
+  }
+  if (y < 0) {
+    h += y;
+    y = 0;
+  }
+  if (x + w > 1) {
+    w = 1 - x;
+  }
+  if (y + h > 1) {
+    h = 1 - y;
+  }
+  return {
+    x: clamp01(x),
+    y: clamp01(y),
+    w: Math.max(0.08, w),
+    h: Math.max(0.08, h),
+  };
+}
+
+/** Snap a crop onto a coarse grid so tiny pans do not spam the host. */
+export function quantizeCrop(crop: CropRect, steps = 24): CropRect {
+  const snap = (value: number): number => Math.round(value * steps) / steps;
+  const next = {
+    x: clamp01(snap(crop.x)),
+    y: clamp01(snap(crop.y)),
+    w: Math.max(1 / steps, snap(crop.w)),
+    h: Math.max(1 / steps, snap(crop.h)),
+  };
+  if (next.x + next.w > 1) {
+    next.w = 1 - next.x;
+  }
+  if (next.y + next.h > 1) {
+    next.h = 1 - next.y;
+  }
+  return isFullCrop(next) ? { ...FULL_CROP } : next;
+}
+
+export function cropsClose(a: CropRect, b: CropRect, epsilon = 0.02): boolean {
+  return Math.abs(a.x - b.x) <= epsilon && Math.abs(a.y - b.y) <= epsilon && Math.abs(a.w - b.w) <= epsilon && Math.abs(a.h - b.h) <= epsilon;
+}
+
+/** True when `bitmap` has the aspect we expect for `crop` of `frame`. */
+export function frameMatchesCrop(bitmap: Size, frame: Size, crop: CropRect): boolean {
+  if (bitmap.width <= 0 || bitmap.height <= 0 || frame.width <= 0 || frame.height <= 0) {
+    return false;
+  }
+  const expected = (Math.max(0.08, crop.w) * frame.width) / (Math.max(0.08, crop.h) * frame.height);
+  const actual = bitmap.width / bitmap.height;
+  return Math.abs(actual - expected) / expected < 0.08;
+}
+
+export interface StreamQuality {
+  quality: number;
+  fps: number;
+  maxWidth: number;
+  crop?: CropRect;
+}
+
+/**
+ * Encode the visible region at the phone's physical pixel size when zoomed;
+ * otherwise keep the user's preset. Never upscales past 3840.
+ */
+export function streamQuality(
+  preset: { quality: number; fps: number; maxWidth: number },
+  crop: CropRect,
+  viewport: Size,
+  dpr: number,
+): StreamQuality {
+  if (isFullCrop(crop)) {
+    return { quality: preset.quality, fps: preset.fps, maxWidth: preset.maxWidth };
+  }
+  const pixelRatio = Math.min(3.5, Math.max(1, Number.isFinite(dpr) ? dpr : 1));
+  const longest = Math.max(viewport.width, viewport.height) * pixelRatio;
+  return {
+    quality: Math.max(preset.quality, 82),
+    fps: Math.min(preset.fps, 10),
+    maxWidth: Math.min(3840, Math.max(960, Math.round(longest))),
+    crop,
+  };
+}
+
+export function qualityEqual(a: StreamQuality, b: StreamQuality): boolean {
+  if (a.quality !== b.quality || a.fps !== b.fps || a.maxWidth !== b.maxWidth) {
+    return false;
+  }
+  const ac = a.crop ?? FULL_CROP;
+  const bc = b.crop ?? FULL_CROP;
+  return cropsClose(ac, bc, 0.001);
+}
+
 export function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }

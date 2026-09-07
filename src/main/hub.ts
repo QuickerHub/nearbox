@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, statSync } from "node:fs";
 import { join, resolve as resolvePath } from "node:path";
 import {
+  adoptSessionTitle,
   AGENT_KINDS,
   AGENT_LABELS,
   type Actor,
@@ -38,6 +39,7 @@ import {
   type TaskStatus,
 } from "@shared/protocol";
 import { detectAgents, listAgentModels } from "./agents";
+import { ensureCursorAgentHttp1 } from "./cursor-http.ts";
 import { readCursorIdeModels } from "./cursor-ide-state.ts";
 import type { DelegationConfig } from "./delegation";
 import { discoverDevices } from "./lan-discover";
@@ -114,6 +116,9 @@ export class TaskHub extends EventEmitter {
         this.store.save();
         this.changed();
       },
+      onSessionTitle: (run, title) => {
+        this.applySessionTitle(run.taskId, title);
+      },
       onRunFinished: (run) => {
         this.emit("run-finished", run);
       },
@@ -124,6 +129,8 @@ export class TaskHub extends EventEmitter {
   }
 
   async init(): Promise<void> {
+    // Before any cursor-agent process starts: HTTP/2 keepalive pings time out on long turns.
+    ensureCursorAgentHttp1();
     await this.runner.init();
     await this.refreshAgents();
     // The app lives in the tray for days; catalogs gain and lose models meanwhile.
@@ -1030,6 +1037,22 @@ export class TaskHub extends EventEmitter {
     if (task) {
       task.updatedAt = new Date().toISOString();
     }
+  }
+
+  /** Replace a long first-line dump with the name the agent gave the conversation. */
+  private applySessionTitle(taskId: string, incoming: string): void {
+    const task = this.tasks.find((item) => item.id === taskId);
+    if (!task) {
+      return;
+    }
+    const next = adoptSessionTitle(task.title, incoming);
+    if (!next) {
+      return;
+    }
+    task.title = next;
+    task.updatedAt = new Date().toISOString();
+    this.store.save();
+    this.changed();
   }
 
   private note(from: Actor, kind: TaskNote["kind"], text: string | undefined): TaskNote {

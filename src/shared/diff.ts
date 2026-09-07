@@ -28,6 +28,74 @@ export function unifiedDiff(oldText: string, newText: string, context = DEFAULT_
   return formatHunks(diffLines(splitLines(oldText, newText), splitLines(newText, oldText)), context);
 }
 
+/**
+ * cursor-agent (and older Nearbox logs) often describe an edit as the whole
+ * file deleted, then the whole file added — sometimes wrapped in a `---` /
+ * `+++` / `@@` header, sometimes not. That is a dump, not a diff: reconstruct
+ * the two versions and work out the changed lines. A real hunk (context
+ * lines, or `-`/`+` interleaved) is left alone; a clipped dump cannot be
+ * rebuilt and is also left alone.
+ */
+export function refineRewriteDiff(diff: string): string {
+  if (/已省略 \d+ 个字符/.test(diff)) {
+    return diff;
+  }
+  const lines = diff.replace(/\r\n/g, "\n").split("\n");
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  const removed: string[] = [];
+  const added: string[] = [];
+  let phase: "head" | "del" | "add" = "head";
+  for (const line of lines) {
+    if (isDiffMeta(line, phase === "head")) {
+      continue;
+    }
+    if (line.startsWith("+")) {
+      if (phase === "head" || phase === "del") {
+        phase = "add";
+      }
+      added.push(line.slice(1));
+    } else if (line.startsWith("-")) {
+      if (phase === "add") {
+        return diff;
+      }
+      phase = "del";
+      removed.push(line.slice(1));
+    } else {
+      return diff;
+    }
+  }
+  if (!removed.length || !added.length) {
+    return diff;
+  }
+  return unifiedDiff(removed.join("\n"), added.join("\n")) || diff;
+}
+
+/** File / hunk / git headers, plus the "no newline" marker. Empty lines only count before the body. */
+function isDiffMeta(line: string, inHead: boolean): boolean {
+  if (line.startsWith("@@") || line.startsWith("\\")) {
+    return true;
+  }
+  if (!inHead) {
+    return false;
+  }
+  return (
+    !line ||
+    line.startsWith("---") ||
+    line.startsWith("+++") ||
+    line.startsWith("diff ") ||
+    line.startsWith("index ") ||
+    line.startsWith("old mode") ||
+    line.startsWith("new mode") ||
+    line.startsWith("new file") ||
+    line.startsWith("deleted file") ||
+    line.startsWith("similarity ") ||
+    line.startsWith("rename ") ||
+    line.startsWith("copy ")
+  );
+}
+
 /** Added and removed line counts of a unified diff (headers and hunk markers excluded). */
 export function countChanges(diff: string): DiffCounts {
   const counts: DiffCounts = { added: 0, removed: 0 };

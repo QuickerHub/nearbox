@@ -1,4 +1,4 @@
-import { unifiedDiff } from "../../../shared/diff.ts";
+import { countChanges, refineRewriteDiff } from "../../../shared/diff.ts";
 import type { RunEvent, ToolCall, ToolKind, ToolStatus } from "../../../shared/protocol";
 import { describeArgs, describeCursorResult, describeRawResult, isRecord, looseJson } from "../../../shared/tools.ts";
 
@@ -243,21 +243,36 @@ const CLIP_NOTE_LINE = /^… 已省略 \d+ 个字符$/;
  * read, `{"totalMatches":…}` for a search — and are unwrapped here.
  */
 export function displayTool(tool: ToolCall): ToolCall {
-  if (!tool.output?.startsWith("{")) {
+  let next = tool;
+  if (tool.output?.startsWith("{")) {
+    const parsed = wholeJson(tool.output);
+    const known = parsed ? describeRawResult(parsed) : null;
+    if (known) {
+      next = {
+        ...tool,
+        output: known.output,
+        error: tool.error ?? known.error,
+        status: known.status === "error" && tool.status === "ok" ? "error" : tool.status,
+      };
+    } else {
+      const content = clippedContent(tool.output);
+      next = content === null ? tool : { ...tool, output: content };
+    }
+  }
+  return refineDisplayedDiff(next);
+}
+
+/** Logs that stored a whole-file dump still open as the few changed lines. */
+function refineDisplayedDiff(tool: ToolCall): ToolCall {
+  if (!tool.diff) {
     return tool;
   }
-  const parsed = wholeJson(tool.output);
-  const known = parsed ? describeRawResult(parsed) : null;
-  if (known) {
-    return {
-      ...tool,
-      output: known.output,
-      error: tool.error ?? known.error,
-      status: known.status === "error" && tool.status === "ok" ? "error" : tool.status,
-    };
+  const refined = refineRewriteDiff(tool.diff);
+  if (refined === tool.diff) {
+    return tool;
   }
-  const content = clippedContent(tool.output);
-  return content === null ? tool : { ...tool, output: content };
+  const counts = countChanges(refined);
+  return { ...tool, diff: refined, linesAdded: counts.added, linesRemoved: counts.removed };
 }
 
 /** Only a complete object counts here: salvaged fragments of a file's text could look like a result. */
@@ -299,7 +314,7 @@ export interface DiffLine {
 
 /** Lines of a unified diff, tagged for colouring and numbered from the hunk headers. */
 export function diffLines(diff: string): DiffLine[] {
-  const lines = restoreLegacyDiff(diff).replace(/\r\n/g, "\n").split("\n");
+  const lines = refineRewriteDiff(diff).replace(/\r\n/g, "\n").split("\n");
   if (lines.at(-1) === "") {
     lines.pop();
   }
@@ -346,32 +361,6 @@ export function diffLines(diff: string): DiffLine[] {
   return out;
 }
 
-/**
- * Diffs recorded before Nearbox worked them out properly: every old line as
- * `-`, then every new line as `+`. Both halves complete means the two versions
- * can be rebuilt and diffed for real; a clipped or headed one is left alone.
- */
-function restoreLegacyDiff(diff: string): string {
-  const lines = diff.replace(/\r\n/g, "\n").split("\n");
-  if (lines.some((line) => line.startsWith("@@")) || CLIP_NOTE.test(diff) || /^(---|\+\+\+)/.test(lines[0] ?? "")) {
-    return diff;
-  }
-  let index = 0;
-  const removed: string[] = [];
-  while (index < lines.length && lines[index]!.startsWith("-")) {
-    removed.push(lines[index]!.slice(1));
-    index += 1;
-  }
-  const added: string[] = [];
-  while (index < lines.length && lines[index]!.startsWith("+")) {
-    added.push(lines[index]!.slice(1));
-    index += 1;
-  }
-  if (index !== lines.length || !removed.length || !added.length) {
-    return diff;
-  }
-  return unifiedDiff(removed.join("\n"), added.join("\n"));
-}
 
 // ---------------------------------------------------------------------------
 // Legacy: logs written before tool events carried structured data

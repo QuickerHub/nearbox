@@ -209,18 +209,14 @@ export function Icon({
   name,
   size = 18,
   className,
+  style,
   ...rest
 }: { name: IconName; size?: number } & Omit<LucideProps, "ref" | "size">): JSX.Element {
   const Glyph = ICONS[name];
   return (
-    <Glyph
-      size={size}
-      strokeWidth={1.75}
-      absoluteStrokeWidth
-      className={["icon", className].filter(Boolean).join(" ")}
-      aria-hidden
-      {...rest}
-    />
+    <span className={["icon", className].filter(Boolean).join(" ")} style={{ width: size, height: size }} aria-hidden>
+      <Glyph size={size} strokeWidth={1.75} absoluteStrokeWidth style={style} {...rest} />
+    </span>
   );
 }
 

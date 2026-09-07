@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  clampCrop,
   clampQuality,
   codeToVk,
   moveCommand,
@@ -74,6 +75,17 @@ test("quality requests are clamped onto the current config", () => {
   assert.deepEqual(clampQuality({ quality: Number.NaN }, base), base);
 });
 
+test("a zoom crop is kept and a full-screen crop is dropped", () => {
+  const base = { quality: 72, fps: 12, maxWidth: 1920 };
+  assert.equal(clampCrop({ x: 0.2, y: 0.1, w: 0.4, h: 0.5 })?.w, 0.4);
+  assert.equal(clampCrop({ x: 0, y: 0, w: 1, h: 1 }), undefined);
+  assert.equal(clampCrop(null), undefined);
+  const withCrop = clampQuality({ crop: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 } }, base);
+  assert.deepEqual(withCrop.crop, { x: 0.25, y: 0.25, w: 0.5, h: 0.5 });
+  assert.equal(clampQuality({ crop: { x: 0, y: 0, w: 1, h: 1 } }, withCrop).crop, undefined);
+  assert.deepEqual(clampQuality({ fps: 10 }, withCrop).crop, withCrop.crop);
+});
+
 test("frames are skipped for a viewer whose socket is backed up", () => {
   assert.equal(shouldSendFrame(0), true);
   assert.equal(shouldSendFrame(512 * 1024), true);
@@ -99,4 +111,11 @@ test("control messages are validated before they reach the injector", () => {
   assert.equal(parseControlMessage('{"t":"combo","codes":[1]}'), null);
   assert.deepEqual(parseControlMessage('{"t":"text","value":"hi"}'), { t: "text", value: "hi" });
   assert.deepEqual(parseControlMessage('{"t":"ping","ts":5}'), { t: "ping", ts: 5 });
+  assert.deepEqual(parseControlMessage('{"t":"config","maxWidth":1920,"crop":{"x":0.1,"y":0.2,"w":0.3,"h":0.4}}'), {
+    t: "config",
+    quality: undefined,
+    fps: undefined,
+    maxWidth: 1920,
+    crop: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
+  });
 });

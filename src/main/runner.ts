@@ -26,8 +26,10 @@ import {
   describePermission,
   mapCursorModel,
   reviewOptions,
+  type PromptHandlers,
   SessionUnknownError,
 } from "./acp";
+import { KEEPALIVE_CONTINUE_PROMPT, KEEPALIVE_RETRIES, isTransientAgentTransportError } from "./cursor-http.ts";
 import {
   buildInvocation,
   buildShellCommandLine,
@@ -113,6 +115,8 @@ export interface RunManagerOptions {
   onRunChanged(run: AgentRun): void;
   onRunFinished(run: AgentRun): void;
   onEvent(runId: string, event: RunEvent): void;
+  /** Agent named the conversation; the hub may put that on the task. */
+  onSessionTitle?(run: AgentRun, title: string): void;
 }
 
 /**
@@ -554,50 +558,86 @@ export class RunManager extends EventEmitter {
       this.cancel(run.id, `超过 ${MAX_RUN_MINUTES} 分钟，自动停止`);
     }, MAX_RUN_MINUTES * 60_000);
 
-    void host
-      .prompt(session.sessionId, run.prompt, {
-        onUpdate: (update) => {
-          this.absorb(state, state.parser.push(update));
-          this.scheduleStream(state);
-        },
-        onPermission: (toolCall, options) => {
-          const decision = choosePermission(run.access, toolCall, options);
-          if (decision.action === "ask") {
-            return this.askPermission(state, toolCall, options);
+    const handlers: PromptHandlers = {
+      onUpdate: (update) => {
+        this.absorb(state, state.parser.push(update));
+        this.scheduleStream(state);
+      },
+      onPermission: (toolCall, options) => {
+        const decision = choosePermission(run.access, toolCall, options);
+        if (decision.action === "ask") {
+          return this.askPermission(state, toolCall, options);
+        }
+        const id = String(toolCall.toolCallId ?? "");
+        if (decision.rejected && id) {
+          this.absorb(
+            state,
+            state.parser.push({ sessionUpdate: "tool_call_update", toolCallId: id, status: "rejected", error: "命令被拦截：Agent 没有给出可批准的选项。" }),
+          );
+        }
+        return decision.optionId;
+      },
+    };
+    void this.promptWarm(state, host, session.sessionId, handlers);
+    return true;
+  }
+
+  /**
+   * One warm turn, retrying when cursor-agent drops the HTTP/2 stream mid-reply.
+   * The same process and session stay up; only the model call is repeated.
+   */
+  private async promptWarm(state: ActiveRun, host: AgentHost, sessionId: string, handlers: PromptHandlers): Promise<void> {
+    const run = state.run;
+    let text = run.prompt;
+    let attempt = 0;
+    const eventsBefore = run.eventCount;
+    try {
+      while (!state.cancelled) {
+        try {
+          const outcome = await host.prompt(sessionId, text, handlers);
+          const failed = state.isError ? (state.result ?? state.lastStderr ?? "") : "";
+          if (host.alive && isTransientAgentTransportError(failed) && attempt < KEEPALIVE_RETRIES) {
+            attempt += 1;
+            this.append(run, "status", `模型连接中断（HTTP/2 keepalive），正在重试第 ${attempt} 次…`);
+            text = run.eventCount > eventsBefore ? KEEPALIVE_CONTINUE_PROMPT : run.prompt;
+            state.isError = undefined;
+            state.result = undefined;
+            await delay(1_000);
+            continue;
           }
-          const id = String(toolCall.toolCallId ?? "");
-          if (decision.rejected && id) {
-            this.absorb(
-              state,
-              state.parser.push({ sessionUpdate: "tool_call_update", toolCallId: id, status: "rejected", error: "命令被拦截：Agent 没有给出可批准的选项。" }),
-            );
-          }
-          return decision.optionId;
-        },
-      })
-      .then(
-        (outcome) => {
           this.stopStream(state);
           this.absorb(state, state.parser.push({ sessionUpdate: "end", stopReason: outcome.stopReason }));
           if (state.isError && !state.lastStderr) {
             state.lastStderr = `Agent 提前结束（${outcome.stopReason}）`;
           }
           this.finish(state, 0, undefined);
-        },
-        (error: unknown) => {
-          this.stopStream(state);
+          return;
+        } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          if (!host.alive) {
-            for (const line of host.recentStderr()) {
-              this.append(run, "stderr", line);
-            }
+          if (state.cancelled || !host.alive || !isTransientAgentTransportError(message) || attempt >= KEEPALIVE_RETRIES) {
+            throw error;
           }
-          this.append(run, "stderr", message);
-          state.lastStderr = message;
-          this.finish(state, host.alive ? 1 : null, host.alive ? undefined : "Agent 进程退出了");
-        },
-      );
-    return true;
+          attempt += 1;
+          this.stopStream(state);
+          this.append(run, "status", `模型连接中断（HTTP/2 keepalive），正在重试第 ${attempt} 次…`);
+          text = run.eventCount > eventsBefore ? KEEPALIVE_CONTINUE_PROMPT : run.prompt;
+          await delay(1_000);
+        }
+      }
+      this.stopStream(state);
+      this.finish(state, 0, undefined);
+    } catch (error) {
+      this.stopStream(state);
+      const message = error instanceof Error ? error.message : String(error);
+      if (!host.alive) {
+        for (const line of host.recentStderr()) {
+          this.append(run, "stderr", line);
+        }
+      }
+      this.append(run, "stderr", message);
+      state.lastStderr = message;
+      this.finish(state, host.alive ? 1 : null, host.alive ? undefined : "Agent 进程退出了");
+    }
   }
 
   /** Streamed text reaches the UI in small batches rather than per token. */
@@ -711,6 +751,9 @@ export class RunManager extends EventEmitter {
     }
     if (changed) {
       this.options.onRunChanged(state.run);
+    }
+    if (parsed.sessionTitle) {
+      this.options.onSessionTitle?.(state.run, parsed.sessionTitle);
     }
     if (parsed.result !== undefined) {
       state.result = parsed.result;
@@ -869,4 +912,8 @@ export class RunManager extends EventEmitter {
 /** When its stderr is a pipe, powershell.exe serialises progress records as CLIXML; none of it is agent output. */
 function isPowerShellNoise(line: string): boolean {
   return line.startsWith("#< CLIXML") || line.startsWith("<Objs ") || line.startsWith("<Objs>");
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

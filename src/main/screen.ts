@@ -32,9 +32,10 @@ const CAPTURE_PAGE = `<!doctype html>
   const { ipcRenderer } = require("electron");
   const params = new URLSearchParams(location.search);
   let cfg = {
-    quality: Number(params.get("quality")) || 55,
+    quality: Number(params.get("quality")) || 72,
     fps: Number(params.get("fps")) || 12,
-    maxWidth: Number(params.get("maxWidth")) || 1440,
+    maxWidth: Number(params.get("maxWidth")) || 1920,
+    crop: null,
   };
   const sourceId = params.get("source");
   let video = null, canvas = null, ctx = null, timer = null, busy = false;
@@ -43,15 +44,34 @@ const CAPTURE_PAGE = `<!doctype html>
     if (timer) clearInterval(timer);
     timer = setInterval(grab, Math.max(33, Math.round(1000 / cfg.fps)));
   }
+  function region() {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const crop = cfg.crop;
+    if (!crop || crop.w <= 0 || crop.h <= 0) {
+      return { sx: 0, sy: 0, sw: vw, sh: vh };
+    }
+    let sx = Math.round(crop.x * vw);
+    let sy = Math.round(crop.y * vh);
+    let sw = Math.max(1, Math.round(crop.w * vw));
+    let sh = Math.max(1, Math.round(crop.h * vh));
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
+    if (sx + sw > vw) sw = vw - sx;
+    if (sy + sh > vh) sh = vh - sy;
+    return { sx, sy, sw: Math.max(1, sw), sh: Math.max(1, sh) };
+  }
   async function grab() {
     if (busy || !video || !video.videoWidth) return;
     busy = true;
     try {
-      const scale = Math.min(1, cfg.maxWidth / video.videoWidth);
-      const w = Math.max(1, Math.round(video.videoWidth * scale));
-      const h = Math.max(1, Math.round(video.videoHeight * scale));
+      const { sx, sy, sw, sh } = region();
+      const scale = Math.min(1, cfg.maxWidth / Math.max(sw, sh));
+      const w = Math.max(1, Math.round(sw * scale));
+      const h = Math.max(1, Math.round(sh * scale));
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-      ctx.drawImage(video, 0, 0, w, h);
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
       const q = Math.min(0.95, Math.max(0.2, cfg.quality / 100));
       const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", q));
       if (blob) {
@@ -64,10 +84,24 @@ const CAPTURE_PAGE = `<!doctype html>
       busy = false;
     }
   }
-  ipcRenderer.on(${JSON.stringify(CONFIG_CHANNEL)}, (_event, next) => { cfg = Object.assign({}, cfg, next); schedule(); });
+  ipcRenderer.on(${JSON.stringify(CONFIG_CHANNEL)}, (_event, next) => {
+    cfg = Object.assign({}, cfg, next);
+    cfg.crop = next && next.crop ? next.crop : null;
+    schedule();
+  });
   navigator.mediaDevices.getUserMedia({
     audio: false,
-    video: { mandatory: { chromeMediaSource: "desktop", chromeMediaSourceId: sourceId, maxFrameRate: 30 } },
+    video: {
+      mandatory: {
+        chromeMediaSource: "desktop",
+        chromeMediaSourceId: sourceId,
+        minWidth: 1280,
+        maxWidth: 7680,
+        minHeight: 720,
+        maxHeight: 4320,
+        maxFrameRate: 30,
+      },
+    },
   }).then((stream) => {
     video = document.createElement("video");
     video.muted = true;
@@ -272,8 +306,10 @@ export async function captureScreenOnce(quality: RemoteQuality): Promise<RemoteF
   const scale = display.scaleFactor || 1;
   const fullWidth = Math.max(1, Math.round(display.size.width * scale));
   const fullHeight = Math.max(1, Math.round(display.size.height * scale));
-  const cap = Math.max(480, Math.min(quality.maxWidth || 1440, 3840));
-  const ratio = fullWidth > cap ? cap / fullWidth : 1;
+  const cap = Math.max(480, Math.min(quality.maxWidth || 1920, 3840));
+  const cropW = quality.crop && quality.crop.w > 0 ? quality.crop.w : 1;
+  const thumbWidth = Math.min(3840, Math.max(cap, Math.round(cap / cropW)));
+  const ratio = fullWidth > thumbWidth ? thumbWidth / fullWidth : 1;
   const sources = await desktopCapturer.getSources({
     types: ["screen"],
     thumbnailSize: { width: Math.max(1, Math.round(fullWidth * ratio)), height: Math.max(1, Math.round(fullHeight * ratio)) },
@@ -284,6 +320,24 @@ export async function captureScreenOnce(quality: RemoteQuality): Promise<RemoteF
   if (!image || image.isEmpty()) {
     return null;
   }
-  const size = image.getSize();
-  return { data: image.toJPEG(Math.max(20, Math.min(quality.quality || 55, 95))), width: size.width, height: size.height };
+  let out = image;
+  if (quality.crop) {
+    const size = image.getSize();
+    const x = Math.max(0, Math.round(quality.crop.x * size.width));
+    const y = Math.max(0, Math.round(quality.crop.y * size.height));
+    const width = Math.max(1, Math.min(size.width - x, Math.round(quality.crop.w * size.width)));
+    const height = Math.max(1, Math.min(size.height - y, Math.round(quality.crop.h * size.height)));
+    out = image.crop({ x, y, width, height });
+  }
+  const cropped = out.getSize();
+  const longest = Math.max(cropped.width, cropped.height);
+  if (longest > cap) {
+    const down = cap / longest;
+    out = out.resize({
+      width: Math.max(1, Math.round(cropped.width * down)),
+      height: Math.max(1, Math.round(cropped.height * down)),
+    });
+  }
+  const size = out.getSize();
+  return { data: out.toJPEG(Math.max(20, Math.min(quality.quality || 72, 95))), width: size.width, height: size.height };
 }

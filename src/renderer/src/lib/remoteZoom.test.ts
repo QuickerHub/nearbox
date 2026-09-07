@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  FULL_CROP,
   MAX_SCALE,
   clampTransform,
   fitSize,
   fitTransform,
+  isFullCrop,
   panBy,
   pointToFrame,
+  quantizeCrop,
   refitTransform,
+  streamQuality,
+  visibleCrop,
   wheelZoomFactor,
   zoomAt,
   zoomBetween,
@@ -150,6 +155,41 @@ test("refitTransform from an empty layout falls back to the fit layout", () => {
     { fit: phoneFit, viewport: phone },
   );
   assert.deepEqual(next, fitTransform(phoneFit, phone));
+});
+
+test("visibleCrop is the whole frame at fit size and a padded window when zoomed", () => {
+  const fitted = fitTransform(phoneFit, phone);
+  assert.deepEqual(visibleCrop(fitted, phoneFit, phone), FULL_CROP);
+  const zoomed = zoomTo(fitted, 4, phoneFit, phone);
+  const crop = visibleCrop(zoomed, phoneFit, phone);
+  assert.equal(isFullCrop(crop), false);
+  assert.ok(crop.w < 0.55, "zoomed-in width should be a slice of the frame");
+  const left = pointToFrame({ x: 0, y: 0 }, zoomed, phoneFit)!;
+  const right = pointToFrame({ x: 360, y: 640 }, zoomed, phoneFit)!;
+  assert.ok(crop.x <= left.x + 0.02);
+  assert.ok(crop.y <= left.y + 0.02);
+  assert.ok(crop.x + crop.w >= right.x - 0.02);
+  assert.ok(crop.y + crop.h >= right.y - 0.02);
+});
+
+test("quantizeCrop snaps onto a grid and collapses near-full rects", () => {
+  const snapped = quantizeCrop({ x: 0.123, y: 0.456, w: 0.333, h: 0.29 }, 20);
+  close(snapped.x, 0.1);
+  close(snapped.y, 0.45);
+  close(snapped.w, 0.35);
+  close(snapped.h, 0.3);
+  assert.deepEqual(quantizeCrop({ x: 0, y: 0, w: 0.999, h: 0.999 }), FULL_CROP);
+});
+
+test("streamQuality keeps the preset at fit size and sharpens the visible region when zoomed", () => {
+  const preset = { quality: 72, fps: 12, maxWidth: 1920 };
+  assert.deepEqual(streamQuality(preset, FULL_CROP, phone, 3), preset);
+  const crop = { x: 0.2, y: 0.1, w: 0.4, h: 0.5 };
+  const next = streamQuality(preset, crop, phone, 3);
+  assert.equal(next.quality, 82);
+  assert.equal(next.fps, 10);
+  assert.equal(next.maxWidth, 1920);
+  assert.deepEqual(next.crop, crop);
 });
 
 test("wheelZoomFactor zooms in on wheel-up and is symmetric", () => {

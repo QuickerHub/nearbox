@@ -81,6 +81,17 @@ export class RemoteControlHub {
     const client: RemoteClient = { socket, deviceId: device.id, name: device.name };
     this.clients.add(client);
     void this.options.input.ready();
+    if (this.clients.size > 1 && this.quality.crop) {
+      this.quality = { ...this.quality, crop: undefined };
+      if (this.sourceRunning) {
+        this.options.source.setQuality(this.quality);
+      }
+      for (const item of this.clients) {
+        if (item !== client) {
+          sendJson(item.socket, { t: "config", quality: this.quality });
+        }
+      }
+    }
 
     sendJson(socket, {
       t: "hello",
@@ -133,6 +144,9 @@ export class RemoteControlHub {
     }
     if (msg.t === "config") {
       this.quality = clampQuality(msg, this.quality);
+      if (this.clients.size > 1 && this.quality.crop) {
+        this.quality = { ...this.quality, crop: undefined };
+      }
       if (this.sourceRunning) {
         this.options.source.setQuality(this.quality);
       }

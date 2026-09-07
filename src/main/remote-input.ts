@@ -1,6 +1,7 @@
 import type {
   RemoteButton,
   RemoteControlToHost,
+  RemoteCrop,
   RemoteQuality,
 } from "@shared/protocol";
 
@@ -242,16 +243,50 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
   return num < min ? min : num > max ? max : num;
 }
 
+function clampUnitField(value: unknown, fallback: number): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return fallback;
+  }
+  return num < 0 ? 0 : num > 1 ? 1 : num;
+}
+
+/** Drop a full-screen / invalid crop so the host encodes the whole frame. */
+export function clampCrop(crop: unknown): RemoteCrop | undefined {
+  if (!crop || typeof crop !== "object") {
+    return undefined;
+  }
+  const raw = crop as Record<string, unknown>;
+  const x = clampUnitField(raw.x, 0);
+  const y = clampUnitField(raw.y, 0);
+  const w = clampUnitField(raw.w, 0);
+  const h = clampUnitField(raw.h, 0);
+  const width = Math.min(w, 1 - x);
+  const height = Math.min(h, 1 - y);
+  if (width < 0.05 || height < 0.05) {
+    return undefined;
+  }
+  if (x <= 0.001 && y <= 0.001 && width >= 0.998 && height >= 0.998) {
+    return undefined;
+  }
+  return { x, y, w: width, h: height };
+}
+
 /** Fold a partial quality request onto a base config, keeping every field in range. */
 export function clampQuality(
   patch: Partial<RemoteQuality> | undefined,
   base: RemoteQuality,
 ): RemoteQuality {
-  return {
+  const crop = patch && "crop" in patch ? clampCrop(patch.crop) : base.crop;
+  const next: RemoteQuality = {
     quality: patch?.quality === undefined ? base.quality : clampInt(patch.quality, 20, 95, base.quality),
     fps: patch?.fps === undefined ? base.fps : clampInt(patch.fps, 1, 30, base.fps),
     maxWidth: patch?.maxWidth === undefined ? base.maxWidth : clampInt(patch.maxWidth, 480, 3840, base.maxWidth),
   };
+  if (crop) {
+    next.crop = crop;
+  }
+  return next;
 }
 
 /** Skip a client whose send buffer is already backed up, so we never queue frames faster than the link drains. */
@@ -325,13 +360,18 @@ export function parseControlMessage(raw: string): RemoteControlToHost | null {
         : null;
     case "text":
       return typeof msg.value === "string" ? { t: "text", value: msg.value } : null;
-    case "config":
-      return {
+    case "config": {
+      const out: RemoteControlToHost = {
         t: "config",
         quality: typeof msg.quality === "number" ? msg.quality : undefined,
         fps: typeof msg.fps === "number" ? msg.fps : undefined,
         maxWidth: typeof msg.maxWidth === "number" ? msg.maxWidth : undefined,
       };
+      if ("crop" in msg) {
+        out.crop = clampCrop(msg.crop) ?? { x: 0, y: 0, w: 1, h: 1 };
+      }
+      return out;
+    }
     case "ping":
       return { t: "ping", ts: typeof msg.ts === "number" ? msg.ts : undefined };
     default:
