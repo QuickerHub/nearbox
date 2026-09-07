@@ -53,8 +53,11 @@ jobs:
         run: gradle -p android assembleRelease
       - name: Verify APK certificate
         run: |
-          expected="$(tr -d ' \r\n' < android/release-cert.sha256)"
-          actual="$(keytool -printcert -jarfile android/app/build/outputs/apk/release/app-release.apk | awk '/SHA256:/{print $2; exit}')"
+          sudo apt-get update -qq
+          sudo apt-get install -y apksigner
+          hex() { tr -d ' :\r\n' | tr 'A-F' 'a-f'; }
+          expected="$(hex < android/release-cert.sha256)"
+          actual="$(apksigner verify --print-certs android/app/build/outputs/apk/release/app-release.apk | awk '/SHA-256 digest:/{print $NF; exit}' | hex)"
           if [ -z "$actual" ] || [ "$actual" != "$expected" ]; then
             echo "APK 签名是 $actual，期望 $expected"
             exit 1
