@@ -1,3 +1,5 @@
+import type { TokenUsage } from "./usage";
+
 export { PROTOCOL_VERSION } from "./version";
 export const DEFAULT_PORT = 17831;
 
@@ -328,6 +330,8 @@ export interface AgentRun {
   summary?: string;
   error?: string;
   eventCount: number;
+  /** Latest token / context usage the CLI reported for this turn. */
+  usage?: TokenUsage;
   /** Present only while a warm turn is waiting for you to allow or reject a command. */
   pendingPermission?: PendingPermission;
 }
@@ -634,6 +638,18 @@ export function newId(): string {
   return `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}`;
 }
 
+export type { TokenUsage } from "./usage";
+export {
+  contextUsed,
+  contextWindowFromModelUsage,
+  formatContextUsage,
+  formatTokens,
+  inferContextWindow,
+  mergeUsage,
+  parseUsage,
+  usageDetail,
+  usageRatio,
+} from "./usage";
 export { adoptSessionTitle, splitCapture } from "./titles";
 
 export function isRunActive(run: Pick<AgentRun, "status">): boolean {

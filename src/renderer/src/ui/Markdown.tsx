@@ -1,13 +1,14 @@
 import { Fragment, type MouseEvent, type ReactNode } from "react";
 import { splitInline } from "../lib/autolink";
+import { parseBlocks, type MdAlign, type MdBlock } from "../lib/markdown";
 
 /**
- * Tiny markdown renderer for agent summaries: headings, bullet/numbered lists,
- * fenced code, inline code, bold and links. The stored text is never rewritten;
+ * Tiny markdown renderer for agent summaries: headings, lists, tables, fenced
+ * code, quotes, inline code, bold and links. The stored text is never rewritten;
  * React escapes everything, so nothing here can inject markup.
  */
 export function Markdown({ text, className }: { text: string; className?: string }): JSX.Element {
-  const blocks = parseBlocks(text.replace(/\r\n/g, "\n"));
+  const blocks = parseBlocks(text);
   return (
     <div className={["md", className].filter(Boolean).join(" ")}>
       {blocks.map((block, index) => (
@@ -17,71 +18,11 @@ export function Markdown({ text, className }: { text: string; className?: string
   );
 }
 
-type Block =
-  | { type: "code"; lang: string; body: string }
-  | { type: "heading"; level: number; text: string }
-  | { type: "list"; ordered: boolean; items: string[] }
-  | { type: "para"; text: string };
-
-function parseBlocks(text: string): Block[] {
-  const lines = text.split("\n");
-  const blocks: Block[] = [];
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index] ?? "";
-    if (/^```/.test(line)) {
-      const lang = line.slice(3).trim();
-      const body: string[] = [];
-      index += 1;
-      while (index < lines.length && !/^```/.test(lines[index] ?? "")) {
-        body.push(lines[index] ?? "");
-        index += 1;
-      }
-      index += 1;
-      blocks.push({ type: "code", lang, body: body.join("\n") });
-      continue;
-    }
-    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (heading) {
-      blocks.push({ type: "heading", level: heading[1]!.length, text: heading[2] ?? "" });
-      index += 1;
-      continue;
-    }
-    if (/^\s*([-*•]|\d+[.)])\s+/.test(line)) {
-      const ordered = /^\s*\d+[.)]\s+/.test(line);
-      const items: string[] = [];
-      while (index < lines.length && /^\s*([-*•]|\d+[.)])\s+/.test(lines[index] ?? "")) {
-        items.push((lines[index] ?? "").replace(/^\s*([-*•]|\d+[.)])\s+/, ""));
-        index += 1;
-      }
-      blocks.push({ type: "list", ordered, items });
-      continue;
-    }
-    if (!line.trim()) {
-      index += 1;
-      continue;
-    }
-    const para: string[] = [];
-    while (
-      index < lines.length &&
-      (lines[index] ?? "").trim() &&
-      !/^```/.test(lines[index] ?? "") &&
-      !/^(#{1,6})\s+/.test(lines[index] ?? "") &&
-      !/^\s*([-*•]|\d+[.)])\s+/.test(lines[index] ?? "")
-    ) {
-      para.push(lines[index] ?? "");
-      index += 1;
-    }
-    blocks.push({ type: "para", text: para.join("\n") });
-  }
-  return blocks;
-}
-
-function renderBlock(block: Block): ReactNode {
+function renderBlock(block: MdBlock): ReactNode {
   switch (block.type) {
     case "code":
       return (
-        <pre className="md__code">
+        <pre className="md__code" data-lang={block.lang || undefined}>
           <code>{block.body}</code>
         </pre>
       );
@@ -103,9 +44,50 @@ function renderBlock(block: Block): ReactNode {
           ))}
         </ul>
       );
+    case "table":
+      return (
+        <div className="md__table-wrap">
+          <table className="md__table">
+            <thead>
+              <tr>
+                {block.headers.map((cell, index) => (
+                  <th key={index} className={alignClass(block.aligns[index])}>
+                    {renderInline(cell)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {block.rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {row.map((cell, index) => (
+                    <td key={index} className={alignClass(block.aligns[index])}>
+                      {renderInline(cell)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    case "quote":
+      return (
+        <blockquote className="md__quote">
+          {block.blocks.map((inner, index) => (
+            <Fragment key={index}>{renderBlock(inner)}</Fragment>
+          ))}
+        </blockquote>
+      );
+    case "hr":
+      return <hr className="md__hr" />;
     case "para":
       return <p>{renderInline(block.text)}</p>;
   }
+}
+
+function alignClass(align: MdAlign | undefined): string | undefined {
+  return align && align !== "left" ? `md__cell--${align}` : undefined;
 }
 
 function renderInline(text: string): ReactNode[] {

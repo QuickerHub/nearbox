@@ -9,6 +9,8 @@ interface RunTranscriptProps {
   events: RunEvent[];
   active: boolean;
   durationLabel: string;
+  /** Context used / window, when the CLI reported it. */
+  usageLabel?: string;
   /** The run ended badly; diagnostics open by default. */
   failed: boolean;
   /** The user asked to see the record; start with the work section open. */
@@ -22,7 +24,7 @@ interface RunTranscriptProps {
  * While the turn is live the work section stays open and follows along; when
  * it finishes it folds down to a single line, like Cursor does.
  */
-export function RunTranscript({ events, active, durationLabel, failed, defaultOpen, pending, onResolve }: RunTranscriptProps): JSX.Element {
+export function RunTranscript({ events, active, durationLabel, usageLabel, failed, defaultOpen, pending, onResolve }: RunTranscriptProps): JSX.Element {
   const transcript = useMemo(() => summarizeTranscript(buildTranscript(events)), [events]);
   const { work, answer, toolCount, running } = transcript;
   const busyWith = running.at(-1);
@@ -32,7 +34,7 @@ export function RunTranscript({ events, active, durationLabel, failed, defaultOp
   return (
     <div className="turn">
       {work.length || (pending && !attached) ? (
-        <WorkFold live={active} waiting={waiting} toolCount={toolCount} durationLabel={durationLabel} failed={failed} defaultOpen={Boolean(defaultOpen)}>
+        <WorkFold live={active} waiting={waiting} toolCount={toolCount} durationLabel={durationLabel} usageLabel={usageLabel} failed={failed} defaultOpen={Boolean(defaultOpen)}>
           {pending && !attached && onResolve ? <PermissionAsk pending={pending} onResolve={onResolve} /> : null}
           {work.map((row) => (
             <WorkItem key={`${row.type}-${row.seq}`} row={row} failed={failed} pending={pending} onResolve={onResolve} />
@@ -118,6 +120,7 @@ function WorkFold({
   waiting,
   toolCount,
   durationLabel,
+  usageLabel,
   failed,
   defaultOpen,
   children,
@@ -126,6 +129,7 @@ function WorkFold({
   waiting: boolean;
   toolCount: number;
   durationLabel: string;
+  usageLabel?: string;
   failed: boolean;
   defaultOpen: boolean;
   children: ReactNode;
@@ -140,10 +144,10 @@ function WorkFold({
   }, [live, failed, pinned]);
   const steps = toolCount ? `${toolCount} 步` : "";
   const label = waiting
-    ? ["等待确认", steps, durationLabel].filter(Boolean).join(" · ")
+    ? ["等待确认", steps, durationLabel, usageLabel].filter(Boolean).join(" · ")
     : live
-      ? ["正在工作", steps, durationLabel].filter(Boolean).join(" · ")
-      : [durationLabel ? `工作了 ${durationLabel}` : "过程", steps].filter(Boolean).join(" · ");
+      ? ["正在工作", steps, durationLabel, usageLabel].filter(Boolean).join(" · ")
+      : [durationLabel ? `工作了 ${durationLabel}` : "过程", steps, usageLabel].filter(Boolean).join(" · ");
   return (
     <div className={`fold${open ? " is-open" : ""}${live ? " fold--live" : ""}`}>
       <button

@@ -37,8 +37,9 @@ import {
 import { type DraftAttachment, extractFiles, stageFiles, stageNotice } from "../lib/attachments";
 import type { ClientHandle } from "../lib/client";
 import { formatBytes, formatRelative } from "../lib/format";
-import { planSend, type SendAction, type SendPlan } from "../lib/plan";
+import { conversationRun, planSend, type SendAction, type SendPlan } from "../lib/plan";
 import { Lightbox } from "./Attachments";
+import { ContextMeter } from "./bits";
 import { Icon, type IconName } from "./Icons";
 import { Menu, MenuDivider, MenuFlyout, MenuHeading, MenuItem, MenuSwitch } from "./Menu";
 import { TerminalDock } from "./TerminalDock";
@@ -254,6 +255,8 @@ export function ChatComposer({
 
   const hint = error ?? progress ?? localNotice ?? notice ?? plan.hint;
   const hintTone = error ? " composer__hint--error" : progress ? "" : localNotice || notice ? " composer__hint--notice" : "";
+  const conversation = task && chips.agent && project ? conversationRun(snapshot.runs, task.id, chips.agent, project.id) : undefined;
+  const usage = activeRun?.usage ?? conversation?.usage;
 
   return (
     <div className={`composer composer--${variant}${dragging ? " composer--drag" : ""}`}>
@@ -393,7 +396,12 @@ export function ChatComposer({
             </button>
           ) : null}
         </span>
-        {desktop && hint === plan.hint ? <span className="composer__keys">Enter 发送 · Shift+Enter 换行 · 可直接粘贴截图</span> : null}
+        {usage || (desktop && hint === plan.hint) ? (
+          <span className="composer__hint-aside">
+            {usage ? <ContextMeter usage={usage} /> : null}
+            {desktop && hint === plan.hint ? <span className="composer__keys">Enter 发送 · Shift+Enter 换行 · 可直接粘贴截图</span> : null}
+          </span>
+        ) : null}
       </p>
       {preview?.previewUrl ? <Lightbox src={preview.previewUrl} name={preview.file.name || "图片"} onClose={() => setPreview(null)} /> : null}
     </div>

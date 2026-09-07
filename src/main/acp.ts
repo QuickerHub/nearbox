@@ -248,6 +248,8 @@ export interface PromptHandlers {
 
 export interface PromptOutcome {
   stopReason: string;
+  /** Token usage on the prompt result, when the agent includes it. */
+  usage?: unknown;
 }
 
 export interface ListedSession {
@@ -459,7 +461,7 @@ export class AgentHost extends EventEmitter {
         sessionId,
         prompt: [{ type: "text", text }],
       });
-      return { stopReason: String(result?.stopReason ?? "end_turn") };
+      return { stopReason: String(result?.stopReason ?? "end_turn"), usage: result?.usage ?? result?._meta };
     } finally {
       this.prompts.delete(sessionId);
       this.touch();

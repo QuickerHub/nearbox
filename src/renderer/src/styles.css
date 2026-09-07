@@ -2012,6 +2012,65 @@ a:has(> .icon:only-child) {
   background: transparent;
 }
 
+.md__table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.md__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.md__table th,
+.md__table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md__table th {
+  font-weight: 600;
+  background: var(--bg-sunken);
+  white-space: nowrap;
+}
+
+.md__table tr:last-child td {
+  border-bottom: 0;
+}
+
+.md__table td {
+  word-break: break-word;
+}
+
+.md__cell--center {
+  text-align: center;
+}
+
+.md__cell--right {
+  text-align: right;
+}
+
+.md__quote {
+  margin: 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--line-strong);
+}
+
+.md__quote > * + * {
+  margin-top: 6px;
+}
+
+.md__hr {
+  margin: 10px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
 /* ---------------------------------------------------------------- composer */
 
 .composer {
@@ -2292,9 +2351,52 @@ a:has(> .icon:only-child) {
   color: var(--text);
 }
 
+.composer__hint-aside {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+}
+
 .composer__keys {
   flex: 0 0 auto;
   opacity: 0.8;
+}
+
+.ctx-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ctx-meter__bar {
+  display: inline-block;
+  width: 36px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
+}
+
+.ctx-meter__bar > i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--ok) 75%, var(--muted));
+}
+
+.ctx-meter--mid .ctx-meter__bar > i {
+  background: #d4a017;
+}
+
+.ctx-meter--high {
+  color: var(--danger);
+}
+
+.ctx-meter--high .ctx-meter__bar > i {
+  background: var(--danger);
 }
 
 /* ---------------------------------------------------- terminal dock (above composer) */
@@ -3652,6 +3754,10 @@ a:has(> .icon:only-child) {
   display: none;
 }
 
+.app--phone .ctx-meter__bar {
+  width: 28px;
+}
+
 .app--phone .composer__send,
 .app--phone .composer__stop {
   width: 36px;
@@ -3683,6 +3789,14 @@ a:has(> .icon:only-child) {
 
 .app--phone .md__code {
   font-size: 12.5px;
+  border-radius: 10px;
+}
+
+.app--phone .md__table {
+  font-size: 13px;
+}
+
+.app--phone .md__table-wrap {
   border-radius: 10px;
 }
 

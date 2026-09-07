@@ -1,5 +1,12 @@
-import type { AgentAccess, AgentKind, RunEventKind, ToolCall, ToolKind, ToolStatus } from "@shared/protocol";
+import type { AgentAccess, AgentKind, RunEventKind, TokenUsage, ToolCall, ToolKind, ToolStatus } from "@shared/protocol";
 import { countChanges, unifiedDiff } from "../shared/diff.ts";
+import {
+  contextWindowFromModelUsage,
+  formatContextUsage,
+  inferContextWindow,
+  mergeUsage,
+  parseUsage,
+} from "../shared/usage.ts";
 import {
   asArray,
   basenameOf,
@@ -227,6 +234,8 @@ export interface ParseResult {
   sessionTitle?: string;
   result?: string;
   isError?: boolean;
+  /** Latest token / context usage the CLI reported. */
+  usage?: TokenUsage;
 }
 
 /** The output dialects: one per CLI, plus raw ACP session updates from a warm agent host. */
@@ -267,6 +276,8 @@ export function createOutputParser(kind: OutputDialect): OutputParser {
   // The whole of the current text block, so a streamed answer is still summarised in full.
   let blockText = "";
   let lastText = "";
+  let lastUsage: TokenUsage | undefined;
+  let lastModel = "";
   const tools = new Map<string, ToolCall>();
 
   const sink: Sink = {
@@ -320,7 +331,23 @@ export function createOutputParser(kind: OutputDialect): OutputParser {
     return next;
   };
 
-  const context: DialectContext = { sink, track, tools };
+  const rememberUsage = (raw: unknown, extra?: Partial<TokenUsage>): TokenUsage | undefined => {
+    const parsed = parseUsage(raw);
+    const next = parsed || extra?.contextWindow || extra?.costUsd !== undefined ? { ...(parsed ?? { inputTokens: 0, outputTokens: 0 }), ...compactPatch(extra ?? {}) } : undefined;
+    if (!next || (!next.inputTokens && !next.outputTokens && !next.cacheReadTokens && !next.cacheWriteTokens && !next.totalTokens && !next.contextWindow && next.costUsd === undefined)) {
+      return lastUsage;
+    }
+    if (!next.contextWindow) {
+      const inferred = inferContextWindow(lastModel);
+      if (inferred) {
+        next.contextWindow = inferred;
+      }
+    }
+    lastUsage = mergeUsage(lastUsage, next);
+    return lastUsage;
+  };
+
+  const context: DialectContext = { sink, track, tools, rememberUsage, usage: () => lastUsage };
 
   const push = (data: Record<string, unknown>): ParseResult => {
     const out: ParseResult = { events: [] };
@@ -339,6 +366,14 @@ export function createOutputParser(kind: OutputDialect): OutputParser {
       case "opencode":
         parseOpencode(data, out, context);
         break;
+    }
+    if (out.modelLabel) {
+      lastModel = out.modelLabel;
+    }
+    if (out.usage) {
+      lastUsage = mergeUsage(lastUsage, out.usage);
+    } else if (lastUsage) {
+      out.usage = lastUsage;
     }
     return out;
   };
@@ -392,14 +427,20 @@ interface DialectContext {
   sink: Sink;
   track(id: string, patch: Partial<ToolCall> & Pick<ToolCall, "name" | "kind">): ToolCall;
   tools: Map<string, ToolCall>;
+  rememberUsage(raw: unknown, extra?: Partial<TokenUsage>): TokenUsage | undefined;
+  usage(): TokenUsage | undefined;
 }
 
 /** cursor-agent and Claude Code share this dialect. */
-function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink, track, tools }: DialectContext): void {
+function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink, track, tools, rememberUsage, usage }: DialectContext): void {
   const type = String(data.type ?? "");
   const events = out.events;
   if (typeof data.session_id === "string" && data.session_id) {
     out.sessionId = data.session_id;
+  }
+  if (type === "usage") {
+    out.usage = rememberUsage(data);
+    return;
   }
   switch (type) {
     case "system": {
@@ -443,6 +484,9 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
     }
     case "assistant": {
       const message = isRecord(data.message) ? data.message : {};
+      if (message.usage || message.tokenUsage) {
+        out.usage = rememberUsage(message);
+      }
       for (const block of asArray(message.content)) {
         if (!isRecord(block)) {
           continue;
@@ -481,8 +525,12 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
       out.isError = isError;
       // cursor-agent's `result` glues every assistant message together; the last message is the actual answer.
       out.result = (isError ? reported : sink.lastText() || reported) || undefined;
-      const duration = typeof data.duration_ms === "number" ? ` · ${formatDuration(data.duration_ms)}` : "";
-      events.push({ kind: "result", text: `${isError ? "失败" : "完成"}${duration}` });
+      out.usage = rememberUsage(data.usage ?? data.tokenUsage, {
+        contextWindow: contextWindowFromModelUsage(data.modelUsage),
+        costUsd: typeof data.total_cost_usd === "number" ? data.total_cost_usd : undefined,
+      });
+      const duration = typeof data.duration_ms === "number" ? formatDuration(data.duration_ms) : "";
+      events.push({ kind: "result", text: formatOutcome(isError ? "失败" : "完成", { duration, usage: out.usage ?? usage() }) });
       return;
     }
     default:
@@ -491,7 +539,7 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
 }
 
 /** `codex exec --json` */
-function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, track }: DialectContext): void {
+function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, track, rememberUsage, usage }: DialectContext): void {
   const type = String(data.type ?? "");
   const events = out.events;
   if (type === "thread.started") {
@@ -504,9 +552,8 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
     return;
   }
   if (type === "turn.completed") {
-    const usage = isRecord(data.usage) ? data.usage : null;
-    const tokens = usage ? ` · ${Number(usage.input_tokens ?? 0) + Number(usage.output_tokens ?? 0)} tokens` : "";
-    events.push({ kind: "result", text: `完成${tokens}` });
+    out.usage = rememberUsage(data.usage);
+    events.push({ kind: "result", text: formatOutcome("完成", { usage: out.usage ?? usage() }) });
     return;
   }
   if (type === "turn.failed") {
@@ -620,16 +667,22 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
  * `update` objects with `sessionUpdate` and `content`. The runner adds a
  * synthetic `end` when a prompt returns.
  */
-function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track, tools }: DialectContext): void {
+function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track, tools, rememberUsage, usage }: DialectContext): void {
   const type = String(data.type ?? data.sessionUpdate ?? "");
   const events = out.events;
+  const metaUsage = rememberUsage(isRecord(data._meta) ? data._meta : undefined);
+  if (metaUsage) {
+    out.usage = metaUsage;
+  }
   switch (type) {
     case "available_commands":
     case "available_commands_update":
     case "current_mode_update":
     case "config_option_update":
     case "user_message_chunk":
+      return;
     case "usage":
+      out.usage = rememberUsage(data.usage ?? data);
       return;
     case "session_info_update": {
       const title = typeof data.title === "string" ? data.title.replace(/\s+/g, " ").trim() : "";
@@ -730,8 +783,15 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       const stop = String(data.stopReason ?? "end_turn");
       const isError = stop !== "end_turn" && stop !== "max_turns" && stop !== "cancelled";
       out.isError = isError;
-      const cost = typeof data.total_cost_usd === "number" ? ` · $${data.total_cost_usd.toFixed(4)}` : "";
-      events.push({ kind: "result", text: `${stop === "cancelled" ? "已取消" : isError ? `结束 (${stop})` : "完成"}${cost}` });
+      const costUsd = typeof data.total_cost_usd === "number" ? data.total_cost_usd : undefined;
+      out.usage = rememberUsage(data.usage ?? data, {
+        contextWindow: contextWindowFromModelUsage(data.modelUsage),
+        costUsd,
+      });
+      events.push({
+        kind: "result",
+        text: formatOutcome(stop === "cancelled" ? "已取消" : isError ? `结束 (${stop})` : "完成", { usage: out.usage ?? usage(), costUsd }),
+      });
       return;
     }
     case "error":
@@ -1000,4 +1060,20 @@ function formatDuration(ms: number): string {
     return `${seconds}s`;
   }
   return `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+}
+
+function formatOutcome(status: string, extras: { duration?: string; usage?: TokenUsage; costUsd?: number }): string {
+  const bits = [status];
+  if (extras.duration) {
+    bits.push(extras.duration);
+  }
+  const usage = extras.usage ? formatContextUsage(extras.usage) : "";
+  if (usage) {
+    bits.push(usage);
+  }
+  const cost = extras.costUsd ?? extras.usage?.costUsd;
+  if (typeof cost === "number") {
+    bits.push(`$${cost.toFixed(4)}`);
+  }
+  return bits.join(" · ");
 }

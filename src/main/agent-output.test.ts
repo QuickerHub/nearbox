@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildInvocation, createOutputParser, type ParsedEvent, quoteForCmd, toolKindOf, versionKey } from "./agent-output.ts";
+import type { TokenUsage } from "../shared/usage.ts";
 
 const request = {
   prompt: "修复登录页\n第二行 \"带引号\" 和 %PATH%",
@@ -98,6 +99,8 @@ test("codex exec --json is mapped to events, session and result", () => {
   assert.equal(all.sessionId, "01a07672-18fc-7cd0-94c1-d1b5571276f4");
   assert.equal(all.result, "PONG");
   assert.equal(all.isError, undefined);
+  assert.deepEqual(all.usage, { inputTokens: 15085, outputTokens: 6 });
+  assert.equal(all.events.at(-1)?.text, "完成 · 15.1k");
   assert.deepEqual(
     all.events.map((event) => event.kind),
     ["tool", "tool", "text", "result"],
@@ -140,7 +143,7 @@ test("cursor-agent stream-json coalesces thinking deltas and surfaces the result
     '{"type":"tool_call","subtype":"completed","call_id":"c1","tool_call":{"readToolCall":{"args":{"path":"D:\\\\x\\\\a.ts"},"result":{"success":{"content":"x"}}}},"session_id":"944aefbb"}',
     '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Let me check."}]},"session_id":"944aefbb"}',
     '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"PONG"}]},"session_id":"944aefbb"}',
-    '{"type":"result","subtype":"success","duration_ms":4835,"is_error":false,"result":"Let me check.PONG","session_id":"944aefbb"}',
+    '{"type":"result","subtype":"success","duration_ms":4835,"is_error":false,"result":"Let me check.PONG","session_id":"944aefbb","usage":{"inputTokens":18420,"outputTokens":88,"cacheReadTokens":12000}}',
   ]);
   assert.equal(all.sessionId, "944aefbb");
   assert.equal(all.modelLabel, "Cursor Grok 4.6 High Fast");
@@ -160,6 +163,10 @@ test("cursor-agent stream-json coalesces thinking deltas and surfaces the result
   assert.equal(tools[1]?.tool?.output, "x");
   assert.ok(!all.events.some((event) => event.kind === "status"));
   assert.equal(all.events.at(-1)?.kind, "result");
+  assert.equal(all.events.at(-1)?.text, "完成 · 5s · 30.4k / 256k");
+  assert.equal(all.usage?.inputTokens, 18420);
+  assert.equal(all.usage?.cacheReadTokens, 12000);
+  assert.equal(all.usage?.contextWindow, 256_000);
 });
 
 test("cursor-agent shell, edit and rejected calls carry command, diff and reason", () => {
@@ -253,6 +260,20 @@ test("tool kinds are recognised across CLI naming styles", () => {
   assert.equal(toolKindOf("somethingElse"), "other");
 });
 
+test("claude result usage is shown as context used / window", () => {
+  const parser = createOutputParser("claude");
+  const all = feedAll(parser, [
+    '{"type":"system","subtype":"init","model":"claude-sonnet-4-6","session_id":"cf9a"}',
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"PONG"}],"usage":{"input_tokens":2100,"output_tokens":4,"cache_read_input_tokens":18000}}}',
+    '{"type":"result","subtype":"success","is_error":false,"duration_ms":1200,"result":"PONG","usage":{"input_tokens":2100,"output_tokens":4,"cache_read_input_tokens":18000}}',
+  ]);
+  assert.equal(all.result, "PONG");
+  assert.equal(all.usage?.inputTokens, 2100);
+  assert.equal(all.usage?.cacheReadTokens, 18000);
+  assert.equal(all.usage?.contextWindow, 200_000);
+  assert.equal(all.events.at(-1)?.text, "完成 · 1s · 20.1k / 200k");
+});
+
 test("claude login failure is reported as an error result", () => {
   const parser = createOutputParser("claude");
   const all = feedAll(parser, [
@@ -272,16 +293,18 @@ test("grok streaming-json merges text deltas and ends cleanly", () => {
     '{"type":"text","data":"P"}',
     '{"type":"text","data":"ONG"}',
     '{"type":"usage","usage":{"input_tokens":16030}}',
-    '{"type":"end","stopReason":"end_turn","sessionId":"01a07672-27b7","total_cost_usd":0.0055148}',
+    '{"type":"end","stopReason":"end_turn","sessionId":"01a07672-27b7","total_cost_usd":0.0055148,"modelUsage":{"grok-4.6":{"inputTokens":16030,"contextWindow":256000}}}',
   ]);
   assert.equal(all.sessionId, "01a07672-27b7");
   assert.equal(all.isError, false);
+  assert.equal(all.usage?.inputTokens, 16030);
+  assert.equal(all.usage?.contextWindow, 256_000);
   assert.deepEqual(
     all.events.map((event) => [event.kind, event.text]),
     [
       ["thinking", "The user"],
       ["text", "PONG"],
-      ["result", "完成 · $0.0055"],
+      ["result", "完成 · 16.0k / 256k · $0.0055"],
     ],
   );
   assert.equal(all.result, "PONG");
@@ -485,6 +508,7 @@ function collect(parser: ReturnType<typeof createOutputParser>, steps: (() => Re
   let sessionTitle: string | undefined;
   let result: string | undefined;
   let isError: boolean | undefined;
+  let usage: TokenUsage | undefined;
   for (const step of steps) {
     const parsed = step();
     events.push(...parsed.events);
@@ -493,9 +517,11 @@ function collect(parser: ReturnType<typeof createOutputParser>, steps: (() => Re
     sessionTitle = parsed.sessionTitle ?? sessionTitle;
     result = parsed.result ?? result;
     isError = parsed.isError ?? isError;
+    usage = parsed.usage ?? usage;
   }
   const tail = parser.end();
   events.push(...tail.events);
   result = result ?? tail.result;
-  return { events, sessionId, modelLabel, sessionTitle, result, isError };
+  usage = tail.usage ?? usage;
+  return { events, sessionId, modelLabel, sessionTitle, result, isError, usage };
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AGENT_LABELS, type AgentKind, type AgentRun, isRunActive } from "@shared/protocol";
+import { AGENT_LABELS, type AgentKind, type AgentRun, formatContextUsage, isRunActive } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatDuration, formatRelative } from "../lib/format";
 import { useRunEvents } from "../lib/useRunEvents";
@@ -51,6 +51,7 @@ export function RunBlock({ run, client, opensConversation, delegatedFrom, projec
   }, [run.status]);
 
   const duration = run.startedAt ? formatDuration(run.startedAt, run.finishedAt) : "";
+  const usageLabel = run.usage ? formatContextUsage(run.usage) : "";
   const failed = run.status === "failed";
   // A failure whose "answer" is the error text is shown once, in the outcome line.
   const answer = run.summary && run.summary !== run.error ? run.summary : undefined;
@@ -125,6 +126,7 @@ export function RunBlock({ run, client, opensConversation, delegatedFrom, projec
             events={events}
             active={active}
             durationLabel={duration}
+            usageLabel={usageLabel}
             failed={failed}
             defaultOpen={expanded}
             pending={run.pendingPermission}
@@ -143,7 +145,7 @@ export function RunBlock({ run, client, opensConversation, delegatedFrom, projec
               }}
             >
               <Icon name="chevron" size={12} className="fold__chevron" />
-              <span className="fold__label">{duration ? `工作了 ${duration}` : "过程"}</span>
+              <span className="fold__label">{[duration ? `工作了 ${duration}` : "过程", usageLabel].filter(Boolean).join(" · ")}</span>
             </button>
           ) : null}
           {answer ? (

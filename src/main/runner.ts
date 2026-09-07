@@ -16,6 +16,8 @@ import {
   type RunEventKind,
   sessionIdAlongChain,
   type ToolCall,
+  inferContextWindow,
+  mergeUsage,
 } from "@shared/protocol";
 import {
   type AcpSession,
@@ -606,7 +608,7 @@ export class RunManager extends EventEmitter {
             continue;
           }
           this.stopStream(state);
-          this.absorb(state, state.parser.push({ sessionUpdate: "end", stopReason: outcome.stopReason }));
+          this.absorb(state, state.parser.push({ sessionUpdate: "end", stopReason: outcome.stopReason, usage: outcome.usage }));
           if (state.isError && !state.lastStderr) {
             state.lastStderr = `Agent 提前结束（${outcome.stopReason}）`;
           }
@@ -748,6 +750,17 @@ export class RunManager extends EventEmitter {
     if (parsed.modelLabel && state.run.modelLabel !== parsed.modelLabel) {
       state.run.modelLabel = parsed.modelLabel;
       changed = true;
+    }
+    if (parsed.usage) {
+      const usage = { ...parsed.usage };
+      if (!usage.contextWindow) {
+        usage.contextWindow = inferContextWindow(state.run.model, state.run.modelLabel);
+      }
+      const next = mergeUsage(state.run.usage, usage);
+      if (JSON.stringify(state.run.usage) !== JSON.stringify(next)) {
+        state.run.usage = next;
+        changed = true;
+      }
     }
     if (changed) {
       this.options.onRunChanged(state.run);
