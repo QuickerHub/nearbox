@@ -24,8 +24,6 @@ win:
       arch:
         - x64
   signAndEditExecutable: true
-  # CI has no code-signing cert; do not pick a random Windows identity each run.
-  signDlls: false
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
