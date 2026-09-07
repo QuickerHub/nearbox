@@ -1,10 +1,11 @@
 import { type ChildProcess, execFile, spawn } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type AgentKind, type AgentModel } from "@shared/protocol";
 import { MODEL_LIST_ARGS, parseModelList } from "./agent-models";
-import { quoteForCmd, type ResolvedCommand, versionKey } from "./agent-output";
+import { quoteForCmd, type ResolvedCommand } from "./agent-output";
+import { resolveCursorAgentBundle } from "./cursor-bundle.ts";
 
 export {
   buildInvocation,
@@ -71,6 +72,14 @@ export function spawnEnv(): NodeJS.ProcessEnv {
   if (IS_WINDOWS) {
     env.Path = env.PATH;
   }
+  // Electron's own variables make a packaged Nearbox.exe look like Chromium to
+  // child Node processes; cursor-agent then talks HTTP to the wrong binary.
+  for (const key of Object.keys(env)) {
+    if (key.startsWith("ELECTRON_") || key.startsWith("CHROME_") || key.startsWith("GOOGLE_")) {
+      delete env[key];
+    }
+  }
+  delete env.NODE_OPTIONS;
   // The Node-based CLIs are bundles of several megabytes; Node's compile cache saves close to a
   // second on every cold start. Their own launchers set this, which Nearbox bypasses to avoid cmd.exe.
   if (!env.NODE_COMPILE_CACHE) {
@@ -140,7 +149,7 @@ export function unwrapShim(path: string): ResolvedCommand {
         return { file: node, prefixArgs: [target], display: `${node} ${target}`, viaCmd: false };
       }
     }
-    if (/\.ps1"/i.test(body)) {
+    if (/\.ps1/i.test(body)) {
       const direct = resolveCursorAgentBundle(shimDir);
       if (direct) {
         return direct;
@@ -178,33 +187,6 @@ function findNode(shimDir: string): string | null {
     }
   }
   return null;
-}
-
-/** cursor-agent ships its own node.exe + index.js inside versions/<date-hash>/. */
-function resolveCursorAgentBundle(shimDir: string): ResolvedCommand | null {
-  const inPlace = join(shimDir, "index.js");
-  const inPlaceNode = join(shimDir, "node.exe");
-  if (existsSync(inPlace) && existsSync(inPlaceNode)) {
-    return { file: inPlaceNode, prefixArgs: [inPlace], display: `${inPlaceNode} ${inPlace}`, viaCmd: false };
-  }
-  const versionsDir = join(shimDir, "versions");
-  if (!existsSync(versionsDir)) {
-    return null;
-  }
-  const versions = readdirSync(versionsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && /^\d{4}\.\d{1,2}\.\d{1,2}/.test(entry.name))
-    .map((entry) => entry.name)
-    .filter(
-      (name) => existsSync(join(versionsDir, name, "node.exe")) && existsSync(join(versionsDir, name, "index.js")),
-    )
-    .sort((a, b) => versionKey(b) - versionKey(a));
-  const latest = versions[0];
-  if (!latest) {
-    return null;
-  }
-  const node = join(versionsDir, latest, "node.exe");
-  const script = join(versionsDir, latest, "index.js");
-  return { file: node, prefixArgs: [script], display: `${node} ${script}`, viaCmd: false };
 }
 
 /**

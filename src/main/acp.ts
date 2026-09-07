@@ -2,10 +2,13 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname } from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import { parseModelAlias } from "../shared/model-variants.ts";
 import type { AgentAccess, AgentKind } from "../shared/protocol";
 import type { ResolvedCommand } from "./agent-output";
+import { resolveCursorAgentBundle } from "./cursor-bundle.ts";
 import { killTree } from "./kill.ts";
 
 // A warm agent process speaking ACP (Agent Client Protocol: JSON-RPC 2.0, one
@@ -34,7 +37,16 @@ export interface HostLaunch {
 
 /** Agents that can run as an ACP server, and how to start them from their resolved command. */
 export const ACP_LAUNCH: Partial<Record<AgentKind, (command: ResolvedCommand) => HostLaunch | null>> = {
-  cursor: (command) => (command.viaCmd ? null : { file: command.file, args: [...command.prefixArgs, "acp"] }),
+  cursor: (command) => {
+    const direct = command.viaCmd ? null : { file: command.file, args: [...command.prefixArgs, "acp"] };
+    if (direct) {
+      return direct;
+    }
+    // Packaged Nearbox sometimes only finds the .cmd shim; the real node+index.js still sit next to it.
+    const shim = command.prefixArgs[0] ?? command.file;
+    const bundle = resolveCursorAgentBundle(dirname(shim));
+    return bundle ? { file: bundle.file, args: [...bundle.prefixArgs, "acp"] } : null;
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -230,8 +242,8 @@ export interface PermissionOption {
 
 export interface PromptHandlers {
   onUpdate(update: Record<string, unknown>): void;
-  /** Pick an option for a permission request, or null to cancel the call. */
-  onPermission(toolCall: Record<string, unknown>, options: PermissionOption[]): string | null;
+  /** Pick an option for a permission request, or null to cancel the call. May wait for the user. */
+  onPermission(toolCall: Record<string, unknown>, options: PermissionOption[]): string | null | Promise<string | null>;
 }
 
 export interface PromptOutcome {
@@ -510,18 +522,27 @@ export class AgentHost extends EventEmitter {
 
   private onRequest(request: RpcIncomingRequest): void {
     if (request.method === "session/request_permission") {
-      const sessionId = String(request.params.sessionId ?? "");
-      const active = this.prompts.get(sessionId);
-      const toolCall = request.params.toolCall && typeof request.params.toolCall === "object" ? (request.params.toolCall as Record<string, unknown>) : {};
-      const options = Array.isArray(request.params.options)
-        ? request.params.options.filter((item): item is PermissionOption => Boolean(item) && typeof item === "object" && typeof (item as PermissionOption).optionId === "string")
-        : [];
-      const optionId = active ? active.handlers.onPermission(toolCall, options) : null;
-      this.connection.respond(request.id, optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } });
+      void this.answerPermission(request);
       return;
     }
     // We advertised no fs/terminal capabilities, so the agent should never ask; refuse politely if it does.
     this.connection.respondError(request.id, { code: -32601, message: `Method not supported: ${request.method}` });
+  }
+
+  private async answerPermission(request: RpcIncomingRequest): Promise<void> {
+    const sessionId = String(request.params.sessionId ?? "");
+    const active = this.prompts.get(sessionId);
+    const toolCall = request.params.toolCall && typeof request.params.toolCall === "object" ? (request.params.toolCall as Record<string, unknown>) : {};
+    const options = Array.isArray(request.params.options)
+      ? request.params.options.filter((item): item is PermissionOption => Boolean(item) && typeof item === "object" && typeof (item as PermissionOption).optionId === "string")
+      : [];
+    let optionId: string | null = null;
+    try {
+      optionId = active ? await active.handlers.onPermission(toolCall, options) : null;
+    } catch {
+      optionId = null;
+    }
+    this.connection.respond(request.id, optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } });
   }
 
   private touch(): void {
@@ -568,13 +589,9 @@ export class AgentHostPool {
     this.options = options;
   }
 
-  /** Whether this agent can be hosted at all (and has not just failed to start). */
+  /** Whether this agent can be hosted at all. Recent start failures do not block a real run. */
   supports(kind: AgentKind): boolean {
-    if (this.disposed || !ACP_LAUNCH[kind]) {
-      return false;
-    }
-    const failed = this.failedAt.get(kind);
-    return failed === undefined || Date.now() - failed > RETRY_AFTER_FAILURE_MS;
+    return !this.disposed && Boolean(ACP_LAUNCH[kind]);
   }
 
   /** The live host for `kind`, started if needed; null when hosting is unavailable. */
@@ -601,6 +618,10 @@ export class AgentHostPool {
    * newest conversation it does know, which still brings the MCP servers up.
    */
   async warm(kind: AgentKind, cwd?: string, sessionId?: string): Promise<void> {
+    const failed = this.failedAt.get(kind);
+    if (failed !== undefined && Date.now() - failed < RETRY_AFTER_FAILURE_MS) {
+      return;
+    }
     const host = await this.host(kind);
     if (!host || (sessionId && host.hasSession(sessionId))) {
       return;
@@ -663,26 +684,43 @@ export class AgentHostPool {
 // Policy and model helpers (pure)
 // ---------------------------------------------------------------------------
 
-/**
- * Which permission option to take for a tool call. Full access allows
- * everything; safe mode refuses commands, matching what cursor-agent does
- * unattended. "Allow always" is never chosen: it would edit the user's global
- * allowlist.
- */
-export function choosePermission(access: AgentAccess, toolCall: Record<string, unknown>, options: PermissionOption[]): { optionId: string | null; rejected: boolean } {
-  const kinds = new Map(options.map((option) => [option.kind, option.optionId]));
-  const allow = kinds.get("allow_once") ?? null;
-  const reject = kinds.get("reject_once") ?? kinds.get("reject_always") ?? null;
-  if (access === "safe" && toolCall.kind === "execute") {
-    return { optionId: reject, rejected: true };
-  }
-  if (allow) {
-    return { optionId: allow, rejected: false };
-  }
-  return { optionId: reject, rejected: true };
+export type PermissionDecision = { action: "select"; optionId: string | null; rejected: boolean } | { action: "ask" };
+
+/** Allow/deny pair the UI can show; prefers once over always. */
+export function reviewOptions(options: PermissionOption[]): { allow?: PermissionOption; reject?: PermissionOption } {
+  const kinds = new Map(options.map((option) => [option.kind, option]));
+  return {
+    allow: kinds.get("allow_once") ?? kinds.get("allow_always"),
+    reject: kinds.get("reject_once") ?? kinds.get("reject_always"),
+  };
 }
 
-const LEVELS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+export function isExecuteTool(toolCall: Record<string, unknown>): boolean {
+  const kind = String(toolCall.kind ?? "");
+  return kind === "execute" || kind === "shell";
+}
+
+/**
+ * Full access auto-allows. Safe mode auto-allows file work and asks the user
+ * before a terminal command — that is the "review" part of safe mode.
+ */
+export function choosePermission(access: AgentAccess, toolCall: Record<string, unknown>, options: PermissionOption[]): PermissionDecision {
+  const { allow, reject } = reviewOptions(options);
+  if (access === "safe" && isExecuteTool(toolCall)) {
+    return allow || reject ? { action: "ask" } : { action: "select", optionId: null, rejected: true };
+  }
+  if (allow) {
+    return { action: "select", optionId: allow.optionId, rejected: false };
+  }
+  return { action: "select", optionId: reject?.optionId ?? null, rejected: true };
+}
+
+export function describePermission(toolCall: Record<string, unknown>): { toolCallId: string; title: string; command?: string } {
+  const raw = toolCall.rawInput && typeof toolCall.rawInput === "object" ? (toolCall.rawInput as Record<string, unknown>) : {};
+  const command = [raw.command, toolCall.command, raw.commandLine].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim();
+  const title = [toolCall.title, command, toolCall.kind].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim() ?? "命令";
+  return { toolCallId: String(toolCall.toolCallId ?? ""), title, command };
+}
 
 /**
  * `cursor-agent --list-models` names models with aliases such as
@@ -704,41 +742,22 @@ export function mapCursorModel(alias: string, models: readonly AcpModel[]): stri
   if (wanted === "auto" || wanted === "default") {
     return models.find((model) => model.name.toLowerCase() === "auto" || model.modelId === "default[]")?.modelId;
   }
-  const tokens = wanted.toLowerCase().replace(/^cursor-/, "").split("-").filter(Boolean);
-  let fast = false;
-  let thinking = false;
-  let level: string | undefined;
-  // Suffixes are read from the end: [-thinking][-level][-fast], "extra-high" being one level.
-  for (;;) {
-    const last = tokens.at(-1);
-    if (last === "fast" && !fast) {
-      fast = true;
-      tokens.pop();
-    } else if (last === "thinking" && !thinking) {
-      thinking = true;
-      tokens.pop();
-    } else if (last === "high" && tokens.at(-2) === "extra" && !level) {
-      level = "xhigh";
-      tokens.splice(-2, 2);
-    } else if (last && LEVELS.has(last) && !level) {
-      level = last;
-      tokens.pop();
-    } else {
-      break;
-    }
+  const parsed = parseModelAlias(wanted);
+  if (!parsed) {
+    return undefined;
   }
-  const base = nameTokens(tokens.join("-"));
+  const base = nameTokens(parsed.base.replace(/^cursor-/, ""));
   const candidates = models.filter((model) => sameTokens(nameTokens(model.name), base));
   const matching = candidates.filter((model) => {
     const params = presetParams(model.modelId);
-    if ((params.get("fast") === "true") !== fast) {
+    if ((params.get("fast") === "true") !== parsed.fast) {
       return false;
     }
-    if ((params.get("thinking") === "true") !== thinking) {
+    if ((params.get("thinking") === "true") !== parsed.thinking) {
       return false;
     }
     const presetLevel = params.get("effort") ?? params.get("reasoning") ?? params.get("reasoning_effort");
-    return level === undefined || presetLevel === undefined || presetLevel === level;
+    return parsed.effort === undefined || presetLevel === undefined || presetLevel === parsed.effort;
   });
   return matching.length === 1 ? matching[0]!.modelId : undefined;
 }

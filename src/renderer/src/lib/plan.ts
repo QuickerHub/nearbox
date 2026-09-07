@@ -110,7 +110,7 @@ export function planSend(input: PlanInput): SendPlan {
     return {
       action: content ? "note-run" : "run",
       label: content ? "发送" : "运行",
-      hint: `${activeLabel} 正在工作；这条会排队，之后作为新会话交给 ${agentLabel}。`,
+      hint: `${activeLabel} 正在工作；这条会排队，之后作为新会话把你的话交给 ${agentLabel}。`,
       enabled: true,
       queued: true,
       canContinue,
@@ -122,8 +122,8 @@ export function planSend(input: PlanInput): SendPlan {
       action: "note-run",
       label: "发送",
       hint: canContinue
-        ? `新开一段会话：把任务和${what}一起交给 ${agentLabel}，不带之前的上下文。`
-        : `把任务和${what}一起交给 ${agentLabel} 在「${projectName}」里开始一段会话。`,
+        ? `新开一段会话：把${what}交给 ${agentLabel}，不带之前的上下文。`
+        : `把${what}交给 ${agentLabel} 在「${projectName}」里开始一段会话。`,
       enabled: true,
       canContinue,
     };

@@ -14,4 +14,7 @@
     <string name="hint_no_wifi">手机没有连接 Wi-Fi，所以找不到电脑。请先连上电脑所在的 Wi-Fi，连上后会自动重试。</string>
     <string name="scan_prompt">对准电脑「设置 → 连接手机」里的二维码</string>
     <string name="camera_needed">扫码需要相机权限</string>
+    <string name="install_permission">请允许 Nearbox 安装应用，然后再点一次更新</string>
+    <string name="installing_apk">正在从电脑下载新版手机壳…</string>
+    <string name="install_failed">下载失败：%1$s</string>
 </resources>

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   BrowserWindow,
@@ -19,8 +20,26 @@ import { installDelegationBin } from "./delegation";
 import { TaskHub } from "./hub";
 import { LanServer } from "./lan-server";
 import { createInputInjector } from "./input-win";
+import { isTransientSocketError } from "./network";
 import { RemoteControlHub } from "./remote";
 import { ScreenSource, primaryDisplaySize } from "./screen";
+import { AppUpdater } from "./updater";
+
+process.on("uncaughtException", (error) => {
+  if (isTransientSocketError(error)) {
+    console.warn(`[net] ${error.message}`);
+    return;
+  }
+  console.error(error);
+  dialog.showErrorBox("A JavaScript error occurred in the main process", error.stack ?? error.message);
+});
+process.on("unhandledRejection", (reason) => {
+  if (isTransientSocketError(reason)) {
+    console.warn(`[net] ${reason instanceof Error ? reason.message : String(reason)}`);
+    return;
+  }
+  console.error(reason);
+});
 
 const isDev = import.meta.env.DEV;
 
@@ -229,6 +248,17 @@ async function startHost(): Promise<void> {
     },
     log: (message) => console.warn(`[remote] ${message}`),
   });
+  const updater = new AppUpdater({
+    currentVersion: app.getVersion(),
+    packaged: app.isPackaged && !isDev,
+    cacheDir: join(tmpdir(), "nearbox-updates"),
+    onLaunchInstaller: (filePath) => {
+      const child = spawn(filePath, [], { detached: true, stdio: "ignore" });
+      child.unref();
+      quitting = true;
+      app.quit();
+    },
+  });
   const next = new LanServer({
     hub: nextHub,
     userData,
@@ -238,9 +268,13 @@ async function startHost(): Promise<void> {
     appVersion: app.getVersion(),
     apkPath: resolveApkPath(),
     remote,
+    updater,
     port: lanPort,
   });
   await next.start();
+  setTimeout(() => {
+    void updater.check().catch((error) => console.warn(`[update] ${error instanceof Error ? error.message : String(error)}`));
+  }, 8000);
   next.on("snapshot", () => refreshTrayMenu());
   nextHub.on("run-finished", (run: AgentRun) => notifyRunFinished(run));
   nextHub.on("settings", (settings: HostSettings) => {

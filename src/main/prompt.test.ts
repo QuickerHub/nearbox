@@ -7,6 +7,7 @@ const log: PromptAttachment = { name: "app.log", path: "D:\\inbox\\phone\\app.lo
 
 test("a text-only turn is passed through untouched apart from trimming", () => {
   assert.equal(buildTurnPrompt("  修一下登录页\r\n按钮错位  ", [], false), "修一下登录页\n按钮错位");
+  assert.doesNotMatch(buildTurnPrompt("你好", [], false), /# 任务：|## 要求/);
 });
 
 test("a turn with files keeps the words first and lists every file with its kind", () => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { RunEvent, RunEventKind, ToolCall } from "../../../shared/protocol.ts";
-import { buildTranscript, groupLabel, summarizeTranscript, toolVerb } from "./runTranscript.ts";
+import { buildTranscript, diffLines, displayTool, groupLabel, summarizeTranscript, toolVerb } from "./runTranscript.ts";
 
 function ev(seq: number, kind: RunEventKind, text: string, tool?: ToolCall, delta?: boolean): RunEvent {
   return { seq, at: "2026-09-06T00:00:00.000Z", kind, text, ...(tool ? { tool } : {}), ...(delta ? { delta } : {}) };
@@ -136,7 +136,7 @@ test("legacy cursor-agent lines become real rows even when the JSON was cut shor
   assert.deepEqual(tools[1]?.files, ["package.json"]);
   assert.equal(tools[2]?.command, "dir");
   assert.equal(tools[2]?.cwd, "D:\\Work\\test");
-  assert.match(tools[2]?.error ?? "", /拦截/);
+  assert.match(tools[2]?.error ?? "", /拒绝/);
 });
 
 test("labels read naturally", () => {
@@ -144,4 +144,63 @@ test("labels read naturally", () => {
   assert.equal(toolVerb({ kind: "read", status: "ok" }), "读取了");
   assert.equal(groupLabel("read", 4, false), "读取了 4 个文件");
   assert.equal(groupLabel("grep", 2, true), "搜索 2 次");
+});
+
+test("older logs that kept cursor-agent's raw JSON results are unwrapped for display", () => {
+  const read = displayTool(call("r", { kind: "read", status: "ok", output: '{"content":"using System;\\n\\nclass A\\n{\\n}\\n"}' }));
+  assert.equal(read.output, "using System;\n\nclass A\n{\n}\n");
+  const grep = displayTool(call("g", { kind: "grep", status: "ok", output: '{"totalMatches":3753,"truncated":true}' }));
+  assert.equal(grep.output, "3753 处匹配（结果已截断）");
+  const failed = displayTool(call("f", { kind: "grep", status: "ok", output: '{"error":"Glob pattern \\"**/*\\" matches every file and is not allowed."}' }));
+  assert.equal(failed.status, "error");
+  assert.match(failed.error ?? "", /not allowed/);
+  assert.equal(failed.output, undefined);
+  // A read of an actual JSON file is content, not a wrapper.
+  const json = displayTool(call("j", { kind: "read", status: "ok", output: '{\n  "name": "react-app",\n  "scripts": { "dev": "vite" }\n}' }));
+  assert.equal(json.output, '{\n  "name": "react-app",\n  "scripts": { "dev": "vite" }\n}');
+  // A wrapper cut short by the output limit is decoded as far as it goes.
+  const clipped = displayTool(call("c", { kind: "read", status: "ok", output: '{"content":"line one\\nline two\\nsaid \\"hi\\" \\u00e9\\u\n… 已省略 5000 个字符' }));
+  assert.equal(clipped.output, 'line one\nline two\nsaid "hi" é\n… 已省略 5000 个字符');
+  assert.equal(displayTool(call("p", { kind: "read", status: "ok", output: "plain text" })).output, "plain text");
+});
+
+test("diff lines carry numbers from the hunk headers and drop the file header", () => {
+  const diff = ["--- a/x.sql", "+++ b/x.sql", "@@ -10,4 +10,4 @@", " select 1;", "--- old", "+-- new", " select 2;", "@@ -30,1 +30,2 @@", " x", "+y"].join("\n");
+  assert.deepEqual(
+    diffLines(diff).map((line) => [line.tag, line.text, line.oldNo, line.newNo]),
+    [
+      ["meta", "--- a/x.sql", undefined, undefined],
+      ["meta", "+++ b/x.sql", undefined, undefined],
+      ["hunk", "@@ -10,4 +10,4 @@", undefined, undefined],
+      ["ctx", "select 1;", 10, 10],
+      ["del", "-- old", 11, undefined],
+      ["add", "-- new", undefined, 11],
+      ["ctx", "select 2;", 12, 12],
+      ["hunk", "@@ -30,1 +30,2 @@", undefined, undefined],
+      ["ctx", "x", 30, 30],
+      ["add", "y", undefined, 31],
+    ],
+  );
+  // cursor-agent's diffString for a new file has the header but no hunk: numbering starts at 1.
+  const created = diffLines("--- /dev/null\n+++ b/hello.txt\n+hi\n+there");
+  assert.deepEqual(
+    created.filter((line) => line.tag === "add").map((line) => line.newNo),
+    [1, 2],
+  );
+});
+
+test("old whole-file diffs (every line removed, then every line added) are re-diffed for real", () => {
+  const before = ["const a = 1;", "const b = 8;", "const c = 3;", ""];
+  const after = ["const a = 1;", "const b = 5;", "const c = 3;", ""];
+  const legacy = [...before.map((line) => `-${line}`), ...after.map((line) => `+${line}`)].join("\n");
+  assert.deepEqual(
+    diffLines(legacy).map((line) => `${line.tag}:${line.text}`),
+    ["hunk:@@ -1,3 +1,3 @@", "ctx:const a = 1;", "del:const b = 8;", "add:const b = 5;", "ctx:const c = 3;"],
+  );
+  // A cut-off one cannot be rebuilt and is shown as recorded, note included.
+  const clipped = `-a\n-b\n+a\n… 已省略 120 个字符`;
+  assert.deepEqual(
+    diffLines(clipped).map((line) => line.tag),
+    ["del", "del", "add", "note"],
+  );
 });

@@ -1,4 +1,5 @@
 import type { AgentAccess, AgentKind, RunEventKind, ToolCall, ToolKind, ToolStatus } from "@shared/protocol";
+import { countChanges, unifiedDiff } from "../shared/diff.ts";
 import {
   asArray,
   basenameOf,
@@ -7,6 +8,7 @@ import {
   compact,
   describeArgs,
   describeCursorResult,
+  describeRawResult,
   firstLine,
   isRecord,
   MAX_TOOL_INPUT,
@@ -681,13 +683,13 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       const redescribed = rawInput || title ? describeArgs(title ?? previous?.name ?? "tool", rawInput ?? {}, undefined, kindHint) : undefined;
       const content = describeAcpContent(asArray(data.content));
       const output = describeRawOutput(redescribed?.kind ?? previous?.kind ?? "other", data.rawOutput);
-      const hasNews = Boolean(content.output || content.diff || output.output || output.exitCode !== undefined || redescribed || files);
+      const hasNews = Boolean(content.output || content.diff || output.output || output.error || output.exitCode !== undefined || redescribed || files);
       // Empty updates are progress ticks; only emit when there is something new to show.
       if (!hasNews && (data.status === undefined || (previous && acpStatus(String(data.status)) === previous.status))) {
         return;
       }
-      // The client refused this call; the agent still reports it as completed afterwards.
-      if (previous?.status === "rejected" && !hasNews) {
+      // A call the client refused, or that reported its own failure, stays that way when the agent later marks it completed.
+      if ((previous?.status === "rejected" || previous?.status === "error") && !hasNews && data.status === "completed") {
         return;
       }
       const patch: Partial<ToolCall> & Pick<ToolCall, "name" | "kind"> = {
@@ -698,12 +700,15 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
         ...output,
         ...content,
         status: data.status === undefined ? previous?.status ?? "running" : acpStatus(String(data.status)),
-        error: typeof data.error === "string" && data.error ? data.error : undefined,
+        error: typeof data.error === "string" && data.error ? data.error : output.error,
       };
       if (redescribed?.subject) {
         patch.subject = redescribed.subject;
       }
       if (patch.status === "ok" && patch.exitCode !== undefined && patch.exitCode !== 0) {
+        patch.status = "error";
+      }
+      if (output.status === "error" && patch.status !== "rejected") {
         patch.status = "error";
       }
       sink.tool(events, track(id, patch));
@@ -780,26 +785,44 @@ function acpLocations(data: Record<string, unknown>): string[] | undefined {
   return files.length ? files : undefined;
 }
 
-/** cursor-agent reports a finished command as `{ exitCode, stdout, stderr }`; anything else is shown as JSON. */
+/**
+ * cursor-agent reports a finished command as `{ exitCode, stdout, stderr }`
+ * and its other built-in tools as the shapes `describeRawResult` knows;
+ * anything else is shown as indented JSON.
+ */
 function describeRawOutput(kind: ToolKind, rawOutput: unknown): Partial<ToolCall> {
   if (rawOutput === undefined || rawOutput === null) {
     return {};
   }
-  if (isRecord(rawOutput) && ("stdout" in rawOutput || "stderr" in rawOutput || "exitCode" in rawOutput)) {
-    const stdout = typeof rawOutput.stdout === "string" ? rawOutput.stdout : "";
-    const stderr = typeof rawOutput.stderr === "string" ? rawOutput.stderr : "";
-    const combined = stdout && stderr ? `${stdout}\n${stderr}` : stdout || stderr;
-    const patch: Partial<ToolCall> = {};
-    if (combined.trim()) {
-      patch.output = clipTail(combined);
+  if (isRecord(rawOutput)) {
+    if ("stdout" in rawOutput || "stderr" in rawOutput || "exitCode" in rawOutput) {
+      const stdout = typeof rawOutput.stdout === "string" ? rawOutput.stdout : "";
+      const stderr = typeof rawOutput.stderr === "string" ? rawOutput.stderr : "";
+      const combined = stdout && stderr ? `${stdout}\n${stderr}` : stdout || stderr;
+      const patch: Partial<ToolCall> = {};
+      if (combined.trim()) {
+        patch.output = clipTail(combined);
+      }
+      if (typeof rawOutput.exitCode === "number") {
+        patch.exitCode = rawOutput.exitCode;
+      }
+      return patch;
     }
-    if (typeof rawOutput.exitCode === "number") {
-      patch.exitCode = rawOutput.exitCode;
+    const known = describeRawResult(rawOutput);
+    if (known) {
+      return known;
     }
-    return patch;
   }
-  const text = compact(rawOutput);
+  const text = typeof rawOutput === "string" ? rawOutput : prettyJson(rawOutput);
   return text ? { output: kind === "shell" ? clipTail(text) : clipHead(text) } : {};
+}
+
+function prettyJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? "";
+  } catch {
+    return compact(value);
+  }
 }
 
 function describeAcpContent(content: unknown[]): Partial<ToolCall> {
@@ -815,10 +838,15 @@ function describeAcpContent(content: unknown[]): Partial<ToolCall> {
       if (path) {
         files.push(path);
       }
+      // ACP describes an edit as the whole file before and after; the diff is ours to work out.
       const oldText = typeof item.oldText === "string" ? item.oldText : "";
       const newText = typeof item.newText === "string" ? item.newText : "";
-      if (oldText || newText) {
-        patch.diff = clipHead(simpleDiff(oldText, newText));
+      const diff = unifiedDiff(oldText, newText);
+      if (diff) {
+        patch.diff = clipHead(diff);
+        const counts = countChanges(diff);
+        patch.linesAdded = counts.added;
+        patch.linesRemoved = counts.removed;
       }
     } else if (item.type === "content") {
       const inner = isRecord(item.content) ? item.content : item;
@@ -938,12 +966,6 @@ function compactPatch<T extends object>(patch: T): T {
     }
   }
   return copy as T;
-}
-
-function simpleDiff(oldText: string, newText: string): string {
-  const removed = oldText ? oldText.split("\n").map((line) => `-${line}`) : [];
-  const added = newText ? newText.split("\n").map((line) => `+${line}`) : [];
-  return [...removed, ...added].join("\n");
 }
 
 function textOf(block: unknown): string {

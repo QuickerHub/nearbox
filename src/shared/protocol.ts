@@ -219,8 +219,23 @@ export const AGENT_LABELS: Record<AgentKind, string> = {
   opencode: "opencode",
 };
 
-/** safe: agent may edit the workspace but asks/denies dangerous commands. full: run everything. */
+/** safe: edit the workspace, review terminal commands. full: run everything. */
 export type AgentAccess = "safe" | "full";
+
+/** One button the user can press when a run is waiting for confirmation. */
+export interface PermissionChoice {
+  optionId: string;
+  kind: string;
+  label: string;
+}
+
+/** Live only: the agent is waiting for you to allow or reject a command. */
+export interface PendingPermission {
+  toolCallId: string;
+  title: string;
+  command?: string;
+  options: PermissionChoice[];
+}
 
 /** One model a CLI can be pointed at with its `--model` flag. */
 export interface AgentModel {
@@ -250,6 +265,18 @@ export interface AgentInfo {
   modelsCheckedAt?: string;
   /** Why the most recent fetch failed (not logged in, offline, timeout…); `models` then holds the previous list. */
   modelsError?: string;
+  /**
+   * Cursor IDE Settings → Models: which families are toggled on, in picker
+   * order. Only set for the cursor agent when we could read the IDE state.
+   */
+  ideModels?: IdeModelPref[];
+}
+
+/** One row from Cursor IDE's model toggle list (`availableDefaultModels2` + overrides). */
+export interface IdeModelPref {
+  id: string;
+  label?: string;
+  visible: boolean;
 }
 
 export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
@@ -301,6 +328,8 @@ export interface AgentRun {
   summary?: string;
   error?: string;
   eventCount: number;
+  /** Present only while a warm turn is waiting for you to allow or reject a command. */
+  pendingPermission?: PendingPermission;
 }
 
 export type RunEventKind = "status" | "thinking" | "text" | "tool" | "stderr" | "raw" | "result";
@@ -509,6 +538,23 @@ export interface HostSnapshot {
   listenError?: string;
 }
 
+/** Result of asking GitHub (or the cache) whether a newer Nearbox exists. */
+export interface AppUpdateStatus {
+  current: string;
+  latest: string | null;
+  newer: boolean;
+  notes: string;
+  htmlUrl: string | null;
+  exeUrl: string | null;
+  apkUrl: string | null;
+  packaged: boolean;
+  checking: boolean;
+  downloading: boolean;
+  progress: number;
+  error?: string;
+  checkedAt?: string;
+}
+
 export type ClientToHost =
   | { type: "capture"; id: string; text: string }
   | { type: "subscribe-run"; runId: string }
@@ -600,7 +646,26 @@ export function isRunActive(run: Pick<AgentRun, "status">): boolean {
 }
 
 export { canContinueRun, sessionIdAlongChain } from "./conversation";
+export { parseCursorIdeModels } from "./cursor-ide-models";
 export { BUILTIN_MODELS, canListModels, filterModels, modelLabel, modelsForAgent, modelsNeedRefresh, normalizeModelId } from "./models";
+export {
+  compactModelLabel,
+  depthLabel,
+  depthOf,
+  familiesAreFoldable,
+  familyHint,
+  filterFamilies,
+  findFamily,
+  idePrefForFamily,
+  groupModelFamilies,
+  presentFamilies,
+  parseModelAlias,
+  pickInFamily,
+  pickVariant,
+  sameDepth,
+  variantCanToggleFast,
+} from "./model-variants";
+export type { ModelFamily, ThinkingDepth } from "./model-variants";
 
 /**
  * Agents that can run in `project`: the ones installed on the device the

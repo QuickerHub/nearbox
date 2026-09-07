@@ -1,9 +1,9 @@
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import type { RunEvent } from "@shared/protocol";
+import type { PendingPermission, RunEvent } from "@shared/protocol";
 import { buildTranscript, summarizeTranscript, toolVerb, type WorkRow } from "../lib/runTranscript";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
-import { ToolGroupRow, ToolRow } from "./ToolRows";
+import { PermissionAsk, ToolGroupRow, ToolRow } from "./ToolRows";
 
 interface RunTranscriptProps {
   events: RunEvent[];
@@ -13,6 +13,8 @@ interface RunTranscriptProps {
   failed: boolean;
   /** The user asked to see the record; start with the work section open. */
   defaultOpen?: boolean;
+  pending?: PendingPermission;
+  onResolve?(optionId: string): void;
 }
 
 /**
@@ -20,17 +22,20 @@ interface RunTranscriptProps {
  * While the turn is live the work section stays open and follows along; when
  * it finishes it folds down to a single line, like Cursor does.
  */
-export function RunTranscript({ events, active, durationLabel, failed, defaultOpen }: RunTranscriptProps): JSX.Element {
+export function RunTranscript({ events, active, durationLabel, failed, defaultOpen, pending, onResolve }: RunTranscriptProps): JSX.Element {
   const transcript = useMemo(() => summarizeTranscript(buildTranscript(events)), [events]);
   const { work, answer, toolCount, running } = transcript;
   const busyWith = running.at(-1);
+  const attached = Boolean(pending?.toolCallId && workHasTool(work, pending.toolCallId));
+  const waiting = Boolean(pending);
 
   return (
     <div className="turn">
-      {work.length ? (
-        <WorkFold live={active} toolCount={toolCount} durationLabel={durationLabel} failed={failed} defaultOpen={Boolean(defaultOpen)}>
+      {work.length || (pending && !attached) ? (
+        <WorkFold live={active} waiting={waiting} toolCount={toolCount} durationLabel={durationLabel} failed={failed} defaultOpen={Boolean(defaultOpen)}>
+          {pending && !attached && onResolve ? <PermissionAsk pending={pending} onResolve={onResolve} /> : null}
           {work.map((row) => (
-            <WorkItem key={`${row.type}-${row.seq}`} row={row} failed={failed} />
+            <WorkItem key={`${row.type}-${row.seq}`} row={row} failed={failed} pending={pending} onResolve={onResolve} />
           ))}
         </WorkFold>
       ) : null}
@@ -48,14 +53,44 @@ export function RunTranscript({ events, active, durationLabel, failed, defaultOp
             <i />
             <i />
           </span>
-          <span>{busyWith ? `${toolVerb(busyWith)} ${busyWith.subject ?? busyWith.command ?? ""}`.trim() : answer ? "还在继续…" : "思考中…"}</span>
+          <span>
+            {waiting
+              ? "等待你确认命令…"
+              : busyWith
+                ? `${toolVerb(busyWith)} ${busyWith.subject ?? busyWith.command ?? ""}`.trim()
+                : answer
+                  ? "还在继续…"
+                  : "思考中…"}
+          </span>
         </div>
       ) : null}
     </div>
   );
 }
 
-function WorkItem({ row, failed }: { row: WorkRow; failed: boolean }): JSX.Element | null {
+function workHasTool(work: WorkRow[], toolCallId: string): boolean {
+  return work.some((row) => {
+    if (row.type === "tool") {
+      return row.tool.id === toolCallId;
+    }
+    if (row.type === "tools") {
+      return row.tools.some((tool) => tool.id === toolCallId);
+    }
+    return false;
+  });
+}
+
+function WorkItem({
+  row,
+  failed,
+  pending,
+  onResolve,
+}: {
+  row: WorkRow;
+  failed: boolean;
+  pending?: PendingPermission;
+  onResolve?(optionId: string): void;
+}): JSX.Element | null {
   switch (row.type) {
     case "thinking":
       return <ThinkingRow text={row.text} />;
@@ -66,9 +101,9 @@ function WorkItem({ row, failed }: { row: WorkRow; failed: boolean }): JSX.Eleme
         </div>
       );
     case "tool":
-      return <ToolRow tool={row.tool} />;
+      return <ToolRow tool={row.tool} pending={pending} onResolve={onResolve} />;
     case "tools":
-      return <ToolGroupRow kind={row.kind} tools={row.tools} />;
+      return <ToolGroupRow kind={row.kind} tools={row.tools} pending={pending} onResolve={onResolve} />;
     case "status":
       return <div className="turn__status">{row.text}</div>;
     case "stderr":
@@ -80,6 +115,7 @@ function WorkItem({ row, failed }: { row: WorkRow; failed: boolean }): JSX.Eleme
 
 function WorkFold({
   live,
+  waiting,
   toolCount,
   durationLabel,
   failed,
@@ -87,6 +123,7 @@ function WorkFold({
   children,
 }: {
   live: boolean;
+  waiting: boolean;
   toolCount: number;
   durationLabel: string;
   failed: boolean;
@@ -102,7 +139,11 @@ function WorkFold({
     }
   }, [live, failed, pinned]);
   const steps = toolCount ? `${toolCount} 步` : "";
-  const label = live ? ["正在工作", steps, durationLabel].filter(Boolean).join(" · ") : [durationLabel ? `工作了 ${durationLabel}` : "过程", steps].filter(Boolean).join(" · ");
+  const label = waiting
+    ? ["等待确认", steps, durationLabel].filter(Boolean).join(" · ")
+    : live
+      ? ["正在工作", steps, durationLabel].filter(Boolean).join(" · ")
+      : [durationLabel ? `工作了 ${durationLabel}` : "过程", steps].filter(Boolean).join(" · ");
   return (
     <div className={`fold${open ? " is-open" : ""}${live ? " fold--live" : ""}`}>
       <button

@@ -10,6 +10,7 @@ import {
   type DeviceInfo,
   type FileMeta,
   type HostSettings,
+  type IdeModelPref,
   type Project,
   type RemoteDevice,
   type Task,
@@ -33,6 +34,7 @@ export interface StoredFile {
 export interface ModelCatalog {
   models: AgentModel[];
   checkedAt: string;
+  ideModels?: IdeModelPref[];
 }
 
 export interface PersistedState {
@@ -163,6 +165,28 @@ function normalizeNote(note: TaskNote & { file?: FileMeta }): TaskNote {
 }
 
 /** Only well-formed catalogs survive a reload; anything odd is simply fetched again. */
+function normalizeIdeModels(value: unknown): IdeModelPref[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const out: IdeModelPref[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    if (typeof record.id !== "string" || !record.id.trim()) {
+      continue;
+    }
+    const pref: IdeModelPref = { id: record.id, visible: record.visible === true };
+    if (typeof record.label === "string" && record.label.trim()) {
+      pref.label = record.label.trim();
+    }
+    out.push(pref);
+  }
+  return out.length ? out : undefined;
+}
+
 function normalizeCatalogs(value: unknown): Partial<Record<AgentKind, ModelCatalog>> {
   const out: Partial<Record<AgentKind, ModelCatalog>> = {};
   if (!value || typeof value !== "object") {
@@ -173,13 +197,18 @@ function normalizeCatalogs(value: unknown): Partial<Record<AgentKind, ModelCatal
     if (!entry || typeof entry !== "object") {
       continue;
     }
-    const { models, checkedAt } = entry as { models?: unknown; checkedAt?: unknown };
+    const { models, checkedAt, ideModels } = entry as { models?: unknown; checkedAt?: unknown; ideModels?: unknown };
     if (!Array.isArray(models) || typeof checkedAt !== "string") {
       continue;
     }
     const clean = models.filter((model): model is AgentModel => Boolean(model) && typeof (model as AgentModel).id === "string" && (model as AgentModel).id.length > 0);
     if (clean.length) {
-      out[kind] = { models: clean, checkedAt };
+      const catalog: ModelCatalog = { models: clean, checkedAt };
+      const prefs = normalizeIdeModels(ideModels);
+      if (prefs) {
+        catalog.ideModels = prefs;
+      }
+      out[kind] = catalog;
     }
   }
   return out;
@@ -197,14 +226,15 @@ function normalizeDevice(device: RemoteDevice): RemoteDevice {
 }
 
 function normalizeRun(run: AgentRun): AgentRun {
+  const { pendingPermission: _pending, ...rest } = run;
   // Anything that was still in flight when the host died can never finish.
-  if (run.status === "running" || run.status === "queued") {
+  if (rest.status === "running" || rest.status === "queued") {
     return {
-      ...run,
+      ...rest,
       status: "failed",
-      error: run.error ?? "电脑端在运行期间退出了。",
-      finishedAt: run.finishedAt ?? new Date().toISOString(),
+      error: rest.error ?? "电脑端在运行期间退出了。",
+      finishedAt: rest.finishedAt ?? new Date().toISOString(),
     };
   }
-  return { ...run, eventCount: run.eventCount ?? 0 };
+  return { ...rest, eventCount: rest.eventCount ?? 0 };
 }

@@ -61,17 +61,17 @@ test("closing the connection fails every pending request", async () => {
   await assert.rejects(connection.request("session/new", {}), /已关闭/);
 });
 
-test("permission policy: full access allows, safe mode refuses commands only, never 'always'", () => {
+test("permission policy: full access allows, safe mode asks before commands", () => {
   const options = [
     { optionId: "allow-once", kind: "allow_once" },
     { optionId: "allow-always", kind: "allow_always" },
     { optionId: "reject-once", kind: "reject_once" },
   ];
-  assert.deepEqual(choosePermission("full", { kind: "execute" }, options), { optionId: "allow-once", rejected: false });
-  assert.deepEqual(choosePermission("safe", { kind: "execute" }, options), { optionId: "reject-once", rejected: true });
-  assert.deepEqual(choosePermission("safe", { kind: "edit" }, options), { optionId: "allow-once", rejected: false });
-  // Nothing sensible offered: cancel the call rather than pick blindly.
-  assert.deepEqual(choosePermission("full", { kind: "execute" }, [{ optionId: "x", kind: "allow_always" }]), { optionId: null, rejected: true });
+  assert.deepEqual(choosePermission("full", { kind: "execute" }, options), { action: "select", optionId: "allow-once", rejected: false });
+  assert.deepEqual(choosePermission("safe", { kind: "execute" }, options), { action: "ask" });
+  assert.deepEqual(choosePermission("safe", { kind: "edit" }, options), { action: "select", optionId: "allow-once", rejected: false });
+  // Some CLIs only offer "always"; full access still has to pick it or every command dies.
+  assert.deepEqual(choosePermission("full", { kind: "execute" }, [{ optionId: "x", kind: "allow_always" }]), { action: "select", optionId: "x", rejected: false });
 });
 
 const PRESETS: AcpModel[] = [

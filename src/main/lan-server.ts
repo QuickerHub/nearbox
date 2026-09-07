@@ -41,6 +41,7 @@ import type { TaskHub } from "./hub";
 import { isLoopbackOrPrivate, listPrivateLanAddresses, normalizeRemoteIp } from "./network";
 import type { RemoteControlHub } from "./remote";
 import type { PairedSession, StoredFile } from "./store";
+import { emptyUpdateStatus, type AppUpdater } from "./updater";
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -80,6 +81,7 @@ export class LanServer extends EventEmitter {
   private readonly sockets = new Set<SocketBinding>();
   private readonly devices = new Map<string, DeviceInfo>();
   private readonly remote: RemoteControlHub | null;
+  private readonly updater: AppUpdater | null;
   private server: http.Server | null = null;
   private wss: WebSocketServer | null = null;
   private rcWss: WebSocketServer | null = null;
@@ -99,6 +101,7 @@ export class LanServer extends EventEmitter {
     appVersion: string;
     apkPath?: string | null;
     remote?: RemoteControlHub | null;
+    updater?: AppUpdater | null;
     port?: number;
   }) {
     super();
@@ -109,6 +112,7 @@ export class LanServer extends EventEmitter {
     this.desktopSecret = options.desktopSecret;
     this.appVersion = options.appVersion;
     this.remote = options.remote ?? null;
+    this.updater = options.updater ?? null;
     this.apkPath = options.apkPath && existsSync(options.apkPath) ? options.apkPath : null;
     this.inboxDir = join(options.userData, "inbox");
     this.stagingDir = join(options.userData, "staging");
@@ -137,11 +141,18 @@ export class LanServer extends EventEmitter {
     }
 
     const server = http.createServer((req, res) => {
+      ignoreStreamError(req);
+      ignoreStreamError(res);
       void this.handleHttp(req, res);
     });
     const wss = new WebSocketServer({ noServer: true });
     const rcWss = new WebSocketServer({ noServer: true });
+    server.on("connection", (socket) => ignoreStreamError(socket));
+    server.on("clientError", (_error, socket) => {
+      socket.destroy();
+    });
     server.on("upgrade", (req, socket, head) => {
+      ignoreStreamError(socket);
       const url = new URL(req.url ?? "/", "http://nearbox.local");
       if (url.pathname === "/ws") {
         wss.handleUpgrade(req, socket, head, (ws) => {
@@ -159,6 +170,8 @@ export class LanServer extends EventEmitter {
       }
       socket.destroy();
     });
+    wss.on("error", () => undefined);
+    rcWss.on("error", () => undefined);
     wss.on("connection", (socket, req) => {
       this.bindSocket(socket, req);
     });
@@ -169,6 +182,10 @@ export class LanServer extends EventEmitter {
         server.off("error", reject);
         resolve();
       });
+    });
+    server.on("error", (error) => {
+      this.listenError = error.message;
+      this.scheduleSnapshot();
     });
 
     this.server = server;
@@ -583,7 +600,7 @@ export class LanServer extends EventEmitter {
         "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(file.name)}`,
         "Cache-Control": "private, max-age=3600",
       });
-      createReadStream(file.path).pipe(res);
+      pipeToResponse(file.path, res);
       return;
     }
 
@@ -655,6 +672,12 @@ export class LanServer extends EventEmitter {
         this.writeJson(res, { ok: true });
         return;
       }
+      if (tail === "permission" && method === "POST") {
+        const body = await readJson<{ optionId?: string }>(req);
+        this.hub.resolvePermission(runId, String(body.optionId ?? ""));
+        this.writeJson(res, { ok: true });
+        return;
+      }
       if (tail === "reply" && method === "POST") {
         const body = await readJson<{ text?: string }>(req);
         this.assertTextLength(String(body.text ?? ""));
@@ -684,6 +707,23 @@ export class LanServer extends EventEmitter {
     if (path === "/api/settings" && method === "POST") {
       const body = await readJson<Partial<HostSettings>>(req);
       this.writeJson(res, this.hub.updateSettings(body));
+      return;
+    }
+    if (path === "/api/update" && method === "GET") {
+      this.writeJson(res, this.updater?.status() ?? emptyUpdateStatus(this.appVersion, false));
+      return;
+    }
+    if (path === "/api/update/check" && method === "POST") {
+      const body = await readJson<{ force?: boolean }>(req).catch(() => ({ force: true }));
+      this.writeJson(res, this.updater ? await this.updater.check(Boolean(body.force)) : emptyUpdateStatus(this.appVersion, false));
+      return;
+    }
+    if (path === "/api/update/install" && method === "POST") {
+      this.requireDesktop(session);
+      if (!this.updater) {
+        throw new Error("这个版本还不能在应用里更新。");
+      }
+      this.writeJson(res, this.updater.startInstall());
       return;
     }
 
@@ -729,7 +769,7 @@ export class LanServer extends EventEmitter {
       "Content-Disposition": `attachment; filename="Nearbox-${this.appVersion}.apk"`,
       "Cache-Control": "no-store",
     });
-    createReadStream(this.apkPath).pipe(res);
+    pipeToResponse(this.apkPath, res);
   }
 
   private async serveRenderer(res: http.ServerResponse, pathname: string): Promise<void> {
@@ -763,13 +803,23 @@ export class LanServer extends EventEmitter {
         headers: { ...req.headers, host: `127.0.0.1:${this.vitePort}` },
       },
       (upstream) => {
+        ignoreStreamError(upstream);
+        if (res.writableEnded || res.destroyed) {
+          upstream.destroy();
+          return;
+        }
         res.writeHead(upstream.statusCode ?? 502, upstream.headers);
         upstream.pipe(res);
       },
     );
+    ignoreStreamError(proxy);
     proxy.on("error", () => {
-      res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" });
-      res.end("桌面端开发服务还没起来，请先在电脑上运行 npm run dev。");
+      if (!res.headersSent && !res.writableEnded && !res.destroyed) {
+        res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("桌面端开发服务还没起来，请先在电脑上运行 npm run dev。");
+        return;
+      }
+      res.destroy();
     });
     req.pipe(proxy);
   }
@@ -783,19 +833,25 @@ export class LanServer extends EventEmitter {
       headers: { ...req.headers, host: `127.0.0.1:${this.vitePort}` },
     });
     proxy.on("upgrade", (res, upstream, upstreamHead) => {
-      socket.write(
-        `HTTP/1.1 101 Switching Protocols\r\n${Object.entries(res.headers)
-          .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : value}`)
-          .join("\r\n")}\r\n\r\n`,
-      );
-      if (head.length) {
-        upstream.write(head);
+      ignoreStreamError(upstream);
+      try {
+        socket.write(
+          `HTTP/1.1 101 Switching Protocols\r\n${Object.entries(res.headers)
+            .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : value}`)
+            .join("\r\n")}\r\n\r\n`,
+        );
+        if (head.length) {
+          upstream.write(head);
+        }
+        if (upstreamHead.length) {
+          socket.write(upstreamHead);
+        }
+        upstream.pipe(socket);
+        socket.pipe(upstream);
+      } catch {
+        socket.destroy();
+        upstream.destroy();
       }
-      if (upstreamHead.length) {
-        socket.write(upstreamHead);
-      }
-      upstream.pipe(socket);
-      socket.pipe(upstream);
     });
     proxy.on("error", () => socket.destroy());
     proxy.end();
@@ -804,6 +860,7 @@ export class LanServer extends EventEmitter {
   // ------------------------------------------------------------- WebSocket
 
   private bindSocket(socket: WebSocket, req: http.IncomingMessage): void {
+    socket.on("error", () => undefined);
     const url = new URL(req.url ?? "/", "http://nearbox.local");
     let session: PairedSession & { runScope?: string };
     try {
@@ -863,8 +920,8 @@ export class LanServer extends EventEmitter {
   private broadcastRunEvent(runId: string, event: RunEvent): void {
     const payload = JSON.stringify({ type: "run-event", runId, event } satisfies HostToClient);
     for (const binding of this.sockets) {
-      if (binding.runs.has(runId) && binding.socket.readyState === WebSocket.OPEN) {
-        binding.socket.send(payload);
+      if (binding.runs.has(runId)) {
+        sendRaw(binding.socket, payload);
       }
     }
   }
@@ -879,9 +936,7 @@ export class LanServer extends EventEmitter {
       const snapshot = this.snapshot();
       const payload = JSON.stringify({ type: "snapshot", snapshot } satisfies HostToClient);
       for (const binding of this.sockets) {
-        if (binding.socket.readyState === WebSocket.OPEN) {
-          binding.socket.send(payload);
-        }
+        sendRaw(binding.socket, payload);
       }
       this.emit("snapshot", snapshot);
     }, 60);
@@ -949,13 +1004,22 @@ export class LanServer extends EventEmitter {
   }
 
   private writeJson(res: http.ServerResponse, body: unknown, status = 200): void {
-    res.writeHead(status, {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Headers": "Authorization, Content-Type",
-    });
-    res.end(JSON.stringify(body));
+    if (res.writableEnded || res.destroyed) {
+      return;
+    }
+    try {
+      if (!res.headersSent) {
+        res.writeHead(status, {
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Headers": "Authorization, Content-Type",
+        });
+      }
+      res.end(JSON.stringify(body));
+    } catch {
+      /* client already gone */
+    }
   }
 }
 
@@ -964,9 +1028,34 @@ function actorOf(device: DeviceInfo): Actor {
 }
 
 function sendSocket(socket: WebSocket, event: HostToClient): void {
-  if (socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(event));
+  sendRaw(socket, JSON.stringify(event));
+}
+
+function sendRaw(socket: WebSocket, payload: string): void {
+  try {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(payload);
+    }
+  } catch {
+    /* the socket is on its way out */
   }
+}
+
+function ignoreStreamError(stream: { on(event: "error", listener: (error: Error) => void): unknown }): void {
+  stream.on("error", () => undefined);
+}
+
+function pipeToResponse(filePath: string, res: http.ServerResponse): void {
+  const stream = createReadStream(filePath);
+  const stop = () => {
+    stream.destroy();
+    if (!res.destroyed) {
+      res.destroy();
+    }
+  };
+  stream.on("error", stop);
+  res.on("error", stop);
+  stream.pipe(res);
 }
 
 function bearerToken(req: http.IncomingMessage): string {

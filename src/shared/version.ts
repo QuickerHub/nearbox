@@ -14,3 +14,22 @@ export function versionCodeFromName(version: string): number {
 export function stripTagPrefix(tag: string): string {
   return tag.trim().replace(/^v/i, "");
 }
+
+export function tryVersionCode(version: string): number | null {
+  try {
+    return versionCodeFromName(stripTagPrefix(version));
+  } catch {
+    return null;
+  }
+}
+
+export function isNewerVersion(latest: string, current: string): boolean {
+  const next = tryVersionCode(latest);
+  const now = tryVersionCode(current);
+  return next !== null && now !== null && next > now;
+}
+
+/** Android WebView adds `NearboxShell/x.y.z` to the user agent. */
+export function shellVersionFromUserAgent(ua: string): string | undefined {
+  return /NearboxShell\/(\d+\.\d+\.\d+)/.exec(ua)?.[1];
+}

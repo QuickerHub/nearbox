@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
-import { AGENT_LABELS, type AgentKind, type AgentRun, isRunActive, type RunEvent } from "@shared/protocol";
+import { AGENT_LABELS, type AgentKind, type AgentRun, isRunActive } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatDuration, formatRelative } from "../lib/format";
+import { useRunEvents } from "../lib/useRunEvents";
 import { FileStrip } from "./Attachments";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
 import { RunTranscript } from "./RunTranscript";
+import { PermissionAsk } from "./ToolRows";
 
 interface RunBlockProps {
   run: AgentRun;
@@ -31,7 +33,7 @@ export function RunBlock({ run, client, opensConversation, delegatedFrom, projec
   // Set when the user asked to see the record, so the fold opens as soon as it loads instead of needing a second click.
   const [expanded, setExpanded] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
-  const [events, setEvents] = useState<RunEvent[] | null>(null);
+  const events = useRunEvents(client, run.id, open && !queued);
   const [, setTick] = useState(0);
 
   useEffect(() => {
@@ -39,50 +41,6 @@ export function RunBlock({ run, client, opensConversation, delegatedFrom, projec
       setOpen(true);
     }
   }, [active]);
-
-  useEffect(() => {
-    if (!open || queued) {
-      return;
-    }
-    let disposed = false;
-    let lastSeq = 0;
-    let buffered: RunEvent[] = [];
-    let caughtUp = false;
-    const unsubscribe = client.subscribeRun(run.id, (event) => {
-      if (disposed) {
-        return;
-      }
-      if (!caughtUp) {
-        buffered.push(event);
-        return;
-      }
-      if (event.seq > lastSeq) {
-        lastSeq = event.seq;
-        setEvents((current) => [...(current ?? []), event]);
-      }
-    });
-    void client
-      .runEvents(run.id, 0)
-      .then((history) => {
-        if (disposed) {
-          return;
-        }
-        lastSeq = history[history.length - 1]?.seq ?? 0;
-        const merged = [...history, ...buffered.filter((event) => event.seq > lastSeq)];
-        lastSeq = merged[merged.length - 1]?.seq ?? lastSeq;
-        buffered = [];
-        caughtUp = true;
-        setEvents(merged);
-      })
-      .catch(() => {
-        caughtUp = true;
-        setEvents((current) => current ?? []);
-      });
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
-  }, [client, run.id, open, queued]);
 
   useEffect(() => {
     if (run.status !== "running") {
@@ -154,12 +112,24 @@ export function RunBlock({ run, client, opensConversation, delegatedFrom, projec
         </div>
       ) : open ? (
         events === null ? (
-          <button type="button" className="fold__head fold__head--lazy" disabled>
-            <span className="spinner spinner--small fold__spinner" />
-            <span className="fold__label">正在读取记录…</span>
-          </button>
+          run.pendingPermission ? (
+            <PermissionAsk pending={run.pendingPermission} onResolve={(optionId) => void client.resolvePermission(run.id, optionId)} />
+          ) : (
+            <button type="button" className="fold__head fold__head--lazy" disabled>
+              <span className="spinner spinner--small fold__spinner" />
+              <span className="fold__label">正在读取记录…</span>
+            </button>
+          )
         ) : (
-          <RunTranscript events={events} active={active} durationLabel={duration} failed={failed} defaultOpen={expanded} />
+          <RunTranscript
+            events={events}
+            active={active}
+            durationLabel={duration}
+            failed={failed}
+            defaultOpen={expanded}
+            pending={run.pendingPermission}
+            onResolve={(optionId) => void client.resolvePermission(run.id, optionId)}
+          />
         )
       ) : (
         <>

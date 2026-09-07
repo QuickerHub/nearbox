@@ -1,5 +1,6 @@
+import { unifiedDiff } from "../../../shared/diff.ts";
 import type { RunEvent, ToolCall, ToolKind, ToolStatus } from "../../../shared/protocol";
-import { describeArgs, describeCursorResult, looseJson } from "../../../shared/tools.ts";
+import { describeArgs, describeCursorResult, describeRawResult, isRecord, looseJson } from "../../../shared/tools.ts";
 
 export type TranscriptItem =
   | { type: "thinking"; text: string; seq: number }
@@ -232,27 +233,144 @@ export function hasDetail(tool: ToolCall): boolean {
   return Boolean(tool.output || tool.diff || tool.input || tool.error || (tool.files && tool.files.length > 1));
 }
 
-/** Lines of a unified diff, tagged for colouring. */
-export function diffLines(diff: string): { tag: "add" | "del" | "hunk" | "meta" | "ctx"; text: string }[] {
-  return diff
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .filter((line, index, all) => !(index === all.length - 1 && line === ""))
-    .map((line) => {
-      if (line.startsWith("+++") || line.startsWith("---")) {
-        return { tag: "meta" as const, text: line };
+/** Marker `clipHead` leaves when output was cut short, as a trailing line. */
+const CLIP_NOTE = /\n?… 已省略 \d+ 个字符$/;
+const CLIP_NOTE_LINE = /^… 已省略 \d+ 个字符$/;
+
+/**
+ * A call as it should be shown. Logs written before the parser knew
+ * cursor-agent's result shapes kept the raw JSON — `{"content":"…"}` for a
+ * read, `{"totalMatches":…}` for a search — and are unwrapped here.
+ */
+export function displayTool(tool: ToolCall): ToolCall {
+  if (!tool.output?.startsWith("{")) {
+    return tool;
+  }
+  const parsed = wholeJson(tool.output);
+  const known = parsed ? describeRawResult(parsed) : null;
+  if (known) {
+    return {
+      ...tool,
+      output: known.output,
+      error: tool.error ?? known.error,
+      status: known.status === "error" && tool.status === "ok" ? "error" : tool.status,
+    };
+  }
+  const content = clippedContent(tool.output);
+  return content === null ? tool : { ...tool, output: content };
+}
+
+/** Only a complete object counts here: salvaged fragments of a file's text could look like a result. */
+function wholeJson(text: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `{"content":"…` cut off mid-string by the output limit: decode what is there. */
+function clippedContent(output: string): string | null {
+  const head = /^\{\s*"content"\s*:\s*"/.exec(output);
+  if (!head) {
+    return null;
+  }
+  const note = CLIP_NOTE.exec(output);
+  let body = output.slice(head[0].length, note ? note.index : undefined);
+  // The cut may have landed inside an escape sequence (`\uXXXX` at worst).
+  for (let attempt = 0; attempt < 6 && body; attempt += 1) {
+    try {
+      return `${JSON.parse(`"${body}"`) as string}${note ? `\n${note[0].trim()}` : ""}`;
+    } catch {
+      body = body.slice(0, -1);
+    }
+  }
+  return null;
+}
+
+export interface DiffLine {
+  tag: "add" | "del" | "ctx" | "hunk" | "meta" | "note";
+  /** Content without the leading `+`/`-`/space marker. */
+  text: string;
+  oldNo?: number;
+  newNo?: number;
+}
+
+/** Lines of a unified diff, tagged for colouring and numbered from the hunk headers. */
+export function diffLines(diff: string): DiffLine[] {
+  const lines = restoreLegacyDiff(diff).replace(/\r\n/g, "\n").split("\n");
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  const out: DiffLine[] = [];
+  let oldNo: number | undefined;
+  let newNo: number | undefined;
+  let inBody = false;
+  for (const line of lines) {
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (hunk) {
+      inBody = true;
+      oldNo = Number(hunk[1]);
+      newNo = Number(hunk[2]);
+      out.push({ tag: "hunk", text: line });
+      continue;
+    }
+    if (!inBody && (line.startsWith("---") || line.startsWith("+++"))) {
+      // A headed diff without hunks is a whole new (or deleted) file.
+      if (line.startsWith("--- /dev/null")) {
+        newNo = 1;
+      } else if (line.startsWith("+++ /dev/null")) {
+        oldNo = 1;
       }
-      if (line.startsWith("@@")) {
-        return { tag: "hunk" as const, text: line };
-      }
-      if (line.startsWith("+")) {
-        return { tag: "add" as const, text: line };
-      }
-      if (line.startsWith("-")) {
-        return { tag: "del" as const, text: line };
-      }
-      return { tag: "ctx" as const, text: line };
-    });
+      out.push({ tag: "meta", text: line });
+      continue;
+    }
+    if (CLIP_NOTE_LINE.test(line)) {
+      out.push({ tag: "note", text: line });
+      continue;
+    }
+    inBody = true;
+    if (line.startsWith("+")) {
+      out.push({ tag: "add", text: line.slice(1), newNo });
+      newNo = newNo === undefined ? undefined : newNo + 1;
+    } else if (line.startsWith("-")) {
+      out.push({ tag: "del", text: line.slice(1), oldNo });
+      oldNo = oldNo === undefined ? undefined : oldNo + 1;
+    } else {
+      out.push({ tag: "ctx", text: line.startsWith(" ") ? line.slice(1) : line, oldNo, newNo });
+      oldNo = oldNo === undefined ? undefined : oldNo + 1;
+      newNo = newNo === undefined ? undefined : newNo + 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Diffs recorded before Nearbox worked them out properly: every old line as
+ * `-`, then every new line as `+`. Both halves complete means the two versions
+ * can be rebuilt and diffed for real; a clipped or headed one is left alone.
+ */
+function restoreLegacyDiff(diff: string): string {
+  const lines = diff.replace(/\r\n/g, "\n").split("\n");
+  if (lines.some((line) => line.startsWith("@@")) || CLIP_NOTE.test(diff) || /^(---|\+\+\+)/.test(lines[0] ?? "")) {
+    return diff;
+  }
+  let index = 0;
+  const removed: string[] = [];
+  while (index < lines.length && lines[index]!.startsWith("-")) {
+    removed.push(lines[index]!.slice(1));
+    index += 1;
+  }
+  const added: string[] = [];
+  while (index < lines.length && lines[index]!.startsWith("+")) {
+    added.push(lines[index]!.slice(1));
+    index += 1;
+  }
+  if (index !== lines.length || !removed.length || !added.length) {
+    return diff;
+  }
+  return unifiedDiff(removed.join("\n"), added.join("\n"));
 }
 
 // ---------------------------------------------------------------------------

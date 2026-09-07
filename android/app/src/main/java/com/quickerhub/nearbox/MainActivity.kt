@@ -105,6 +105,11 @@ class MainActivity : AppCompatActivity() {
             "${binding.webView.settings.userAgentString} NearboxShell/${packageManager.getPackageInfo(packageName, 0).versionName}"
         binding.webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                val url = request.url.toString()
+                if (isApkUrl(url)) {
+                    ApkInstaller.start(this@MainActivity, url)
+                    return true
+                }
                 return false
             }
 
@@ -123,6 +128,11 @@ class MainActivity : AppCompatActivity() {
                 }
                 val host = lastTarget?.host ?: request.url.host.orEmpty()
                 showPairing("连不上电脑 $host，正在重新查找…")
+            }
+        }
+        binding.webView.setDownloadListener { url, _, _, mimeType, _ ->
+            if (isApkUrl(url) || mimeType.contains("android.package", ignoreCase = true)) {
+                ApkInstaller.start(this, url)
             }
         }
         binding.webView.webChromeClient = object : WebChromeClient() {
@@ -409,6 +419,10 @@ class MainActivity : AppCompatActivity() {
     private fun setScanStatus(text: String?) {
         binding.scanStatus.text = text.orEmpty()
         binding.scanStatus.visibility = if (text.isNullOrBlank()) View.GONE else View.VISIBLE
+    }
+
+    private fun isApkUrl(url: String): Boolean {
+        return url.contains("/app/nearbox.apk") || url.endsWith(".apk", ignoreCase = true)
     }
 
     private fun prefs() = getSharedPreferences("nearbox", MODE_PRIVATE)

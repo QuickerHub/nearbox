@@ -6,16 +6,33 @@ import {
   type AgentKind,
   type AgentModel,
   canListModels,
+  compactModelLabel,
+  depthLabel,
+  depthOf,
+  familiesAreFoldable,
   type FileMeta,
+  familyHint,
   filterModels,
+  findFamily,
+  groupModelFamilies,
+  idePrefForFamily,
   type HostSnapshot,
+  type IdeModelPref,
   isRunActive,
   MAX_FILES_PER_MESSAGE,
+  type ModelFamily,
   modelLabel,
   modelsForAgent,
   modelsNeedRefresh,
   normalizeModelId,
+  parseModelAlias,
+  pickInFamily,
+  presentFamilies,
+  pickVariant,
+  sameDepth,
   type Task,
+  type ThinkingDepth,
+  variantCanToggleFast,
 } from "@shared/protocol";
 import { type DraftAttachment, extractFiles, stageFiles, stageNotice } from "../lib/attachments";
 import type { ClientHandle } from "../lib/client";
@@ -23,7 +40,8 @@ import { formatBytes, formatRelative } from "../lib/format";
 import { planSend, type SendAction, type SendPlan } from "../lib/plan";
 import { Lightbox } from "./Attachments";
 import { Icon, type IconName } from "./Icons";
-import { Menu, MenuDivider, MenuHeading, MenuItem } from "./Menu";
+import { Menu, MenuDivider, MenuFlyout, MenuHeading, MenuItem, MenuSwitch } from "./Menu";
+import { TerminalDock } from "./TerminalDock";
 
 export interface ComposerChips {
   projectId: string;
@@ -104,6 +122,21 @@ export function ChatComposer({
   const project = snapshot.projects.find((item) => item.id === chips.projectId);
   const agentInfo = snapshot.agents.find((item) => item.kind === chips.agent);
   const activeRun = task ? snapshot.runs.find((run) => run.taskId === task.id && isRunActive(run)) : undefined;
+  const [lingerRunId, setLingerRunId] = useState<string | null>(null);
+  useEffect(() => {
+    setLingerRunId(null);
+  }, [task?.id]);
+  useEffect(() => {
+    if (activeRun && activeRun.status !== "queued") {
+      setLingerRunId(activeRun.id);
+    }
+  }, [activeRun, activeRun?.status]);
+  const dockRun =
+    activeRun && activeRun.status !== "queued"
+      ? activeRun
+      : lingerRunId
+        ? snapshot.runs.find((run) => run.id === lingerRunId)
+        : undefined;
 
   const plan = planSend({
     task,
@@ -212,9 +245,11 @@ export function ChatComposer({
         ? activeRun
           ? "Agent 正在工作…现在输入的会排在这一轮之后发给它"
           : `接着和 ${AGENT_LABELS[chips.agent]} 说…`
-        : "补充说明、追加要求，或者直接点右边运行…"
+        : "接着说，或点右边开一段新会话…"
     : chips.agent
-      ? "想让 Agent 做什么？一句话说清楚，回车就开跑"
+      ? desktop
+        ? "想让 Agent 做什么？回车就发给它"
+        : "想让 Agent 做什么？"
       : "记一条想法、bug、要做的事…";
 
   const hint = error ?? progress ?? localNotice ?? notice ?? plan.hint;
@@ -222,12 +257,14 @@ export function ChatComposer({
 
   return (
     <div className={`composer composer--${variant}${dragging ? " composer--drag" : ""}`}>
-      <form
-        className="composer__card"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submit();
-        }}
+      <div className="composer__stack">
+        {dockRun ? <TerminalDock client={client} run={dockRun} onStop={onStop} /> : null}
+        <form
+          className="composer__card"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
         onPaste={(event) => {
           const files = extractFiles(event.clipboardData);
           if (!files.length) {
@@ -300,42 +337,48 @@ export function ChatComposer({
           }}
         />
         <div className="composer__bar">
-          <ProjectMenu snapshot={snapshot} client={client} projectId={project?.id ?? ""} onPick={(projectId) => onChips({ projectId })} />
-          <AgentMenu
-            snapshot={snapshot}
-            agent={chips.agent}
-            access={chips.access}
-            delegate={chips.delegate}
-            remoteProject={Boolean(project?.deviceId)}
-            onPick={(agent, access) => onChips({ agent, access })}
-            onDelegate={(delegate) => onChips({ delegate })}
-          />
-          {chips.agent ? <ModelMenu snapshot={snapshot} client={client} agent={chips.agent} model={chips.model} onPick={(model) => onChips({ model })} /> : null}
-          <input
-            ref={fileRef}
-            type="file"
-            multiple
-            hidden
-            onChange={(event) => {
-              stage(Array.from(event.target.files ?? []));
-              event.target.value = "";
-            }}
-          />
-          <button type="button" className="icon-btn icon-btn--plain composer__attach" onClick={() => fileRef.current?.click()} title="添加图片或文件" disabled={busy}>
-            <Icon name="attach" size={16} />
-          </button>
-          {activeRun && onStop ? (
-            <button type="button" className="composer__stop" onClick={onStop} title="停止当前运行">
-              <Icon name="stop" size={12} />
-              停止
+          <div className="composer__chips">
+            <ProjectMenu snapshot={snapshot} client={client} projectId={project?.id ?? ""} onPick={(projectId) => onChips({ projectId })} />
+            <AgentMenu
+              snapshot={snapshot}
+              agent={chips.agent}
+              access={chips.access}
+              delegate={chips.delegate}
+              remoteProject={Boolean(project?.deviceId)}
+              onPick={(agent, access) => onChips({ agent, access })}
+              onDelegate={(delegate) => onChips({ delegate })}
+            />
+            {chips.agent && desktop ? <AccessMenu agent={chips.agent} access={chips.access} onPick={(access) => onChips({ access })} /> : null}
+            {chips.agent ? <ModelMenu snapshot={snapshot} client={client} agent={chips.agent} model={chips.model} onPick={(model) => onChips({ model })} /> : null}
+          </div>
+          <div className="composer__actions">
+            <input
+              ref={fileRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(event) => {
+                stage(Array.from(event.target.files ?? []));
+                event.target.value = "";
+              }}
+            />
+            <button type="button" className="icon-btn icon-btn--plain composer__attach" onClick={() => fileRef.current?.click()} title="添加图片或文件" disabled={busy}>
+              <Icon name="attach" size={16} />
             </button>
-          ) : null}
-          <button className={`composer__send${plan.action === "note" || plan.action === "capture" ? " composer__send--quiet" : ""}`} type="submit" disabled={busy || !plan.enabled} title={plan.hint}>
-            {busy ? <span className="spinner spinner--light" /> : <Icon name={SEND_ICON[plan.action]} size={14} />}
-            <span>{plan.label}</span>
-          </button>
+            {activeRun && onStop ? (
+              <button type="button" className="composer__stop" onClick={onStop} title="停止当前运行">
+                <Icon name="stop" size={12} />
+                <span>停止</span>
+              </button>
+            ) : null}
+            <button className={`composer__send${plan.action === "note" || plan.action === "capture" ? " composer__send--quiet" : ""}`} type="submit" disabled={busy || !plan.enabled} title={plan.hint}>
+              {busy ? <span className="spinner spinner--light" /> : <Icon name={SEND_ICON[plan.action]} size={14} />}
+              <span className="composer__send-label">{plan.label}</span>
+            </button>
+          </div>
         </div>
       </form>
+      </div>
       <p className={`composer__hint${hintTone}`}>
         <span className="composer__hint-text">
           {hint}
@@ -468,11 +511,53 @@ function ProjectMenu({
   );
 }
 
-/** What each access level means in practice differs per CLI; cursor-agent in headless mode refuses every command unless forced. */
+/** What each access level means in practice differs per CLI; cursor-agent reviews shell in safe mode. */
 const ACCESS_NOTES: Partial<Record<AgentKind, Record<AgentAccess, string>>> = {
-  cursor: { safe: "能读写项目文件，但所有终端命令都会被拒绝", full: "终端命令也直接执行，不再询问" },
+  cursor: { safe: "读写文件直接做，终端命令先问你允许还是拒绝", full: "终端命令也直接执行，不再询问" },
 };
-const DEFAULT_ACCESS_NOTES: Record<AgentAccess, string> = { safe: "只改项目内文件，危险命令会被拦", full: "任何命令直接执行" };
+const DEFAULT_ACCESS_NOTES: Record<AgentAccess, string> = { safe: "危险命令会先问你", full: "任何命令直接执行" };
+
+function AccessMenu({
+  agent,
+  access,
+  onPick,
+}: {
+  agent: AgentKind;
+  access: AgentAccess;
+  onPick(access: AgentAccess): void;
+}): JSX.Element {
+  const notes = ACCESS_NOTES[agent] ?? DEFAULT_ACCESS_NOTES;
+  return (
+    <Menu icon={access === "full" ? "bolt" : "ban"} label={access === "full" ? "完全放开" : "安全模式"} tone={access === "full" ? "warn" : "default"} title="权限">
+      {(close) => (
+        <>
+          <MenuHeading>权限</MenuHeading>
+          <MenuItem
+            icon="ban"
+            label="安全模式"
+            sub={notes.safe}
+            on={access === "safe"}
+            onClick={() => {
+              onPick("safe");
+              close();
+            }}
+          />
+          <MenuItem
+            icon="bolt"
+            label="完全放开"
+            hint="run everything"
+            sub={notes.full}
+            on={access === "full"}
+            onClick={() => {
+              onPick("full");
+              close();
+            }}
+          />
+        </>
+      )}
+    </Menu>
+  );
+}
 
 function AgentMenu({
   snapshot,
@@ -489,12 +574,11 @@ function AgentMenu({
   delegate: boolean;
   /** The chosen project is on another computer, where the `nearbox` command does not exist. */
   remoteProject: boolean;
-  onPick(agent: AgentKind | "", access: AgentAccess): void;
+  onPick(agent: AgentKind | "", access?: AgentAccess): void;
   onDelegate(delegate: boolean): void;
 }): JSX.Element {
-  const label = agent ? `${AGENT_LABELS[agent]}${access === "full" ? " · 完全放开" : ""}${delegate && !remoteProject ? " · 可委派" : ""}` : "只记录";
+  const label = agent ? `${AGENT_LABELS[agent]}${delegate && !remoteProject ? " · 可委派" : ""}` : "只记录";
   const anyAvailable = snapshot.agents.some((item) => item.available);
-  const defaultAccess = (kind: AgentKind): AgentAccess => snapshot.settings.agents[kind]?.access ?? "safe";
   const notes = (agent && ACCESS_NOTES[agent]) || DEFAULT_ACCESS_NOTES;
   const others = snapshot.agents.filter((info) => info.available && info.kind !== agent).map((info) => AGENT_LABELS[info.kind]);
   return (
@@ -508,7 +592,7 @@ function AgentMenu({
             sub="存成任务或备注，不运行"
             on={!agent}
             onClick={() => {
-              onPick("", "safe");
+              onPick("");
               close();
             }}
           />
@@ -521,7 +605,7 @@ function AgentMenu({
               on={info.kind === agent}
               disabled={!info.available}
               onClick={() => {
-                onPick(info.kind, info.kind === agent ? access : defaultAccess(info.kind));
+                onPick(info.kind);
                 close();
               }}
             />
@@ -538,7 +622,7 @@ function AgentMenu({
                 </button>
                 <button type="button" className={access === "full" ? "menu__seg menu__seg--on menu__seg--warn" : "menu__seg"} onClick={() => onPick(agent, "full")}>
                   完全放开
-                  <span>{notes.full}</span>
+                  <span>run everything · {notes.full}</span>
                 </button>
               </div>
               <MenuDivider />
@@ -557,7 +641,7 @@ function AgentMenu({
                     {remoteProject
                       ? "项目在另一台电脑上时不可用"
                       : others.length
-                        ? `它可以用 nearbox 命令把子任务交给 ${others.join(" / ")}，等对方做完拿回答；安全模式下的 cursor-agent 跑不了命令，用不上`
+                        ? `它可以用 nearbox 命令把子任务交给 ${others.join(" / ")}，等对方做完拿回答；安全模式下每条终端命令都会先问你`
                         : "这台电脑上没有别的 Agent 可以委派，也可以交给同类的另一个会话"}
                   </span>
                 </span>
@@ -597,7 +681,16 @@ function ModelMenu({
   const cliDefault = models.find((item) => item.isDefault);
   // A model the CLI itself listed is a safe pick; anything else (typed, or dropped since) gets flagged.
   const unlisted = Boolean(model) && Boolean(info?.models?.length) && !models.some((item) => item.id === model);
-  const label = model ? modelLabel(models, model) : settingsDefault ? modelLabel(models, settingsDefault) : cliDefault?.label ?? cliDefault?.id ?? "默认模型";
+  const families = groupModelFamilies(models);
+  const foldable = familiesAreFoldable(families);
+  const effectiveId = model || settingsDefault || cliDefault?.id || "";
+  const label = foldable && effectiveId
+    ? compactModelLabel(models, effectiveId) || modelLabel(models, effectiveId)
+    : model
+      ? modelLabel(models, model)
+      : settingsDefault
+        ? modelLabel(models, settingsDefault)
+        : cliDefault?.label ?? cliDefault?.id ?? "默认模型";
   const title = unlisted
     ? `${model} 不在 ${AGENT_LABELS[agent]} 当前的模型列表里，可能已下线或拼写有误`
     : model
@@ -606,7 +699,7 @@ function ModelMenu({
         ? `设置里的默认模型：${settingsDefault}`
         : `模型由 ${AGENT_LABELS[agent]} 自己决定`;
   return (
-    <Menu icon="sparkles" label={label} title={title} tone={unlisted ? "warn" : model ? "default" : "muted"} panelClassName="menu__panel--split">
+    <Menu icon="sparkles" label={label} title={title} tone={unlisted ? "warn" : model ? "default" : "muted"} panelClassName={foldable ? "menu__panel--picker" : "menu__panel--split"}>
       {(close) => (
         <ModelPanel
           agent={agent}
@@ -616,10 +709,8 @@ function ModelMenu({
           unlisted={unlisted}
           settingsDefault={settingsDefault}
           client={client}
-          onPick={(next) => {
-            onPick(next);
-            close();
-          }}
+          onPick={onPick}
+          onClose={close}
         />
       )}
     </Menu>
@@ -635,6 +726,7 @@ function ModelPanel({
   settingsDefault,
   client,
   onPick,
+  onClose,
 }: {
   agent: AgentKind;
   info: AgentInfo | undefined;
@@ -645,16 +737,55 @@ function ModelPanel({
   settingsDefault: string;
   client: ClientHandle;
   onPick(model: string): void;
+  onClose(): void;
 }): JSX.Element {
-  const [query, setQuery] = useState("");
-  const [custom, setCustom] = useState("");
+  const families = groupModelFamilies(models);
+  const catalog = useModelCatalog(agent, info, client);
+  if (familiesAreFoldable(families)) {
+    return (
+      <FoldedModelPicker
+        agent={agent}
+        families={families}
+        models={models}
+        model={model}
+        unlisted={unlisted}
+        settingsDefault={settingsDefault}
+        phone={client.surface === "phone"}
+        ideModels={info?.ideModels}
+        catalog={catalog}
+        onPick={onPick}
+        onClose={onClose}
+      />
+    );
+  }
+  return (
+    <FlatModelList
+      agent={agent}
+      models={models}
+      model={model}
+      unlisted={unlisted}
+      settingsDefault={settingsDefault}
+      desktop={client.surface === "desktop"}
+      catalog={catalog}
+      onPick={(next) => {
+        onPick(next);
+        onClose();
+      }}
+    />
+  );
+}
+
+interface CatalogState {
+  listable: boolean;
+  refreshing: boolean;
+  source: string | null;
+  warn: boolean;
+  refresh(force: boolean): void;
+}
+
+function useModelCatalog(agent: AgentKind, info: AgentInfo | undefined, client: ClientHandle): CatalogState {
   const [refreshing, setRefreshing] = useState(false);
-  const desktop = client.surface === "desktop";
   const listable = canListModels(agent) && Boolean(info?.available);
-  const searchable = models.length >= SEARCHABLE_FROM;
-  const shown = filterModels(models, query);
-  const known = models.some((item) => item.id === model);
-  const customId = normalizeModelId(custom);
 
   const refresh = (force: boolean) => {
     setRefreshing(true);
@@ -672,9 +803,6 @@ function ModelPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening
   }, []);
 
-  // Inputs here live inside the composer's <form>: Enter must never send the message.
-  const stop = (event: { stopPropagation(): void }) => event.stopPropagation();
-
   const source = listable
     ? info?.modelsError
       ? info.models?.length
@@ -689,14 +817,319 @@ function ModelPanel({
       ? null
       : `${AGENT_LABELS[agent]} 不提供模型列表；可以输入别名（如 sonnet、opus）或完整模型名。`;
 
+  return { listable, refreshing, source, warn: Boolean(info?.modelsError), refresh };
+}
+
+/** Cursor-style: Fast / 思考深度 / 模型. Desktop uses flyouts; phone shows the catalog in one sheet. */
+function FoldedModelPicker({
+  agent,
+  families,
+  models,
+  model,
+  unlisted,
+  settingsDefault,
+  phone,
+  ideModels,
+  catalog,
+  onPick,
+  onClose,
+}: {
+  agent: AgentKind;
+  families: ModelFamily[];
+  models: AgentModel[];
+  model: string;
+  unlisted: boolean;
+  settingsDefault: string;
+  phone: boolean;
+  ideModels?: IdeModelPref[];
+  catalog: CatalogState;
+  onPick(model: string): void;
+  onClose(): void;
+}): JSX.Element {
+  const effectiveId = model || settingsDefault || models.find((item) => item.isDefault)?.id || "";
+  const family = findFamily(families, model) ?? (!model ? findFamily(families, effectiveId) : undefined);
+  const alias = (model && parseModelAlias(model)) || (effectiveId ? parseModelAlias(effectiveId) : undefined);
+  const depth = alias ? depthOf(alias) : { kind: "default" as const };
+  const fast = alias?.fast === true;
+  const showEffort = Boolean(family && family.depths.length > 1);
+  const showFast = Boolean(family?.hasFastToggle);
+  const canFast = family ? variantCanToggleFast(family, depth) : false;
+
+  const applyDepth = (next: ThinkingDepth) => {
+    if (!family) {
+      return;
+    }
+    onPick(pickVariant(family, next, fast).id);
+  };
+
+  const applyFamily = (next: ModelFamily) => {
+    onPick(pickInFamily(next, { depth, fast }).id);
+    if (phone) {
+      onClose();
+    }
+  };
+
+  const catalogView = (
+    <FamilyCatalog
+      agent={agent}
+      families={families}
+      model={model}
+      unlisted={unlisted}
+      settingsDefault={settingsDefault}
+      desktop={!phone}
+      ideModels={ideModels}
+      catalog={catalog}
+      onPickDefault={() => {
+        onPick("");
+        onClose();
+      }}
+      onPickFamily={applyFamily}
+      onCustom={(id) => {
+        onPick(id);
+        onClose();
+      }}
+    />
+  );
+
+  const effortView = family ? <EffortList family={family} depth={depth} onPick={applyDepth} /> : null;
+  const toggles = (
+    <>
+      {showFast ? (
+        <MenuSwitch
+          label="Fast"
+          on={fast}
+          disabled={!canFast}
+          onClick={() => family && onPick(pickVariant(family, depth, !fast).id)}
+        />
+      ) : null}
+      {showEffort ? (
+        phone ? (
+          <>
+            <MenuHeading>思考深度 · {depthLabel(depth)}</MenuHeading>
+            {effortView}
+            <MenuDivider />
+          </>
+        ) : (
+          <MenuFlyout label="思考深度" value={depthLabel(depth)}>
+            {effortView}
+          </MenuFlyout>
+        )
+      ) : null}
+    </>
+  );
+
+  if (phone) {
+    return (
+      <>
+        {toggles}
+        {catalogView}
+      </>
+    );
+  }
+
+  return (
+    <>
+      {toggles}
+      <MenuFlyout label="模型" value={model ? (family ? (idePrefForFamily(family, ideModels)?.label ?? family.label) : model) : "默认"} panelClassName="menu-flyout__panel--catalog">
+        {catalogView}
+      </MenuFlyout>
+    </>
+  );
+}
+
+function EffortList({
+  family,
+  depth,
+  onPick,
+}: {
+  family: ModelFamily;
+  depth: ThinkingDepth;
+  onPick(depth: ThinkingDepth): void;
+}): JSX.Element {
+  return (
+    <>
+      {family.depths.map((item) => (
+        <MenuItem key={item.kind === "effort" ? item.effort : item.kind} plain label={depthLabel(item)} on={sameDepth(item, depth)} onClick={() => onPick(item)} />
+      ))}
+    </>
+  );
+}
+
+function FamilyCatalog({
+  agent,
+  families,
+  model,
+  unlisted,
+  settingsDefault,
+  desktop,
+  ideModels,
+  catalog,
+  onPickDefault,
+  onPickFamily,
+  onCustom,
+}: {
+  agent: AgentKind;
+  families: ModelFamily[];
+  model: string;
+  unlisted: boolean;
+  settingsDefault: string;
+  desktop: boolean;
+  ideModels?: IdeModelPref[];
+  catalog: CatalogState;
+  onPickDefault(): void;
+  onPickFamily(family: ModelFamily): void;
+  onCustom(id: string): void;
+}): JSX.Element {
+  const [query, setQuery] = useState("");
+  const [custom, setCustom] = useState("");
+  const [showOlder, setShowOlder] = useState(false);
+  const { current: visible, older } = presentFamilies(families, query, model, ideModels);
+  const fromIde = Boolean(ideModels?.length);
+  const familyName = (item: ModelFamily) => idePrefForFamily(item, ideModels)?.label ?? item.label;
+  const customId = normalizeModelId(custom);
+  const current = findFamily(families, model);
+  const stop = (event: { stopPropagation(): void }) => event.stopPropagation();
+
   return (
     <>
       <div className="menu__head">
         <div className="menu__heading menu__heading--row">
           <span>模型 · {AGENT_LABELS[agent]}</span>
-          {listable ? (
-            <button type="button" className="icon-btn icon-btn--plain menu__heading-btn" onClick={() => refresh(true)} disabled={refreshing} title="重新从命令行工具获取模型列表">
-              {refreshing ? <span className="spinner spinner--small" /> : <Icon name="refresh" size={13} />}
+          {catalog.listable ? (
+            <button type="button" className="icon-btn icon-btn--plain menu__heading-btn" onClick={() => catalog.refresh(true)} disabled={catalog.refreshing} title="重新从命令行工具获取模型列表">
+              {catalog.refreshing ? <span className="spinner spinner--small" /> : <Icon name="refresh" size={13} />}
+            </button>
+          ) : null}
+        </div>
+        {families.length >= SEARCHABLE_FROM ? (
+          <div className="menu__search">
+            <Icon name="search" size={14} />
+            <input
+              value={query}
+              autoFocus={desktop}
+              placeholder="搜索模型…"
+              onChange={(event) => setQuery(event.target.value)}
+              onPointerDown={stop}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (visible[0]) {
+                    onPickFamily(visible[0]);
+                  }
+                }
+              }}
+            />
+          </div>
+        ) : null}
+      </div>
+      <div className="menu__list">
+        {!query ? (
+          <MenuItem
+            plain
+            label="默认"
+            sub={settingsDefault ? `设置里的默认模型：${settingsDefault}` : `由 ${AGENT_LABELS[agent]} 自己决定`}
+            on={!model}
+            onClick={onPickDefault}
+          />
+        ) : null}
+        {model && !current && !query ? (
+          <MenuItem plain label={model} sub={unlisted ? `不在 ${AGENT_LABELS[agent]} 当前的模型列表里` : "手动输入的模型"} on onClick={() => undefined} />
+        ) : null}
+        {!query && visible.length ? <MenuDivider /> : null}
+        {visible.map((item) => (
+          <MenuItem
+            key={item.key}
+            plain
+            label={familyName(item)}
+            hint={familyHint(item)}
+            on={Boolean(model) && current?.key === item.key}
+            onClick={() => onPickFamily(item)}
+          />
+        ))}
+        {!query && older.length ? (
+          <button type="button" className="menu-more" aria-expanded={showOlder} onClick={() => setShowOlder((value) => !value)}>
+            <span>{showOlder ? "收起未开启的模型" : fromIde ? `未在 Cursor 中开启 · ${older.length}` : `更旧的模型 · ${older.length}`}</span>
+            <Icon name={showOlder ? "chevron-up" : "chevron-down"} size={14} />
+          </button>
+        ) : null}
+        {showOlder && !query
+          ? older.map((item) => (
+              <MenuItem
+                key={item.key}
+                plain
+                label={familyName(item)}
+                hint={familyHint(item)}
+                on={Boolean(model) && current?.key === item.key}
+                onClick={() => onPickFamily(item)}
+              />
+            ))
+          : null}
+        {query && !visible.length ? <p className="menu__note">没有匹配的模型，可以在下面直接输入。</p> : null}
+      </div>
+      <div className="menu__foot">
+        <MenuDivider />
+        <div className="menu__form-row menu__form">
+          <input
+            value={custom}
+            placeholder="其他模型 ID…"
+            onChange={(event) => setCustom(event.target.value)}
+            onPointerDown={stop}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                event.stopPropagation();
+                if (customId) {
+                  onCustom(customId);
+                }
+              }
+            }}
+          />
+          <button type="button" className="ghost" disabled={!customId} onClick={() => customId && onCustom(customId)}>
+            使用
+          </button>
+        </div>
+        {catalog.source ? <p className={catalog.warn ? "menu__note menu__note--warn" : "menu__note"}>{fromIde ? `${catalog.source}；开关对照本机 Cursor IDE` : catalog.source}</p> : null}
+      </div>
+    </>
+  );
+}
+
+function FlatModelList({
+  agent,
+  models,
+  model,
+  unlisted,
+  settingsDefault,
+  desktop,
+  catalog,
+  onPick,
+}: {
+  agent: AgentKind;
+  models: AgentModel[];
+  model: string;
+  unlisted: boolean;
+  settingsDefault: string;
+  desktop: boolean;
+  catalog: CatalogState;
+  onPick(model: string): void;
+}): JSX.Element {
+  const [query, setQuery] = useState("");
+  const [custom, setCustom] = useState("");
+  const searchable = models.length >= SEARCHABLE_FROM;
+  const shown = filterModels(models, query);
+  const known = models.some((item) => item.id === model);
+  const customId = normalizeModelId(custom);
+  const stop = (event: { stopPropagation(): void }) => event.stopPropagation();
+
+  return (
+    <>
+      <div className="menu__head">
+        <div className="menu__heading menu__heading--row">
+          <span>模型 · {AGENT_LABELS[agent]}</span>
+          {catalog.listable ? (
+            <button type="button" className="icon-btn icon-btn--plain menu__heading-btn" onClick={() => catalog.refresh(true)} disabled={catalog.refreshing} title="重新从命令行工具获取模型列表">
+              {catalog.refreshing ? <span className="spinner spinner--small" /> : <Icon name="refresh" size={13} />}
             </button>
           ) : null}
         </div>
@@ -748,7 +1181,6 @@ function ModelPanel({
       </div>
       <div className="menu__foot">
         <MenuDivider />
-        {/* Not a <form>: one nested inside the composer's form never gets its onSubmit, but the browser still navigates. */}
         <div className="menu__form-row menu__form">
           <input
             value={custom}
@@ -769,7 +1201,7 @@ function ModelPanel({
             使用
           </button>
         </div>
-        {source ? <p className={info?.modelsError ? "menu__note menu__note--warn" : "menu__note"}>{source}</p> : null}
+        {catalog.source ? <p className={catalog.warn ? "menu__note menu__note--warn" : "menu__note"}>{catalog.source}</p> : null}
       </div>
     </>
   );

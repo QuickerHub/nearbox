@@ -1,9 +1,10 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type MouseEvent, type ReactNode } from "react";
+import { splitInline } from "../lib/autolink";
 
 /**
  * Tiny markdown renderer for agent summaries: headings, bullet/numbered lists,
- * fenced code, inline code and bold. Everything else is plain text; React
- * escapes it, so nothing here can inject markup.
+ * fenced code, inline code, bold and links. The stored text is never rewritten;
+ * React escapes everything, so nothing here can inject markup.
  */
 export function Markdown({ text, className }: { text: string; className?: string }): JSX.Element {
   const blocks = parseBlocks(text.replace(/\r\n/g, "\n"));
@@ -108,25 +109,29 @@ function renderBlock(block: Block): ReactNode {
 }
 
 function renderInline(text: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
-  let last = 0;
-  let match: RegExpExecArray | null;
-  let key = 0;
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > last) {
-      nodes.push(text.slice(last, match.index));
+  return splitInline(text).map((piece, key) => {
+    switch (piece.type) {
+      case "code":
+        return <code key={key}>{piece.text}</code>;
+      case "bold":
+        return <strong key={key}>{renderInline(piece.text)}</strong>;
+      case "link":
+        return (
+          <a key={key} className="md__link" href={piece.href} target="_blank" rel="noreferrer noopener" onClick={(event) => openHref(event, piece.href)}>
+            {piece.text}
+          </a>
+        );
+      default:
+        return <Fragment key={key}>{piece.text}</Fragment>;
     }
-    const token = match[0];
-    if (token.startsWith("`")) {
-      nodes.push(<code key={key++}>{token.slice(1, -1)}</code>);
-    } else {
-      nodes.push(<strong key={key++}>{token.slice(2, -2)}</strong>);
-    }
-    last = match.index + token.length;
+  });
+}
+
+function openHref(event: MouseEvent<HTMLAnchorElement>, href: string): void {
+  event.preventDefault();
+  if (window.nearboxDesktop) {
+    void window.nearboxDesktop.openExternal(href);
+    return;
   }
-  if (last < text.length) {
-    nodes.push(text.slice(last));
-  }
-  return nodes;
+  window.open(href, "_blank", "noopener,noreferrer");
 }

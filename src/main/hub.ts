@@ -38,9 +38,10 @@ import {
   type TaskStatus,
 } from "@shared/protocol";
 import { detectAgents, listAgentModels } from "./agents";
+import { readCursorIdeModels } from "./cursor-ide-state.ts";
 import type { DelegationConfig } from "./delegation";
 import { discoverDevices } from "./lan-discover";
-import { attachmentSection, buildDelegatedPrompt, buildTurnPrompt, delegationSection, imagePaths, type PromptAttachment } from "./prompt";
+import { buildDelegatedPrompt, buildTurnPrompt, delegationSection, imagePaths, type PromptAttachment } from "./prompt";
 import { type RunAttachment, RunManager } from "./runner";
 import { assertSafeRemotePath, directoryExists, listDirectory, probeDevice, remoteAttachmentPath } from "./ssh";
 import { Store, type StoredFile } from "./store";
@@ -94,6 +95,9 @@ export class TaskHub extends EventEmitter {
       if (cached) {
         info.models = cached.models;
         info.modelsCheckedAt = cached.checkedAt;
+        if (cached.ideModels) {
+          info.ideModels = cached.ideModels;
+        }
       }
     }
     this.runner = new RunManager({
@@ -182,7 +186,7 @@ export class TaskHub extends EventEmitter {
     this.agents = detected.map((info) => {
       const previous = this.agents.find((item) => item.kind === info.kind);
       return previous?.models
-        ? { ...info, models: previous.models, modelsCheckedAt: previous.modelsCheckedAt, modelsError: previous.modelsError }
+        ? { ...info, models: previous.models, modelsCheckedAt: previous.modelsCheckedAt, modelsError: previous.modelsError, ideModels: previous.ideModels }
         : info;
     });
     this.changed();
@@ -220,12 +224,14 @@ export class TaskHub extends EventEmitter {
       try {
         const models = await listAgentModels(kind, this.settings.agents[kind]?.command);
         const checkedAt = new Date().toISOString();
-        this.patchAgent(kind, { models, modelsCheckedAt: checkedAt, modelsError: undefined });
-        this.store.state.agentModels[kind] = { models, checkedAt };
+        const ideModels = kind === "cursor" ? readCursorIdeModels() ?? this.store.state.agentModels.cursor?.ideModels : undefined;
+        this.patchAgent(kind, { models, modelsCheckedAt: checkedAt, modelsError: undefined, ideModels });
+        this.store.state.agentModels[kind] = { models, checkedAt, ideModels };
         this.store.save();
       } catch (error) {
         // The previous list stays; the picker shows it together with why it could not be refreshed.
-        this.patchAgent(kind, { modelsError: error instanceof Error ? error.message : String(error) });
+        const ideModels = kind === "cursor" ? readCursorIdeModels() : undefined;
+        this.patchAgent(kind, { modelsError: error instanceof Error ? error.message : String(error), ...(ideModels ? { ideModels } : {}) });
       } finally {
         this.modelFetches.delete(kind);
         this.changed();
@@ -674,27 +680,10 @@ export class TaskHub extends EventEmitter {
   defaultPrompt(taskId: string, projectId?: string, latestMessage?: string): string {
     const task = this.requireTask(taskId);
     const project = projectId ? this.projects.find((item) => item.id === projectId) : undefined;
-    const lines: string[] = [`# 任务：${task.title}`, ""];
-    if (task.details) {
-      lines.push(task.details, "");
-    }
-    const notes = task.notes.filter((note) => note.kind === "note" && note.text);
-    if (notes.length) {
-      lines.push("## 补充说明", ...notes.map((note) => `- ${note.text}`), "");
-    }
-    // Remote runs copy the files over before the agent starts, so the prompt names their destination.
+    const parts = [task.title.trim(), (task.details ?? "").trim(), (latestMessage ?? "").trim()].filter(Boolean);
+    const unique = parts.filter((part, index) => parts.indexOf(part) === index);
     const files = task.notes.flatMap((note) => note.files ?? []);
-    lines.push(...attachmentSection(this.promptAttachments(files, project?.deviceId), Boolean(project?.deviceId)));
-    if (latestMessage) {
-      lines.push("## 这次要做的", latestMessage, "");
-    }
-    lines.push(
-      "## 要求",
-      project ? `- 当前工作目录就是项目「${project.name}」（${project.path}），只改这个项目里的文件。` : "- 只改当前工作目录里的文件。",
-      "- 先理解现有代码再动手，改完自行验证（编译 / 测试 / 运行）。",
-      "- 结束时用中文简要总结：做了什么、改了哪些文件、还有什么需要我确认。",
-    );
-    return lines.join("\n");
+    return buildTurnPrompt(unique.join("\n\n"), this.promptAttachments(files, project?.deviceId), Boolean(project?.deviceId));
   }
 
   dispatch(from: Actor, taskId: string, input: DispatchInput): AgentRun {
@@ -778,14 +767,10 @@ export class TaskHub extends EventEmitter {
     return run;
   }
 
-  /** A follow-up whose conversation turned out not to exist: task context first, then what the user just said. */
+  /** A follow-up whose conversation turned out not to exist: send the user's words as a new conversation. */
   private promptWithoutSession(run: AgentRun): string {
-    if (!this.tasks.some((task) => task.id === run.taskId)) {
-      return run.prompt;
-    }
-    // Rebuild the turn from its parts rather than reuse `run.prompt`, which may already carry the delegation notes.
     const turn = buildTurnPrompt(run.message ?? "", this.promptAttachments(run.attachments ?? [], run.deviceId), Boolean(run.deviceId));
-    return this.withDelegationNotes(run, this.defaultPrompt(run.taskId, run.projectId, turn || undefined));
+    return this.withDelegationNotes(run, turn || run.prompt);
   }
 
   /** The prompt plus, for runs that may delegate, the section explaining the `nearbox` command. */
@@ -964,6 +949,12 @@ export class TaskHub extends EventEmitter {
   cancelRun(runId: string): void {
     if (!this.runner.cancel(runId)) {
       fail("这个运行已经结束了。");
+    }
+  }
+
+  resolvePermission(runId: string, optionId: string): void {
+    if (!this.runner.resolvePermission(runId, optionId)) {
+      fail("现在没有需要确认的命令。");
     }
   }
 

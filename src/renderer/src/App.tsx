@@ -22,6 +22,8 @@ interface ComposePrefs {
   models: Partial<Record<AgentKind, string>>;
   /** Whether runs started here may delegate to other agents; off until the user turns it on. */
   delegate: boolean;
+  /** Last access level picked per agent. */
+  access: Partial<Record<AgentKind, AgentAccess>>;
 }
 
 function readPrefs(): ComposePrefs {
@@ -36,17 +38,25 @@ function readPrefs(): ComposePrefs {
           models[kind] = value;
         }
       }
+      const access: ComposePrefs["access"] = {};
+      for (const kind of AGENT_KINDS) {
+        const value = parsed.access?.[kind];
+        if (value === "safe" || value === "full") {
+          access[kind] = value;
+        }
+      }
       return {
         projectId: typeof parsed.projectId === "string" ? parsed.projectId : "",
         agent: parsed.agent === undefined ? null : parsed.agent,
         models,
         delegate: parsed.delegate === true,
+        access,
       };
     }
   } catch {
     // fall through to defaults
   }
-  return { projectId: "", agent: null, models: {}, delegate: false };
+  return { projectId: "", agent: null, models: {}, delegate: false, access: {} };
 }
 
 /** A model pick belongs to one task (or the home screen) and one agent. */
@@ -65,7 +75,6 @@ export function App(): JSX.Element {
   const { route, navigate } = useRoute();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [prefs, setPrefsState] = useState<ComposePrefs>(() => readPrefs());
-  const [accessOverride, setAccessOverride] = useState<{ agent: AgentKind; access: AgentAccess } | null>(null);
   // Model picked in this session, per task (or the home screen) and agent, so a task's conversation keeps its own model.
   const [modelPicks, setModelPicks] = useState<Record<string, string>>({});
   // Chip picks on an open task are patched to the server; this keeps the chip on the new value until the snapshot catches up.
@@ -197,9 +206,7 @@ export function App(): JSX.Element {
               : "";
     const projectId = validProject(projectPick) ? projectPick! : validProject(prefs.projectId) ? prefs.projectId : recentProject ?? "";
     const access: AgentAccess = agent
-      ? accessOverride?.agent === agent
-        ? accessOverride.access
-        : snapshot.settings.agents[agent]?.access ?? "safe"
+      ? prefs.access[agent] ?? snapshot.settings.agents[agent]?.access ?? "safe"
       : "safe";
     // Model: what was picked here in this session, else the model the task's conversation with this
     // agent already runs on, else the last pick anywhere. "" leaves it to the settings / CLI default.
@@ -210,7 +217,7 @@ export function App(): JSX.Element {
       model = picked !== undefined ? picked : conversation ? conversation.model ?? "" : prefs.models[agent] ?? "";
     }
     return { projectId, agent, access, model, delegate: prefs.delegate };
-  }, [snapshot, task, prefs, accessOverride, taskOverride, modelPicks]);
+  }, [snapshot, task, prefs, taskOverride, modelPicks]);
 
   // The moment an agent is chosen, make sure its catalog is current so the model chip is ready when
   // the user gets there. Only the agent change triggers this; the host ignores repeats within a minute.
@@ -267,7 +274,9 @@ export function App(): JSX.Element {
     if (patch.access !== undefined) {
       const agent = patch.agent ?? chips.agent;
       if (agent) {
-        setAccessOverride({ agent, access: patch.access });
+        setPrefs({ access: { ...prefs.access, [agent]: patch.access } });
+        const current = snapshot?.settings.agents[agent] ?? { access: "safe" as const };
+        void client.updateSettings({ agents: { [agent]: { ...current, access: patch.access } } }).catch(() => undefined);
       }
     }
     if (patch.model !== undefined) {
@@ -311,7 +320,7 @@ export function App(): JSX.Element {
       case "create-run": {
         const created = await client.createTask({ ...captured, status: "todo", projectId: chips.projectId, agent: chips.agent || null, fileIds });
         try {
-          await client.dispatch(created.id, dispatchInput);
+          await client.dispatch(created.id, { ...dispatchInput, prompt: text, fileIds });
         } finally {
           navigate({ name: "task", id: created.id });
         }
@@ -325,9 +334,7 @@ export function App(): JSX.Element {
         setFreshFor(null);
         return;
       case "note-run":
-        // The note rides along in the generated prompt, files included.
-        await client.addNote(task!.id, { text, fileIds });
-        await client.dispatch(task!.id, dispatchInput);
+        await client.dispatch(task!.id, { ...dispatchInput, prompt: text, fileIds });
         setFreshFor(null);
         return;
       case "reply":
@@ -440,7 +447,9 @@ export function App(): JSX.Element {
             <h1 className="home__title">想让 Agent 做点什么？</h1>
             <p className="home__sub muted">一句话说清楚任务，选好项目和 Agent，回车就开跑。不选 Agent 就只是记一下。</p>
           </>
-        ) : null}
+        ) : (
+          <p className="home__lead">想让 Agent 做什么？</p>
+        )}
         {composer("hero")}
         {canRemote ? (
           <button type="button" className="home__remote" onClick={openRemote}>

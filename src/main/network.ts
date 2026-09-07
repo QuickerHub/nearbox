@@ -66,3 +66,27 @@ export function normalizeRemoteIp(ipText: string | undefined): string {
   }
   return value;
 }
+
+const TRANSIENT_SOCKET_CODES = new Set([
+  "ECONNRESET",
+  "ECONNABORTED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "ERR_STREAM_PREMATURE_CLOSE",
+  "ERR_STREAM_DESTROYED",
+]);
+
+/** Peer dropped a TCP connection (phone sleep, Wi-Fi hop, tab close). Not our bug. */
+export function isTransientSocketError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && TRANSIENT_SOCKET_CODES.has(code)) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : "";
+  return /^(read |write |connect )?(ECONNRESET|EPIPE|ECONNABORTED)\b/.test(message);
+}

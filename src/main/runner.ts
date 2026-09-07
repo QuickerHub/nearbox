@@ -10,13 +10,24 @@ import {
   type AgentKind,
   type AgentRun,
   type HostSettings,
+  type PermissionChoice,
   type RemoteDevice,
   type RunEvent,
   type RunEventKind,
   sessionIdAlongChain,
   type ToolCall,
 } from "@shared/protocol";
-import { type AcpSession, type AgentHost, AgentHostPool, choosePermission, mapCursorModel, SessionUnknownError } from "./acp";
+import {
+  type AcpSession,
+  type AgentHost,
+  AgentHostPool,
+  type PermissionOption,
+  choosePermission,
+  describePermission,
+  mapCursorModel,
+  reviewOptions,
+  SessionUnknownError,
+} from "./acp";
 import {
   buildInvocation,
   buildShellCommandLine,
@@ -70,6 +81,8 @@ interface ActiveRun {
   warm?: { host: AgentHost; sessionId: string; stream: NodeJS.Timeout | null };
   /** Bearer token the agent's `nearbox` command uses; valid only while this run is active. */
   token?: string;
+  /** Safe-mode shell: wait here until the user picks allow or reject. */
+  permission?: { resolve(optionId: string | null): void };
 }
 
 export interface RunAttachment {
@@ -176,6 +189,7 @@ export class RunManager extends EventEmitter {
       return false;
     }
     active.cancelled = true;
+    this.settlePermission(active, null);
     if (active.warm) {
       // The host serves other conversations too: ask it to stop this turn, and only kill it if it will not listen.
       const { host, sessionId } = active.warm;
@@ -196,6 +210,27 @@ export class RunManager extends EventEmitter {
       return true;
     }
     killLocal(active.child);
+    return true;
+  }
+
+  /** Answer a safe-mode command prompt. `optionId` must be one the agent offered. */
+  resolvePermission(runId: string, optionId: string): boolean {
+    const state = this.active.get(runId);
+    const pending = state?.run.pendingPermission;
+    if (!state?.permission || !pending) {
+      return false;
+    }
+    const picked = pending.options.find((option) => option.optionId === optionId);
+    if (!picked) {
+      return false;
+    }
+    if (picked.kind.startsWith("reject") && pending.toolCallId) {
+      this.absorb(
+        state,
+        state.parser.push({ sessionUpdate: "tool_call_update", toolCallId: pending.toolCallId, status: "rejected", error: "你拒绝了这条命令" }),
+      );
+    }
+    this.settlePermission(state, optionId);
     return true;
   }
 
@@ -440,6 +475,7 @@ export class RunManager extends EventEmitter {
     const run = state.run;
     const host = await this.hosts.host(run.agent);
     if (!host) {
+      this.append(run, "status", "常驻进程这次没起来，本轮用单独进程（结束就会退出）。");
       return false;
     }
     if (state.cancelled) {
@@ -526,11 +562,14 @@ export class RunManager extends EventEmitter {
         },
         onPermission: (toolCall, options) => {
           const decision = choosePermission(run.access, toolCall, options);
+          if (decision.action === "ask") {
+            return this.askPermission(state, toolCall, options);
+          }
           const id = String(toolCall.toolCallId ?? "");
           if (decision.rejected && id) {
             this.absorb(
               state,
-              state.parser.push({ sessionUpdate: "tool_call_update", toolCallId: id, status: "rejected", error: "命令被拦截：安全模式下不允许执行，需要「完全放开」" }),
+              state.parser.push({ sessionUpdate: "tool_call_update", toolCallId: id, status: "rejected", error: "命令被拦截：Agent 没有给出可批准的选项。" }),
             );
           }
           return decision.optionId;
@@ -597,7 +636,7 @@ export class RunManager extends EventEmitter {
     }
     run.prompt = this.options.promptWithoutSession(run);
     this.options.onRunChanged(run);
-    this.append(run, "status", "上一轮没有建立可继续的会话，这条消息连同任务说明作为新会话发送。");
+    this.append(run, "status", "上一轮没有建立可继续的会话，这条消息作为新会话发送。");
     return undefined;
   }
 
@@ -681,10 +720,59 @@ export class RunManager extends EventEmitter {
     }
   }
 
+  private askPermission(state: ActiveRun, toolCall: Record<string, unknown>, options: PermissionOption[]): Promise<string | null> {
+    const described = describePermission(toolCall);
+    const { allow, reject } = reviewOptions(options);
+    const choices: PermissionChoice[] = [];
+    if (allow) {
+      choices.push({ optionId: allow.optionId, kind: allow.kind, label: "允许" });
+    }
+    if (reject) {
+      choices.push({ optionId: reject.optionId, kind: reject.kind, label: "拒绝" });
+    }
+    if (!choices.length) {
+      return Promise.resolve(null);
+    }
+    if (described.toolCallId) {
+      this.absorb(
+        state,
+        state.parser.push({
+          sessionUpdate: "tool_call",
+          toolCallId: described.toolCallId,
+          title: described.title,
+          kind: "execute",
+          status: "pending",
+          rawInput: described.command ? { command: described.command } : undefined,
+        }),
+      );
+    }
+    return new Promise((resolve) => {
+      state.permission = { resolve };
+      state.run.pendingPermission = {
+        toolCallId: described.toolCallId,
+        title: described.title,
+        command: described.command,
+        options: choices,
+      };
+      this.options.onRunChanged(state.run);
+    });
+  }
+
+  private settlePermission(state: ActiveRun, optionId: string | null): void {
+    const waiter = state.permission;
+    state.permission = undefined;
+    if (state.run.pendingPermission) {
+      delete state.run.pendingPermission;
+      this.options.onRunChanged(state.run);
+    }
+    waiter?.resolve(optionId);
+  }
+
   private finish(state: ActiveRun, exitCode: number | null, forcedError: string | undefined): void {
     if (!this.active.has(state.run.id)) {
       return;
     }
+    this.settlePermission(state, null);
     const run = state.run;
     if (state.timer) {
       clearTimeout(state.timer);

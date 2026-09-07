@@ -2,6 +2,7 @@ import {
   type AgentInfo,
   type AgentKind,
   type AgentRun,
+  type AppUpdateStatus,
   type DeviceCandidate,
   type DeviceInfo,
   type DispatchInput,
@@ -47,6 +48,7 @@ export interface ClientHandle {
   dispatch(taskId: string, input: DispatchInput): Promise<AgentRun>;
   runEvents(runId: string, after?: number): Promise<RunEvent[]>;
   cancelRun(runId: string): Promise<void>;
+  resolvePermission(runId: string, optionId: string): Promise<void>;
   replyRun(runId: string, text: string): Promise<AgentRun>;
   addProject(input: { path: string; name?: string; defaultAgent?: AgentKind | null; deviceId?: string | null }): Promise<Project>;
   updateProject(id: string, patch: { name?: string; defaultAgent?: AgentKind | null }): Promise<Project>;
@@ -70,6 +72,9 @@ export interface ClientHandle {
   setHost(host: string): Promise<void>;
   forgetDevice(deviceId: string): Promise<void>;
   fileUrl(fileId: string): string;
+  checkUpdate(force?: boolean): Promise<AppUpdateStatus>;
+  updateStatus(): Promise<AppUpdateStatus>;
+  installUpdate(): Promise<AppUpdateStatus>;
 }
 
 interface Credentials {
@@ -244,6 +249,7 @@ export async function connectClient(
       return result.events;
     },
     cancelRun: (runId) => post(`/api/runs/${encodeURIComponent(runId)}/cancel`).then(() => undefined),
+    resolvePermission: (runId, optionId) => post(`/api/runs/${encodeURIComponent(runId)}/permission`, { optionId }).then(() => undefined),
     replyRun: (runId, text) => post(`/api/runs/${encodeURIComponent(runId)}/reply`, { text }),
     addProject: (input) => post("/api/projects", input),
     updateProject: (id, body) => patch(`/api/projects/${encodeURIComponent(id)}`, body),
@@ -262,6 +268,9 @@ export async function connectClient(
     setHost: (host) => post("/api/host", { host }).then(() => undefined),
     forgetDevice: (deviceId) => post("/api/devices/forget", { deviceId }).then(() => undefined),
     fileUrl: (fileId) => `${origin}/api/files/${encodeURIComponent(fileId)}?token=${encodeURIComponent(token)}`,
+    checkUpdate: (force = true) => post("/api/update/check", { force }),
+    updateStatus: () => json("/api/update"),
+    installUpdate: () => post("/api/update/install"),
   };
 }
 

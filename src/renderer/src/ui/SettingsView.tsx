@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type AgentKind, canListModels, type HostSnapshot, modelsForAgent } from "@shared/protocol";
+import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type AgentKind, type AppUpdateStatus, canListModels, type HostSnapshot, modelsForAgent } from "@shared/protocol";
+import { isNewerVersion, shellVersionFromUserAgent } from "@shared/version";
 import type { ClientHandle } from "../lib/client";
 import { formatRelative } from "../lib/format";
 import { type ThemeMode, themeLabel } from "../theme";
@@ -216,7 +217,7 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
                   <div className="agent-table__controls">
                     <select value={conf?.access ?? "safe"} onChange={(event) => patchAgent(kind, { access: event.target.value as "safe" | "full" })}>
                       <option value="safe">默认安全模式</option>
-                      <option value="full">默认完全放开</option>
+                      <option value="full">默认完全放开（run everything）</option>
                     </select>
                     <input
                       key={`${kind}-model-${conf?.model ?? ""}`}
@@ -324,10 +325,11 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
               {themeLabel(themeMode)}
             </button>
           </div>
+          <UpdateRow snapshot={snapshot} client={client} desktop={desktop} />
           <div className="setting-row">
             <span>
-              <strong>Nearbox v{snapshot.appVersion}</strong>
-              <span className="muted small">数据目录：{snapshot.dataDir}</span>
+              <strong>数据目录</strong>
+              <span className="muted small">{snapshot.dataDir}</span>
             </span>
             {desktop ? (
               <button type="button" className="ghost" onClick={() => void window.nearboxDesktop?.openPath(snapshot.dataDir)}>
@@ -351,6 +353,150 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
         </section>
       </div>
       </section>
+    </div>
+  );
+}
+
+function UpdateRow({ snapshot, client, desktop }: { snapshot: HostSnapshot; client: ClientHandle; desktop: boolean }): JSX.Element {
+  const [status, setStatus] = useState<AppUpdateStatus | null>(null);
+  const shellVersion = shellVersionFromUserAgent(navigator.userAgent);
+  const apkUrl = snapshot.apkAvailable ? `${client.origin}/app/nearbox.apk` : "";
+  const shellNeedsUpdate = Boolean(shellVersion && isNewerVersion(snapshot.appVersion, shellVersion) && snapshot.apkAvailable);
+
+  useEffect(() => {
+    let cancelled = false;
+    void client
+      .checkUpdate(false)
+      .then((next) => {
+        if (!cancelled) {
+          setStatus(next);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
+
+  useEffect(() => {
+    if (!status?.checking && !status?.downloading) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void client
+        .updateStatus()
+        .then(setStatus)
+        .catch(() => undefined);
+    }, 400);
+    return () => window.clearInterval(timer);
+  }, [client, status?.checking, status?.downloading]);
+
+  const refresh = () => {
+    void client
+      .checkUpdate(true)
+      .then(setStatus)
+      .catch((error: unknown) => {
+        setStatus((current) => ({
+          ...(current ?? {
+            current: snapshot.appVersion,
+            latest: null,
+            newer: false,
+            notes: "",
+            htmlUrl: "https://github.com/QuickerHub/nearbox/releases/latest",
+            exeUrl: null,
+            apkUrl: null,
+            packaged: false,
+            checking: false,
+            downloading: false,
+            progress: 0,
+          }),
+          error: error instanceof Error ? error.message : String(error),
+        }));
+      });
+  };
+
+  const installDesktop = () => {
+    void client
+      .installUpdate()
+      .then(setStatus)
+      .catch((error: unknown) => {
+        setStatus((current) => (current ? { ...current, error: error instanceof Error ? error.message : String(error) } : current));
+      });
+  };
+
+  const openRelease = () => {
+    const url = status?.htmlUrl ?? "https://github.com/QuickerHub/nearbox/releases/latest";
+    if (desktop) {
+      void window.nearboxDesktop?.openExternal(url);
+      return;
+    }
+    window.open(url, "_blank", "noopener");
+  };
+
+  const installShell = () => {
+    window.location.assign(apkUrl);
+  };
+
+  const percent = Math.round((status?.progress ?? 0) * 100);
+  const detail = desktop
+    ? status?.downloading
+      ? `正在下载 ${percent}%`
+      : status?.checking
+        ? "正在检查更新…"
+        : status?.error
+          ? status.error
+          : status?.newer
+            ? `有新版本 v${status.latest}`
+            : status?.checkedAt
+              ? `已是最新 · ${formatRelative(status.checkedAt)}查过`
+              : "手机界面跟着电脑走，电脑更新后手机不用重装。"
+    : status?.newer
+      ? `电脑还是 v${snapshot.appVersion}，已有 v${status.latest}。请先在电脑「设置」里下载并安装。`
+      : shellVersion
+        ? shellNeedsUpdate
+          ? `手机壳 v${shellVersion}，电脑带了 v${snapshot.appVersion}`
+          : `界面 v${snapshot.appVersion} · 手机壳 v${shellVersion}`
+        : `界面 v${snapshot.appVersion}。用浏览器打开时不用装壳；装了壳 App 才能从这里更新壳。`;
+
+  return (
+    <div className="setting-row setting-row--update">
+      <span>
+        <strong>Nearbox v{snapshot.appVersion}</strong>
+        <span className={status?.error ? "small alert" : "muted small"}>{detail}</span>
+        {status?.downloading ? (
+          <span className="update-progress" style={{ ["--p" as string]: `${percent}%` }} aria-hidden>
+            <i />
+          </span>
+        ) : null}
+      </span>
+      {desktop ? (
+        status?.newer && status.packaged ? (
+          <button type="button" className="ghost" disabled={status.downloading} onClick={installDesktop}>
+            <Icon name="bolt" size={14} />
+            {status.downloading ? "下载中…" : "下载并安装"}
+          </button>
+        ) : status?.newer ? (
+          <button type="button" className="ghost" onClick={openRelease}>
+            <Icon name="external" size={14} />
+            打开发布页
+          </button>
+        ) : (
+          <button type="button" className="ghost" disabled={status?.checking} onClick={refresh}>
+            <Icon name="refresh" size={14} />
+            {status?.checking ? "检查中…" : "检查更新"}
+          </button>
+        )
+      ) : shellNeedsUpdate ? (
+        <button type="button" className="ghost" onClick={installShell}>
+          <Icon name="phone" size={14} />
+          从电脑安装
+        </button>
+      ) : (
+        <button type="button" className="ghost" onClick={refresh}>
+          <Icon name="refresh" size={14} />
+          检查
+        </button>
+      )}
     </div>
   );
 }

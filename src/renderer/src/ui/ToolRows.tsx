@@ -1,16 +1,22 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
-import type { ToolCall, ToolKind } from "@shared/protocol";
-import { diffLines, groupLabel, hasDetail, isFailed, prettyToolName, statusLabel, toolVerb } from "../lib/runTranscript";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import type { PendingPermission, ToolCall, ToolKind } from "@shared/protocol";
+import { diffLines, displayTool, groupLabel, hasDetail, isFailed, prettyToolName, statusLabel, toolVerb } from "../lib/runTranscript";
 import { Icon, TOOL_ICONS } from "./Icons";
+
+interface AskProps {
+  pending?: PendingPermission;
+  onResolve?(optionId: string): void;
+}
 
 /**
  * Tool calls the way Cursor shows them: one quiet line per call that opens
  * into its details, terminals as small cards, edits with a diff, and runs of
  * lookups folded into a single "读取了 4 个文件".
  */
-export function ToolRow({ tool }: { tool: ToolCall }): JSX.Element {
+export function ToolRow({ tool: recorded, pending, onResolve }: { tool: ToolCall } & AskProps): JSX.Element {
+  const tool = useMemo(() => displayTool(recorded), [recorded]);
   if (tool.kind === "shell") {
-    return <ShellCard tool={tool} />;
+    return <ShellCard tool={tool} pending={pending} onResolve={onResolve} />;
   }
   if (tool.kind === "edit" || tool.kind === "write" || tool.kind === "delete") {
     return <FileChangeRow tool={tool} />;
@@ -18,15 +24,21 @@ export function ToolRow({ tool }: { tool: ToolCall }): JSX.Element {
   return <GenericRow tool={tool} />;
 }
 
-export function ToolGroupRow({ kind, tools }: { kind: ToolKind; tools: ToolCall[] }): JSX.Element {
-  const [open, setOpen] = useState(false);
+export function ToolGroupRow({ kind, tools, pending, onResolve }: { kind: ToolKind; tools: ToolCall[] } & AskProps): JSX.Element {
+  const waiting = Boolean(pending && tools.some((tool) => tool.id === pending.toolCallId));
+  const [open, setOpen] = useState(waiting);
+  useEffect(() => {
+    if (waiting) {
+      setOpen(true);
+    }
+  }, [waiting]);
   const running = tools.some((tool) => tool.status === "running");
   const failed = tools.filter((tool) => isFailed(tool.status)).length;
   return (
     <div className={`trow-group${open ? " is-open" : ""}`}>
       <button type="button" className="trow" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
         <RowIcon kind={kind} running={running} failed={failed > 0} />
-        <span className="trow__label">{groupLabel(kind, tools.length, running)}</span>
+        <span className="trow__label">{waiting ? "等待确认命令" : groupLabel(kind, tools.length, running)}</span>
         {!open ? <span className="trow__peek">{tools.map((tool) => tool.subject).filter(Boolean).join("、")}</span> : null}
         {failed ? <span className="trow__status trow__status--error">{failed} 个失败</span> : null}
         <Chevron open={open} />
@@ -34,10 +46,38 @@ export function ToolGroupRow({ kind, tools }: { kind: ToolKind; tools: ToolCall[
       {open ? (
         <div className="trow-group__body">
           {tools.map((tool) => (
-            <ToolRow key={tool.id} tool={tool} />
+            <ToolRow key={tool.id} tool={tool} pending={pending} onResolve={onResolve} />
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+export function PermissionAsk({ pending, onResolve }: { pending: PendingPermission; onResolve(optionId: string): void }): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="perm-ask">
+      <div className="perm-ask__text">
+        <strong>要执行这条命令吗？</strong>
+        <code>{pending.command ?? pending.title}</code>
+      </div>
+      <div className="perm-ask__actions">
+        {pending.options.map((option) => (
+          <button
+            key={option.optionId}
+            type="button"
+            className={`perm-ask__btn${option.kind.startsWith("allow") ? " perm-ask__btn--allow" : " perm-ask__btn--deny"}`}
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              onResolve(option.optionId);
+            }}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -93,18 +133,19 @@ function FileChangeRow({ tool }: { tool: ToolCall }): JSX.Element {
   );
 }
 
-function ShellCard({ tool }: { tool: ToolCall }): JSX.Element {
-  const running = tool.status === "running";
+function ShellCard({ tool, pending, onResolve }: { tool: ToolCall } & AskProps): JSX.Element {
+  const awaiting = Boolean(pending && pending.toolCallId === tool.id && onResolve);
+  const running = tool.status === "running" && !awaiting;
   const failed = tool.status === "error";
   const rejected = tool.status === "rejected";
   // Live commands and failures start open; everything else stays a one-liner until asked.
-  const [open, setOpen] = useState(running || failed);
+  const [open, setOpen] = useState(running || failed || awaiting);
   const [pinned, setPinned] = useState(false);
   useEffect(() => {
     if (!pinned) {
-      setOpen(running || failed);
+      setOpen(running || failed || awaiting);
     }
-  }, [running, failed, pinned]);
+  }, [running, failed, awaiting, pinned]);
   const outputRef = useRef<HTMLPreElement>(null);
   const output = tool.output?.replace(/\s+$/, "") ?? "";
   useEffect(() => {
@@ -115,7 +156,7 @@ function ShellCard({ tool }: { tool: ToolCall }): JSX.Element {
   const body = output || tool.error;
   const expandable = Boolean(body);
   return (
-    <div className={`shell${open && body ? " is-open" : ""}${running ? " shell--live" : ""}${failed ? " shell--err" : ""}${rejected ? " shell--rejected" : ""}`}>
+    <div className={`shell${open && body ? " is-open" : ""}${running ? " shell--live" : ""}${awaiting ? " shell--ask" : ""}${failed ? " shell--err" : ""}${rejected ? " shell--rejected" : ""}`}>
       <button
         type="button"
         className={`shell__head${expandable ? "" : " shell__head--static"}`}
@@ -128,12 +169,13 @@ function ShellCard({ tool }: { tool: ToolCall }): JSX.Element {
         }}
       >
         <span className="shell__prompt" aria-hidden>
-          {running ? <span className="spinner spinner--small" /> : rejected ? <Icon name="ban" size={12} /> : "$"}
+          {awaiting ? <Icon name="alert" size={12} /> : running ? <span className="spinner spinner--small" /> : rejected ? <Icon name="ban" size={12} /> : "$"}
         </span>
         <span className="shell__command">{tool.command ?? tool.subject ?? tool.name}</span>
-        <StatusTag tool={tool} />
+        {awaiting ? <span className="trow__status trow__status--ask">等待确认</span> : <StatusTag tool={tool} />}
         {expandable ? <Chevron open={open} /> : null}
       </button>
+      {awaiting && pending && onResolve ? <PermissionAsk pending={pending} onResolve={onResolve} /> : null}
       {open && body ? (
         <div className="shell__body">
           {output ? (
@@ -151,28 +193,52 @@ function ShellCard({ tool }: { tool: ToolCall }): JSX.Element {
 
 function Detail({ tool }: { tool: ToolCall }): JSX.Element {
   const listFiles = tool.files && tool.files.length > 1 && !tool.output;
+  // File contents read as code: no wrapping, scroll sideways like a code block.
+  const code = tool.kind === "read";
   return (
     <div className="trow__detail">
       {tool.error ? <div className={`trow__error${tool.status === "rejected" ? " trow__error--warn" : ""}`}>{tool.error}</div> : null}
-      {tool.output ? <pre className="trow__pre">{tool.output}</pre> : null}
+      {tool.output ? (
+        <pre className={`trow__pre${code ? " trow__pre--code" : ""}`}>
+          <code>{tool.output}</code>
+        </pre>
+      ) : null}
       {listFiles ? <pre className="trow__pre">{tool.files!.join("\n")}</pre> : null}
       {!tool.output && !listFiles && tool.input ? <pre className="trow__pre">{tool.input}</pre> : null}
     </div>
   );
 }
 
+/**
+ * A unified diff as a table: old and new line numbers, the marker, the text.
+ * Hunks are separated by their `@@` header; the `---/+++` file header is
+ * dropped since the row above already names the file.
+ */
 export function DiffView({ diff }: { diff: string }): JSX.Element {
-  // The file is already named in the row above; the `---/+++` header pair only repeats it.
-  const lines = diffLines(diff).filter((line) => line.tag !== "meta");
+  const lines = useMemo(() => diffLines(diff).filter((line) => line.tag !== "meta"), [diff]);
+  const numbered = lines.some((line) => line.oldNo !== undefined || line.newNo !== undefined);
   return (
-    <pre className="diff">
-      {lines.map((line, index) => (
-        <span key={index} className={`diff__line diff__line--${line.tag}`}>
-          {line.text || " "}
-          {"\n"}
-        </span>
-      ))}
-    </pre>
+    <div className={`diff${numbered ? " diff--numbered" : ""}`}>
+      {lines.length ? null : <div className="diff__empty">内容没有变化</div>}
+      {lines.map((line, index) =>
+        line.tag === "hunk" || line.tag === "note" ? (
+          <div key={index} className={`diff__sep diff__sep--${line.tag}`}>
+            {line.text}
+          </div>
+        ) : (
+          <div key={index} className={`diff__line diff__line--${line.tag}`}>
+            {numbered ? (
+              <>
+                <span className="diff__no">{line.oldNo ?? ""}</span>
+                <span className="diff__no">{line.newNo ?? ""}</span>
+              </>
+            ) : null}
+            <span className="diff__sign">{line.tag === "add" ? "+" : line.tag === "del" ? "-" : ""}</span>
+            <span className="diff__text">{line.text || " "}</span>
+          </div>
+        ),
+      )}
+    </div>
   );
 }
 
@@ -193,7 +259,7 @@ function RowIcon({ kind, running, failed }: { kind: ToolKind; running: boolean; 
 
 function StatusTag({ tool }: { tool: ToolCall }): ReactNode {
   const label = statusLabel(tool);
-  if (!label || tool.status === "running") {
+  if (!label) {
     return null;
   }
   return <span className={`trow__status trow__status--${tool.status}`}>{label}</span>;

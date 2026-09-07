@@ -147,7 +147,7 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
   const status: ToolStatus = outcome === "success" ? "ok" : outcome === "rejected" ? "rejected" : "error";
   const patch: Partial<ToolCall> = { status };
   if (status === "rejected") {
-    patch.error = pickString(body, ["reason", "message"]) || "命令被拦截：安全模式下不允许执行，需要「完全放开」";
+    patch.error = pickString(body, ["reason", "message"]) || "命令被拒绝";
     return patch;
   }
   switch (kind) {
@@ -213,6 +213,30 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
     }
   }
   return patch;
+}
+
+/**
+ * The result objects cursor-agent's built-in tools hand back over ACP as
+ * `rawOutput`: a read is `{ content }`, grep `{ totalMatches, truncated }`,
+ * find `{ totalFiles, truncated }`, and a tool that failed on its own
+ * `{ error }`. Null for any other shape, so the caller can fall back to
+ * showing the JSON.
+ */
+export function describeRawResult(result: Record<string, unknown>): Partial<ToolCall> | null {
+  const values = Object.values(result);
+  if (typeof result.content === "string" && values.every((value) => !isRecord(value) && !Array.isArray(value))) {
+    return { output: clipHead(result.content) };
+  }
+  if (typeof result.totalMatches === "number") {
+    return { output: `${result.totalMatches} 处匹配${result.truncated === true ? "（结果已截断）" : ""}` };
+  }
+  if (typeof result.totalFiles === "number") {
+    return { output: `${result.totalFiles} 个文件${result.truncated === true ? "（结果已截断）" : ""}` };
+  }
+  if (typeof result.error === "string" && result.error.trim() && values.length === 1) {
+    return { status: "error", error: result.error };
+  }
+  return null;
 }
 
 /** cursor-agent's glob results come back as "../.\src\App.jsx" style paths. */

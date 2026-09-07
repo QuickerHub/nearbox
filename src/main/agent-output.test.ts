@@ -194,7 +194,7 @@ test("cursor-agent shell, edit and rejected calls carry command, diff and reason
   assert.ok(edit[1]?.diff?.includes("+hi"));
   const rejected = byId.get("s2")!;
   assert.equal(rejected[1]?.status, "rejected");
-  assert.ok(rejected[1]?.error?.includes("安全模式"));
+  assert.ok(rejected[1]?.error?.includes("拒绝"));
   const glob = byId.get("g1")!;
   assert.equal(glob[0]?.status, "error");
   assert.equal(glob[0]?.subject, "*.txt");
@@ -292,7 +292,51 @@ test("grok ACP tool calls and updates merge by toolCallId", () => {
   assert.equal(tools[1]?.output, "1 passing");
   assert.equal(tools[2]?.kind, "edit");
   assert.equal(tools[2]?.subject, "a.ts");
-  assert.equal(tools[2]?.diff, "-a\n+b");
+  assert.equal(tools[2]?.diff, "@@ -1,1 +1,1 @@\n-a\n+b");
+  assert.equal(tools[2]?.linesAdded, 1);
+  assert.equal(tools[2]?.linesRemoved, 1);
+});
+
+test("an ACP edit given as whole files shows only the changed lines, with context", () => {
+  const before = ["import a from 'a';", "", "export function f() {", "  return 8;", "}", "", "export function g() {", "  return 2;", "}", ""].join("\n");
+  const after = before.replace("return 8", "return 5");
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    { sessionUpdate: "tool_call", toolCallId: "e1", title: "Edit File", kind: "edit", status: "pending", rawInput: {} },
+    { sessionUpdate: "tool_call_update", toolCallId: "e1", status: "completed", content: [{ type: "diff", path: "D:\\p\\f.ts", oldText: before, newText: after }] },
+  ]);
+  const edit = all.events.filter((event) => event.tool?.id === "e1").map((event) => event.tool!).at(-1);
+  assert.equal(edit?.subject, "f.ts");
+  assert.equal(edit?.diff, ["@@ -1,7 +1,7 @@", " import a from 'a';", " ", " export function f() {", "-  return 8;", "+  return 5;", " }", " ", " export function g() {"].join("\n"));
+  assert.equal(edit?.linesAdded, 1);
+  assert.equal(edit?.linesRemoved, 1);
+});
+
+test("cursor-agent's ACP results are unwrapped instead of shown as JSON", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    { sessionUpdate: "tool_call", toolCallId: "r1", title: "Read File", kind: "read", status: "pending", rawInput: {} },
+    { sessionUpdate: "tool_call_update", toolCallId: "r1", locations: [{ path: "D:\\p\\a.cs" }] },
+    { sessionUpdate: "tool_call_update", toolCallId: "r1", status: "completed", rawOutput: { content: "class A\n{\n}\n" } },
+    { sessionUpdate: "tool_call", toolCallId: "g1", title: "grep", kind: "search", status: "pending", rawInput: { pattern: "foo" } },
+    { sessionUpdate: "tool_call_update", toolCallId: "g1", status: "completed", rawOutput: { totalMatches: 3753, truncated: true } },
+    { sessionUpdate: "tool_call", toolCallId: "f1", title: "Find", kind: "search", status: "pending", rawInput: { pattern: "*.ts" } },
+    { sessionUpdate: "tool_call_update", toolCallId: "f1", status: "completed", rawOutput: { totalFiles: 12, truncated: false } },
+    { sessionUpdate: "tool_call", toolCallId: "g2", title: "grep", kind: "search", status: "pending", rawInput: { pattern: "**/*" } },
+    { sessionUpdate: "tool_call_update", toolCallId: "g2", status: "completed", rawOutput: { error: "Glob pattern \"**/*\" matches every file and is not allowed." } },
+    { sessionUpdate: "tool_call_update", toolCallId: "g2", status: "completed" },
+    { sessionUpdate: "tool_call", toolCallId: "o1", title: "Something", kind: "other", status: "completed", rawOutput: { type: "TaskOutput", Result: { id: 1 } } },
+  ]);
+  const last = (id: string) => all.events.filter((event) => event.tool?.id === id).map((event) => event.tool!).at(-1);
+  assert.equal(last("r1")?.output, "class A\n{\n}\n");
+  assert.equal(last("r1")?.status, "ok");
+  assert.equal(last("g1")?.output, "3753 处匹配（结果已截断）");
+  assert.equal(last("f1")?.output, "12 个文件");
+  assert.equal(last("g2")?.status, "error");
+  assert.match(last("g2")?.error ?? "", /not allowed/);
+  assert.equal(last("g2")?.output, undefined);
+  // Unknown shapes are still shown, but readable.
+  assert.equal(last("o1")?.output, '{\n  "type": "TaskOutput",\n  "Result": {\n    "id": 1\n  }\n}');
 });
 
 test("raw ACP session updates from a warm host map like grok's flattened lines", () => {
