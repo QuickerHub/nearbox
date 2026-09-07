@@ -2,6 +2,7 @@ package com.quickerhub.nearbox
 
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -10,6 +11,7 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.util.concurrent.Executors
 
 /** Downloads the APK the paired PC is serving and asks Android to install it. */
@@ -26,7 +28,13 @@ object ApkInstaller {
         io.execute {
             try {
                 val file = download(activity, url)
-                activity.runOnUiThread { promptInstall(activity, file) }
+                activity.runOnUiThread {
+                    if (signaturesClash(activity, file)) {
+                        Toast.makeText(activity, activity.getString(R.string.install_signature_mismatch), Toast.LENGTH_LONG).show()
+                        return@runOnUiThread
+                    }
+                    promptInstall(activity, file)
+                }
             } catch (error: Exception) {
                 activity.runOnUiThread {
                     Toast.makeText(activity, activity.getString(R.string.install_failed, error.message.orEmpty()), Toast.LENGTH_LONG).show()
@@ -54,6 +62,40 @@ object ApkInstaller {
             connection.disconnect()
         }
         return dest
+    }
+
+    private fun signaturesClash(activity: Activity, apk: File): Boolean {
+        val installed = signingCerts(activity.packageManager, activity.packageName, archive = null) ?: return false
+        val incoming = signingCerts(activity.packageManager, activity.packageName, archive = apk) ?: return false
+        return installed != incoming
+    }
+
+    private fun signingCerts(pm: PackageManager, packageName: String, archive: File?): Set<String>? {
+        val flags =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                PackageManager.GET_SIGNING_CERTIFICATES
+            } else {
+                @Suppress("DEPRECATION")
+                PackageManager.GET_SIGNATURES
+            }
+        val info = if (archive == null) {
+            runCatching { pm.getPackageInfo(packageName, flags) }.getOrNull()
+        } else {
+            pm.getPackageArchiveInfo(archive.absolutePath, flags)
+        } ?: return null
+        val certs =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                info.signingInfo?.apkContentsSigners
+            } else {
+                @Suppress("DEPRECATION")
+                info.signatures
+            } ?: return null
+        if (certs.isEmpty()) {
+            return null
+        }
+        return certs.map { cert ->
+            MessageDigest.getInstance("SHA-256").digest(cert.toByteArray()).joinToString("") { byte -> "%02x".format(byte) }
+        }.toSet()
     }
 
     private fun promptInstall(activity: Activity, file: File) {

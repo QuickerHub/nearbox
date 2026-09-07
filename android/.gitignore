@@ -3,3 +3,6 @@ build/
 local.properties
 *.iml
 .cxx/
+*.keystore
+*.jks
+keystore.properties

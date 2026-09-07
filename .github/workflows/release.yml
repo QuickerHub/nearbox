@@ -35,7 +35,30 @@ jobs:
         with:
           gradle-version: 8.11.1
       - run: npm run android:sync
-      - run: gradle -p android assembleRelease
+      - name: Decode release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "缺少 ANDROID_KEYSTORE_BASE64。正式包必须用固定签名，否则每次 CI 的调试证书都不同，手机无法覆盖安装。"
+            exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$GITHUB_WORKSPACE/android/release.keystore"
+      - name: Assemble signed release
+        env:
+          ANDROID_KEYSTORE: ${{ github.workspace }}/android/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle -p android assembleRelease
+      - name: Verify APK certificate
+        run: |
+          expected="$(tr -d ' \r\n' < android/release-cert.sha256)"
+          actual="$(keytool -printcert -jarfile android/app/build/outputs/apk/release/app-release.apk | awk '/SHA256:/{print $2; exit}')"
+          if [ -z "$actual" ] || [ "$actual" != "$expected" ]; then
+            echo "APK 签名是 $actual，期望 $expected"
+            exit 1
+          fi
       - name: Stage APK
         run: |
           mkdir -p dist-apk
@@ -69,6 +92,8 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npx electron-builder --win --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -92,5 +117,5 @@ jobs:
           mapfile -t files < <(find artifacts -type f \( -name '*.apk' -o -name '*.exe' -o -name '*.zip' \))
           gh release create "v${version}" "${files[@]}" \
             --title "Nearbox v${version}" \
-            --notes "手机记想法，电脑跑 Agent。装好之后在「设置」里检查更新、下载并安装，不用再去 GitHub。Android 薄壳会自动发现局域网电脑，也可扫码配对；界面由电脑下发，壳本身变了可在手机设置里从电脑安装 APK。" \
+            --notes "手机记想法，电脑跑 Agent。装好之后在「设置」里检查更新、下载并安装，不用再去 GitHub。Android 薄壳用固定签名打包，之后可以直接覆盖安装；如果从旧版升级提示签名不同，先卸载再装这一次即可。" \
             --verify-tag

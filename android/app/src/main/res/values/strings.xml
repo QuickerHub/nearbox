@@ -17,4 +17,5 @@
     <string name="install_permission">请允许 Nearbox 安装应用，然后再点一次更新</string>
     <string name="installing_apk">正在从电脑下载新版手机壳…</string>
     <string name="install_failed">下载失败：%1$s</string>
+    <string name="install_signature_mismatch">这个安装包和当前壳的签名不同，系统不会覆盖。请先卸载 Nearbox，再装这一次；以后更新就可以直接覆盖了。</string>
 </resources>

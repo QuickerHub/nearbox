@@ -11,3 +11,5 @@
 - 发布时 Windows 包会带上同版本 APK，电脑局域网提供 `/app/nearbox.apk`
 
 版本号来自仓库根目录 `package.json`，用 `npm run android:sync` 写进 `version.properties`。
+
+正式 APK 必须用固定的 `release.keystore` 签名。GitHub Actions 每次都是新机器，默认调试证书每次都不一样，手机就会提示签名冲突、无法覆盖安装。密钥在仓库的 GitHub Secrets 里（`ANDROID_KEYSTORE_*`），证书指纹写在 `release-cert.sha256`，发布时会核对。本地打包把 `keystore.properties` 和 `release.keystore` 放在 `android/` 下（已忽略提交）。
