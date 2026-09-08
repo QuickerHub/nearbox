@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AGENT_KINDS, AGENT_LABELS, type AgentAccess, type AgentKind, type HostSnapshot, isRunActive, modelsNeedRefresh, splitCapture, type Task } from "@shared/protocol";
+import { AGENT_KINDS, type AgentAccess, type AgentKind, type HostSnapshot, isRunActive, modelsNeedRefresh, splitCapture, type Task } from "@shared/protocol";
 import { titleForFiles } from "./lib/attachments";
 import { connectClient, pairWithPin, type ClientHandle } from "./lib/client";
 import { conversationRun, type SendPlan } from "./lib/plan";
 import { useRoute } from "./lib/router";
+import { updateSeen } from "./lib/taskList";
 import { applyTheme, cycleTheme, readThemeMode, themeLabel, type ThemeMode } from "./theme";
 import { ChatComposer, type ComposerChips, type OutgoingMessage } from "./ui/ChatComposer";
 import { Icon, ThemeIcon } from "./ui/Icons";
@@ -13,6 +14,20 @@ import { TaskList } from "./ui/TaskList";
 import { Thread } from "./ui/Thread";
 
 const PREFS_KEY = "nearbox.compose";
+const SEEN_KEY = "nearbox.seen";
+
+/** Which turn of each task this device has looked at; null until the first snapshot sets the baseline. */
+function readSeen(): Record<string, string> | null {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(SEEN_KEY) ?? "null");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return Object.fromEntries(Object.entries(parsed as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+    }
+  } catch {
+    // fall through: start over with a fresh baseline
+  }
+  return null;
+}
 
 /** What this device last picked in the composer. `agent: null` means "never chose", so we default to the first installed one. */
 interface ComposePrefs {
@@ -83,6 +98,8 @@ export function App(): JSX.Element {
   const [freshFor, setFreshFor] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const noticeTimer = useRef<number | null>(null);
+  // Per task, the newest turn this device has seen; the list flags turns that ended since.
+  const [seen, setSeen] = useState<Record<string, string> | null>(() => readSeen());
   const isDesktop = Boolean(window.nearboxDesktop);
 
   const setPrefs = useCallback((patch: Partial<ComposePrefs>) => {
@@ -180,6 +197,20 @@ export function App(): JSX.Element {
   };
 
   const task: Task | undefined = route.name === "task" && snapshot ? snapshot.tasks.find((item) => item.id === route.id) : undefined;
+  const openTaskId = task?.id;
+
+  // The open task is being looked at: whatever its newest turn is now counts as seen. The first
+  // snapshot after install (or after clearing storage) marks everything seen, so old turns stay quiet.
+  useEffect(() => {
+    if (!snapshot) {
+      return;
+    }
+    const next = updateSeen(seen, snapshot.tasks, snapshot.runs, openTaskId);
+    if (next !== seen) {
+      window.localStorage.setItem(SEEN_KEY, JSON.stringify(next));
+      setSeen(next);
+    }
+  }, [snapshot, openTaskId, seen]);
 
   const chips = useMemo<ComposerChips>(() => {
     if (!snapshot) {
@@ -398,7 +429,6 @@ export function App(): JSX.Element {
   }
 
   const activeRun = task ? snapshot.runs.find((run) => run.taskId === task.id && isRunActive(run)) : undefined;
-  const runningTasks = snapshot.tasks.filter((item) => snapshot.runs.some((run) => run.taskId === item.id && isRunActive(run)));
   const phonesOnline = snapshot.devices.filter((device) => device.role === "phone" && device.online).length;
   const remoteControllers = snapshot.remote?.controllers ?? 0;
   const canRemote = Boolean(snapshot.remote?.enabled);
@@ -461,24 +491,8 @@ export function App(): JSX.Element {
             <Icon name="chevron" size={16} />
           </button>
         ) : null}
-        {runningTasks.length ? (
-          <div className="home__running">
-            {runningTasks.map((item) => {
-              const run = snapshot.runs.find((candidate) => candidate.taskId === item.id && isRunActive(candidate))!;
-              return (
-                <button key={item.id} type="button" className="home__running-item" onClick={() => openTask(item.id)}>
-                  <span className="spinner spinner--small" />
-                  <span className="home__running-title">{item.title}</span>
-                  <span className="muted small">
-                    {AGENT_LABELS[run.agent]} · {run.status === "queued" ? "排队中" : "运行中"}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        ) : null}
       </div>
-      {!isDesktop ? <TaskList snapshot={snapshot} onSelect={openTask} compact /> : null}
+      {!isDesktop ? <TaskList snapshot={snapshot} seen={seen} onSelect={openTask} compact /> : null}
     </div>
   );
 
@@ -500,7 +514,7 @@ export function App(): JSX.Element {
               <span>新对话</span>
             </button>
           </div>
-          <TaskList snapshot={snapshot} selectedTaskId={task?.id} onSelect={openTask} />
+          <TaskList snapshot={snapshot} seen={seen} selectedTaskId={task?.id} onSelect={openTask} />
           <div className="sidebar__foot">
             <span className="sidebar__phones" title={snapshot.selectedHost ? `${snapshot.selectedHost}:${snapshot.port}` : "未发现局域网地址"}>
               <span className={phonesOnline ? "dot dot--on" : "dot"} />
