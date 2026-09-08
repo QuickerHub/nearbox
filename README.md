@@ -145,6 +145,8 @@ npm run build && npm start
 
 打包：`npm run dist:win`。图标由 `node scripts/make-icons.mjs` 生成。
 
+产品边界在 `docs/scope.md`，「为什么这么做」在 `docs/decisions/`，给 Agent 的约定在 `AGENTS.md`。本文只描述现在的行为。
+
 本地联调时可以固定桌面端密钥，方便用 curl / 浏览器直接调 API：
 
 ```powershell
