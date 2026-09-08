@@ -2363,40 +2363,237 @@ a:has(> .icon:only-child) {
   opacity: 0.8;
 }
 
-.ctx-meter {
-  display: inline-flex;
+.ctx-ring {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.ctx-ring__btn {
+  display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.ctx-ring__btn:active {
+  transform: scale(0.94);
+}
+
+.ctx-ring__svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+
+.ctx-ring__track {
+  stroke: var(--line-strong);
+  opacity: 0.85;
+  transition:
+    stroke 0.12s ease,
+    opacity 0.12s ease;
+}
+
+.ctx-ring__btn:hover .ctx-ring__track,
+.ctx-ring--open .ctx-ring__track {
+  stroke: var(--muted);
+  opacity: 1;
+}
+
+.ctx-ring__progress {
+  stroke: var(--text);
+  opacity: 0.75;
+  transition:
+    stroke-dashoffset 0.3s ease,
+    stroke 0.12s ease,
+    opacity 0.12s ease;
+}
+
+.ctx-ring__btn:hover .ctx-ring__progress,
+.ctx-ring--open .ctx-ring__progress {
+  opacity: 1;
+}
+
+.ctx-ring--warn .ctx-ring__progress {
+  stroke: var(--warn);
+  opacity: 1;
+}
+
+.ctx-ring--high .ctx-ring__progress {
+  stroke: var(--danger);
+  opacity: 1;
+}
+
+.ctx-ring--pending .ctx-ring__progress {
+  stroke: var(--muted);
+  animation: ctx-ring-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes ctx-ring-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.ctx-ring__popup {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  width: 15.5rem;
+  max-width: min(92vw, 280px);
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-panel);
+  box-shadow: var(--shadow-pop);
+  animation: pop 0.12s ease-out;
+}
+
+.ctx-ring__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.ctx-ring__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.ctx-ring__overview {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin-bottom: 6px;
+}
+
+.ctx-ring__pct {
+  flex-shrink: 0;
+  min-width: 2.6rem;
+  font-size: 17px;
+  line-height: 1;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+.ctx-ring__overview-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
+.ctx-ring__kicker {
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--muted);
+}
+
+.ctx-ring__summary {
+  font-size: 11.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+  line-height: 1.2;
+  color: var(--text);
   white-space: nowrap;
 }
 
-.ctx-meter__bar {
-  display: inline-block;
-  width: 36px;
-  height: 4px;
-  overflow: hidden;
-  border-radius: 99px;
-  background: color-mix(in srgb, var(--muted) 22%, transparent);
+.ctx-ring__summary--empty {
+  font-weight: 400;
+  font-family: inherit;
+  white-space: normal;
+  color: var(--muted);
 }
 
-.ctx-meter__bar > i {
+.ctx-ring__meter {
+  height: 3px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--line) 80%, transparent);
+}
+
+.ctx-ring__meter > i {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: color-mix(in srgb, var(--ok) 75%, var(--muted));
+  background: var(--text);
+  opacity: 0.55;
+  transition: width 0.25s ease;
 }
 
-.ctx-meter--mid .ctx-meter__bar > i {
-  background: #d4a017;
+.ctx-ring--warn .ctx-ring__meter > i {
+  background: var(--warn);
+  opacity: 1;
 }
 
-.ctx-meter--high {
-  color: var(--danger);
-}
-
-.ctx-meter--high .ctx-meter__bar > i {
+.ctx-ring--high .ctx-ring__meter > i {
   background: var(--danger);
+  opacity: 1;
+}
+
+.ctx-ring__stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 12px;
+  margin: 0;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.ctx-ring__stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+}
+
+.ctx-ring__stat:last-child,
+.ctx-ring__stat:nth-last-child(2):nth-child(odd) {
+  border-bottom: none;
+}
+
+.ctx-ring__stat dt {
+  margin: 0;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.ctx-ring__stat dd {
+  margin: 0;
+  min-width: 0;
+  font-size: 11.5px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+  color: var(--text);
+}
+
+.ctx-ring__hint {
+  margin: 6px 0 0;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--muted);
 }
 
 /* ---------------------------------------------------- terminal dock (above composer) */
@@ -3754,8 +3951,9 @@ a:has(> .icon:only-child) {
   display: none;
 }
 
-.app--phone .ctx-meter__bar {
+.app--phone .ctx-ring__btn {
   width: 28px;
+  height: 28px;
 }
 
 .app--phone .composer__send,

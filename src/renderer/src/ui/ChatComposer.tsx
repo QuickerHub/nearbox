@@ -355,6 +355,7 @@ export function ChatComposer({
             {chips.agent ? <ModelMenu snapshot={snapshot} client={client} agent={chips.agent} model={chips.model} onPick={(model) => onChips({ model })} /> : null}
           </div>
           <div className="composer__actions">
+            {usage || chips.agent ? <ContextMeter usage={usage} busy={Boolean(activeRun) && !usage} /> : null}
             <input
               ref={fileRef}
               type="file"
@@ -396,10 +397,9 @@ export function ChatComposer({
             </button>
           ) : null}
         </span>
-        {usage || (desktop && hint === plan.hint) ? (
+        {desktop && hint === plan.hint ? (
           <span className="composer__hint-aside">
-            {usage ? <ContextMeter usage={usage} /> : null}
-            {desktop && hint === plan.hint ? <span className="composer__keys">Enter 发送 · Shift+Enter 换行 · 可直接粘贴截图</span> : null}
+            <span className="composer__keys">Enter 发送 · Shift+Enter 换行 · 可直接粘贴截图</span>
           </span>
         ) : null}
       </p>
