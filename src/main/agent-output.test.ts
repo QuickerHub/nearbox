@@ -488,6 +488,96 @@ test("partial flushes stream text as deltas without losing the whole answer", ()
   assert.equal(tail.result, "Done.");
 });
 
+test("codex web_search, reasoning, delete, and bash unwrap map cleanly", () => {
+  const parser = createOutputParser("codex");
+  const all = feedAll(parser, [
+    '{"type":"item.completed","item":{"id":"w1","type":"web_search","query":"nearbox ssh","status":"completed"}}',
+    '{"type":"item.completed","item":{"id":"r1","type":"reasoning","text":"consider options","status":"completed"}}',
+    '{"type":"item.completed","item":{"id":"d1","type":"file_change","changes":[{"path":"C:\\\\tmp\\\\gone.txt","kind":"delete"}],"status":"completed"}}',
+    '{"type":"item.completed","item":{"id":"b1","type":"command_execution","command":"sh -lc \'echo hi\'","aggregated_output":"hi\\n","exit_code":0,"status":"completed"}}',
+  ]);
+  const tools = all.events.filter((event) => event.tool).map((event) => event.tool!);
+  assert.equal(tools[0]?.kind, "web");
+  assert.equal(tools[0]?.subject, "nearbox ssh");
+  assert.equal(all.events.find((event) => event.kind === "thinking")?.text, "consider options");
+  assert.equal(tools[1]?.kind, "delete");
+  assert.equal(tools[1]?.subject, "gone.txt");
+  assert.equal(tools[2]?.kind, "shell");
+  assert.equal(tools[2]?.command, "echo hi");
+  assert.equal(tools[2]?.status, "ok");
+});
+
+test("codex todo_list and mcp_tool_call surface subjects; unknown items stay raw", () => {
+  const parser = createOutputParser("codex");
+  const all = feedAll(parser, [
+    '{"type":"item.started","item":{"id":"t1","type":"todo_list","items":[{"text":"Scan docs","completed":false},{"text":"Write notes","completed":false}]}}',
+    '{"type":"item.completed","item":{"id":"t1","type":"todo_list","items":[{"text":"Scan docs","completed":true},{"text":"Write notes","completed":true}],"status":"completed"}}',
+    '{"type":"item.completed","item":{"id":"m1","type":"mcp_tool_call","server":"docs","tool":"search","arguments":{"q":"exec"},"result":{"ok":true},"status":"completed"}}',
+    '{"type":"item.completed","item":{"id":"u1","type":"weird_thing","payload":1,"status":"completed"}}',
+  ]);
+  const tools = all.events.filter((event) => event.tool).map((event) => event.tool!);
+  assert.equal(tools[0]?.kind, "todo");
+  assert.equal(tools[0]?.status, "running");
+  assert.equal(tools[0]?.output, "☐ Scan docs\n☐ Write notes");
+  assert.equal(tools[1]?.status, "ok");
+  assert.equal(tools[1]?.output, "☑ Scan docs\n☑ Write notes");
+  assert.equal(tools[2]?.kind, "mcp");
+  assert.equal(tools[2]?.subject, "docs · search");
+  assert.equal(tools[2]?.status, "ok");
+  const raw = all.events.filter((event) => event.kind === "raw");
+  assert.equal(raw.length, 1);
+  assert.match(raw[0]?.text ?? "", /weird_thing/);
+});
+
+test("codex turn.failed with an error object marks the run failed", () => {
+  const parser = createOutputParser("codex");
+  const all = feedAll(parser, ['{"type":"turn.failed","error":{"message":"model overloaded"}}']);
+  assert.equal(all.isError, true);
+  assert.equal(all.result, "model overloaded");
+  assert.equal(all.events.at(-1)?.kind, "result");
+  assert.match(all.events.at(-1)?.text ?? "", /失败: model overloaded/);
+});
+
+test("ACP delete kind, empty plan, multi-file locations, and EOS markers", () => {
+  const parser = createOutputParser("acp");
+  const emptyPlan = pushAll(parser, [{ sessionUpdate: "plan", entries: [] }]);
+  assert.equal(emptyPlan.events.filter((event) => event.tool).length, 0);
+
+  const deleted = pushAll(createOutputParser("acp"), [
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "d1",
+      title: "Remove",
+      kind: "delete",
+      status: "completed",
+      locations: [{ path: "src/gone.ts" }],
+    },
+  ]);
+  assert.equal(deleted.events[0]?.tool?.kind, "delete");
+  assert.equal(deleted.events[0]?.tool?.subject, "gone.ts");
+  assert.deepEqual(deleted.events[0]?.tool?.files, ["src/gone.ts"]);
+
+  const multi = pushAll(createOutputParser("acp"), [
+    {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "m1",
+      status: "completed",
+      locations: [{ path: "a.ts" }, { path: "b.ts" }],
+    },
+  ]);
+  assert.equal(multi.events[0]?.tool?.subject, "a.ts 等 2 个文件");
+  assert.deepEqual(multi.events[0]?.tool?.files, ["a.ts", "b.ts"]);
+
+  const eos = createOutputParser("acp");
+  eos.push({ sessionUpdate: "agent_message_chunk", content: { text: "hi<|endoftext|>there" } });
+  const flushed = eos.flushPartial();
+  assert.equal(flushed.events[0]?.kind, "text");
+  assert.equal(flushed.events[0]?.text, "hithere");
+  const dataForm = createOutputParser("acp");
+  dataForm.push({ type: "text", data: "yo<|eos|>" });
+  assert.equal(dataForm.flushPartial().events[0]?.text, "yo");
+});
+
 test("non-JSON lines are kept as raw output", () => {
   const parser = createOutputParser("codex");
   const all = feedAll(parser, ["warning: something odd", "{not json"]);
