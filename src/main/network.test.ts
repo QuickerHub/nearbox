@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isPrivateLanAddress, isTransientSocketError, normalizeRemoteIp, refreshPrivateLanAddresses, sameStringList } from "./network.ts";
+import { isLoopbackOrPrivate, isPrivateLanAddress, isTransientSocketError, normalizeRemoteIp, refreshPrivateLanAddresses, sameStringList } from "./network.ts";
 
 test("only RFC1918 addresses count as LAN", () => {
   assert.equal(isPrivateLanAddress("192.168.1.8"), true);
@@ -32,4 +32,18 @@ test("refreshPrivateLanAddresses reuses previous when unchanged", () => {
   const first = refreshPrivateLanAddresses(null);
   const again = refreshPrivateLanAddresses(first);
   assert.equal(again, first);
+});
+
+test("mapped IPv4 unwrap is case-insensitive", () => {
+  assert.equal(normalizeRemoteIp("::FFFF:10.0.0.2"), "10.0.0.2");
+});
+
+test("loopback is the whole 127/8, including IPv4-mapped", () => {
+  assert.equal(isLoopbackOrPrivate("127.0.0.1"), true);
+  assert.equal(isLoopbackOrPrivate("127.0.1.1"), true);
+  assert.equal(isLoopbackOrPrivate("::1"), true);
+  assert.equal(isLoopbackOrPrivate("::ffff:127.0.0.1"), true);
+  assert.equal(isLoopbackOrPrivate("::FFFF:127.1.2.3"), true);
+  assert.equal(isLoopbackOrPrivate("192.168.1.8"), true);
+  assert.equal(isLoopbackOrPrivate("8.8.8.8"), false);
 });
