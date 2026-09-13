@@ -349,7 +349,7 @@ svg.lucide {
   margin-top: 8px;
 }
 
-/* The 需要你 / 运行中 boards sit above the sections and are set off from them. */
+/* The 需要你 / 进行中 boards sit above the sections and are set off from them. */
 .task-board {
   padding-bottom: 6px;
   border-bottom: 1px solid var(--line);
@@ -357,6 +357,12 @@ svg.lucide {
 
 .task-board + .task-board {
   margin-top: 4px;
+}
+
+.task-board__hint {
+  margin: 0 8px 4px;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .task-group__head {

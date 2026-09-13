@@ -719,7 +719,9 @@ function ModelMenu({
         }
       });
     chipFlight.current = job;
-  }, [client, agent, info?.modelsCheckedAt, info?.available, info?.modelsError]);
+    // Keyed on agent only (same as App): modelsError / modelsCheckedAt updates from the
+    // refresh itself must not re-fire another POST; the host already rate-limits.
+  }, [client, agent]);
   const label = chipRefreshing && !models.length
     ? "正在更新…"
     : foldable && effectiveId
