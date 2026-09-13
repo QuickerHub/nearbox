@@ -94,7 +94,8 @@ export function planSend(input: PlanInput): SendPlan {
     return { action: "run", label: "发送", hint: "先选一个项目目录，Agent 才知道在哪干活。", enabled: false };
   }
 
-  const active = runs.find((run) => run.taskId === task.id && (run.status === "queued" || run.status === "running"));
+  // Delegated children are the parent's business; only a top-level turn blocks the composer.
+  const active = runs.find((run) => run.taskId === task.id && !run.parentRunId && (run.status === "queued" || run.status === "running"));
   const busy = Boolean(active);
   const previous = conversationRun(runs, task.id, agent, projectId);
   const conversation = Boolean(previous) && input.agentInfo?.supportsResume !== false && canContinueRun(runs, previous!);
