@@ -119,3 +119,10 @@ test("control messages are validated before they reach the injector", () => {
     crop: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
   });
 });
+
+test("shouldSendFrame rejects non-finite buffer or threshold", () => {
+  assert.equal(shouldSendFrame(0), true);
+  assert.equal(shouldSendFrame(Number.NaN), false);
+  assert.equal(shouldSendFrame(10, Number.POSITIVE_INFINITY), false);
+  assert.equal(shouldSendFrame(10, -1), false);
+});

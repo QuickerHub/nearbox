@@ -30,8 +30,43 @@ export interface AppUpdaterOptions {
   onLaunchInstaller(filePath: string): void;
 }
 
+/** Asset names must be basenames — path separators would only confuse pickers / logs. */
+export function isSafeReleaseAssetName(name: string): boolean {
+  if (typeof name !== "string") {
+    return false;
+  }
+  const trimmed = name.trim();
+  if (!trimmed || trimmed.length > 256) {
+    return false;
+  }
+  if (/[/\\]/.test(trimmed) || trimmed.includes("..")) {
+    return false;
+  }
+  return true;
+}
+
+function releaseAssetRows(assets: GithubReleaseAsset[] | undefined): GithubReleaseAsset[] {
+  if (!Array.isArray(assets)) {
+    return [];
+  }
+  const out: GithubReleaseAsset[] = [];
+  for (const item of assets) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    if (typeof item.name !== "string" || !isSafeReleaseAssetName(item.name)) {
+      continue;
+    }
+    if (typeof item.browser_download_url !== "string" || !item.browser_download_url.trim()) {
+      continue;
+    }
+    out.push(item);
+  }
+  return out;
+}
+
 export function pickReleaseAssets(assets: GithubReleaseAsset[] | undefined): { exeUrl: string | null; apkUrl: string | null } {
-  const list = assets ?? [];
+  const list = releaseAssetRows(assets);
   const exe = list.find((item) => /\.exe$/i.test(item.name) && /win/i.test(item.name)) ?? list.find((item) => /\.exe$/i.test(item.name));
   const apk = list.find((item) => /\.apk$/i.test(item.name));
   return { exeUrl: exe?.browser_download_url ?? null, apkUrl: apk?.browser_download_url ?? null };
