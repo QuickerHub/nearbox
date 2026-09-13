@@ -9,6 +9,8 @@ import {
   mergeUsage,
   parseUsage,
   sameUsage,
+  usageDetail,
+  usageRatio,
 } from "./usage.ts";
 
 test("parseUsage accepts snake_case, camelCase and nested usage objects", () => {
@@ -88,4 +90,27 @@ test("sameUsage compares fields without JSON.stringify", () => {
   assert.equal(sameUsage(a, { inputTokens: 100, outputTokens: 5, contextWindow: 200_000, cacheReadTokens: 10 }), true);
   assert.equal(sameUsage(a, { ...a, outputTokens: 6 }), false);
   assert.equal(sameUsage(a, mergeUsage(a, { inputTokens: 100, outputTokens: 5 })), true);
+});
+
+test("usageRatio clamps to the context window and usageDetail lists buckets", () => {
+  assert.equal(usageRatio({ inputTokens: 50, outputTokens: 0 }), undefined);
+  assert.equal(usageRatio({ inputTokens: 50_000, outputTokens: 0, contextWindow: 200_000 }), 0.25);
+  assert.equal(
+    usageRatio({ inputTokens: 10, outputTokens: 0, cacheReadTokens: 300_000, contextWindow: 200_000 }),
+    1,
+  );
+  assert.equal(
+    usageDetail({ inputTokens: 16030, outputTokens: 6, contextWindow: 200_000 }),
+    "输入 16.0k · 输出 6 · 窗口 200k",
+  );
+  assert.equal(
+    usageDetail({
+      inputTokens: 7210,
+      outputTokens: 0,
+      cacheReadTokens: 41000,
+      cacheWriteTokens: 12,
+      costUsd: 0.0123,
+    }),
+    "输入 7.2k · 缓存读取 41k · 缓存写入 12 · $0.0123",
+  );
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isPrivateLanAddress, isTransientSocketError, normalizeRemoteIp, refreshPrivateLanAddresses, sameStringList } from "./network.ts";
+import { isLoopbackOrPrivate, isPrivateLanAddress, isTransientSocketError, normalizeRemoteIp, refreshPrivateLanAddresses, sameStringList } from "./network.ts";
 
 test("only RFC1918 addresses count as LAN", () => {
   assert.equal(isPrivateLanAddress("192.168.1.8"), true);
@@ -32,4 +32,31 @@ test("refreshPrivateLanAddresses reuses previous when unchanged", () => {
   const first = refreshPrivateLanAddresses(null);
   const again = refreshPrivateLanAddresses(first);
   assert.equal(again, first);
+});
+
+test("isLoopbackOrPrivate covers loopback and mapped LAN", () => {
+  assert.equal(isLoopbackOrPrivate("127.0.0.1"), true);
+  assert.equal(isLoopbackOrPrivate("::1"), true);
+  assert.equal(isLoopbackOrPrivate("::ffff:127.0.0.1"), true);
+  assert.equal(isLoopbackOrPrivate("::ffff:192.168.1.8"), true);
+  assert.equal(isLoopbackOrPrivate("8.8.8.8"), false);
+  assert.equal(isLoopbackOrPrivate(undefined), false);
+});
+
+test("isPrivateLanAddress rejects malformed and public ranges", () => {
+  assert.equal(isPrivateLanAddress("172.15.0.1"), false);
+  assert.equal(isPrivateLanAddress("172.32.0.1"), false);
+  assert.equal(isPrivateLanAddress("192.168.1"), false);
+  assert.equal(isPrivateLanAddress("192.168.1.256"), false);
+  assert.equal(isPrivateLanAddress("not-an-ip"), false);
+  assert.equal(isPrivateLanAddress("172.31.255.255"), true);
+});
+
+test("isTransientSocketError accepts code-only transport failures", () => {
+  assert.equal(isTransientSocketError(Object.assign(new Error("boom"), { code: "ETIMEDOUT" })), true);
+  assert.equal(isTransientSocketError(Object.assign(new Error("boom"), { code: "EHOSTUNREACH" })), true);
+  assert.equal(isTransientSocketError(Object.assign(new Error("boom"), { code: "ENETUNREACH" })), true);
+  assert.equal(isTransientSocketError(Object.assign(new Error("boom"), { code: "ERR_STREAM_DESTROYED" })), true);
+  assert.equal(isTransientSocketError(null), false);
+  assert.equal(isTransientSocketError("ECONNRESET"), false);
 });
