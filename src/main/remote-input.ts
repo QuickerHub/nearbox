@@ -363,9 +363,9 @@ export function parseControlMessage(raw: string): RemoteControlToHost | null {
     case "config": {
       const out: RemoteControlToHost = {
         t: "config",
-        quality: typeof msg.quality === "number" ? msg.quality : undefined,
-        fps: typeof msg.fps === "number" ? msg.fps : undefined,
-        maxWidth: typeof msg.maxWidth === "number" ? msg.maxWidth : undefined,
+        quality: typeof msg.quality === "number" && Number.isFinite(msg.quality) ? msg.quality : undefined,
+        fps: typeof msg.fps === "number" && Number.isFinite(msg.fps) ? msg.fps : undefined,
+        maxWidth: typeof msg.maxWidth === "number" && Number.isFinite(msg.maxWidth) ? msg.maxWidth : undefined,
       };
       if ("crop" in msg) {
         out.crop = clampCrop(msg.crop) ?? { x: 0, y: 0, w: 1, h: 1 };

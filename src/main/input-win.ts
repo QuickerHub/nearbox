@@ -153,6 +153,13 @@ class WindowsInputInjector implements InputSink {
     const child = this.child;
     this.child = null;
     if (child) {
+      // End stdin first so PowerShell's ReadLine returns null and the helper
+      // exits cleanly; kill alone can leave a wedged console host briefly.
+      try {
+        child.stdin.end();
+      } catch {
+        /* already closed */
+      }
       try {
         child.kill();
       } catch {

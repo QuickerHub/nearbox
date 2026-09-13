@@ -44,3 +44,15 @@ test("readCursorIdeModels pulls the toggle list from applicationUser", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("relative config homes fall back instead of resolving under cwd", () => {
+  if (process.platform === "win32") {
+    const home = "C:\\Users\\x";
+    const dbPath = cursorStateDbPath({ APPDATA: ".\\evil" }, home);
+    assert.match(dbPath.replaceAll("\\", "/"), /AppData\/Roaming\/Cursor\/User\/globalStorage\/state\.vscdb$/);
+  } else {
+    const home = "/home/x";
+    const dbPath = cursorStateDbPath({ XDG_CONFIG_HOME: "relative/evil" }, home);
+    assert.equal(dbPath, join(home, ".config", "Cursor", "User", "globalStorage", "state.vscdb"));
+  }
+});

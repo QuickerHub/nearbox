@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   AGENT_KINDS,
@@ -17,6 +17,7 @@ import {
   type TaskNote,
 } from "@shared/protocol";
 import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { coerceRunStatus } from "./store-status";
 import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
@@ -141,13 +142,14 @@ export class Store {
     // A prior failed write leaves `writing` rejected; `.then(write)` would never run
     // again, so one disk blip would permanently stop persistence until restart.
     this.writing = enqueueWrite(this.writing, async () => {
+      const tmp = `${this.file}.tmp`;
       try {
         await mkdir(dirname(this.file), { recursive: true });
-        const tmp = `${this.file}.tmp`;
         await writeFile(tmp, payload, "utf8");
         await rename(tmp, this.file);
       } catch (error) {
         this.dirty = true;
+        await unlink(tmp).catch(() => undefined);
         throw error;
       }
     });
@@ -187,7 +189,7 @@ function normalizeIdeModels(value: unknown): IdeModelPref[] | undefined {
     if (typeof record.id !== "string" || !record.id.trim()) {
       continue;
     }
-    const pref: IdeModelPref = { id: record.id, visible: record.visible === true };
+    const pref: IdeModelPref = { id: record.id.trim(), visible: record.visible === true };
     if (typeof record.label === "string" && record.label.trim()) {
       pref.label = record.label.trim();
     }
@@ -210,7 +212,26 @@ function normalizeCatalogs(value: unknown): Partial<Record<AgentKind, ModelCatal
     if (!Array.isArray(models) || typeof checkedAt !== "string") {
       continue;
     }
-    const clean = models.filter((model): model is AgentModel => Boolean(model) && typeof (model as AgentModel).id === "string" && (model as AgentModel).id.length > 0);
+    const clean = models.flatMap((model): AgentModel[] => {
+      if (!model || typeof model !== "object") {
+        return [];
+      }
+      const id = typeof (model as AgentModel).id === "string" ? (model as AgentModel).id.trim() : "";
+      if (!id) {
+        return [];
+      }
+      const row = model as AgentModel;
+      const next: AgentModel = { ...row, id };
+      if (typeof row.label === "string") {
+        const label = row.label.trim();
+        if (label) {
+          next.label = label;
+        } else {
+          delete next.label;
+        }
+      }
+      return [next];
+    });
     if (clean.length) {
       const catalog: ModelCatalog = { models: clean, checkedAt };
       const prefs = normalizeIdeModels(ideModels);
@@ -236,6 +257,8 @@ function normalizeDevice(device: RemoteDevice): RemoteDevice {
 
 function normalizeRun(run: AgentRun): AgentRun {
   const rest = stripEmptyParentRunId(stripTransientPermissionState(run));
+  const status = coerceRunStatus(rest.status);
+  const eventCount = rest.eventCount ?? 0;
   // Anything that was still in flight when the host died can never finish.
   if (rest.status === "running" || rest.status === "queued") {
     return {
@@ -243,7 +266,17 @@ function normalizeRun(run: AgentRun): AgentRun {
       status: "failed",
       error: rest.error ?? "电脑端在运行期间退出了。",
       finishedAt: rest.finishedAt ?? new Date().toISOString(),
+      eventCount,
     };
   }
-  return { ...rest, eventCount: rest.eventCount ?? 0 };
+  if (status === "failed" && rest.status !== "failed") {
+    return {
+      ...rest,
+      status: "failed",
+      error: rest.error ?? "运行状态无效。",
+      finishedAt: rest.finishedAt ?? new Date().toISOString(),
+      eventCount,
+    };
+  }
+  return { ...rest, status, eventCount };
 }

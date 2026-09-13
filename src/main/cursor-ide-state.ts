@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { parseCursorIdeModels } from "../shared/cursor-ide-models.ts";
 import type { IdeModelPref } from "../shared/protocol.ts";
+import { resolveConfigHome } from "./config-home.ts";
 
 const APPLICATION_USER_KEY =
   "src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser";
@@ -11,12 +12,12 @@ const APPLICATION_USER_KEY =
 /** Cursor IDE's global state DB (VS Code-style). Missing when Cursor is not installed. */
 export function cursorStateDbPath(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
   if (process.platform === "win32") {
-    return join(env.APPDATA ?? join(home, "AppData", "Roaming"), "Cursor", "User", "globalStorage", "state.vscdb");
+    return join(resolveConfigHome(env.APPDATA, join(home, "AppData", "Roaming")), "Cursor", "User", "globalStorage", "state.vscdb");
   }
   if (process.platform === "darwin") {
     return join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb");
   }
-  return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "Cursor", "User", "globalStorage", "state.vscdb");
+  return join(resolveConfigHome(env.XDG_CONFIG_HOME, join(home, ".config")), "Cursor", "User", "globalStorage", "state.vscdb");
 }
 
 /**
