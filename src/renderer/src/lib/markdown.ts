@@ -210,3 +210,58 @@ function splitTableRow(line: string): string[] {
   cells.push(current.trim());
   return cells;
 }
+
+/**
+ * Split streaming markdown so completed block boundaries stay stable while the
+ * open tail keeps growing. Sealed text only changes when a blank line (or a
+ * closed fence) lands; the React tree for the sealed part remounts far less
+ * often than once per token.
+ */
+export function splitStreamingMarkdown(text: string): { sealed: string; tail: string } {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (!normalized) {
+    return { sealed: "", tail: "" };
+  }
+
+  const fenceOpenAt = openFenceStart(normalized);
+  if (fenceOpenAt >= 0) {
+    return {
+      sealed: normalized.slice(0, fenceOpenAt),
+      tail: normalized.slice(fenceOpenAt),
+    };
+  }
+
+  const blank = normalized.lastIndexOf("\n\n");
+  if (blank < 0) {
+    return { sealed: "", tail: normalized };
+  }
+  return {
+    sealed: normalized.slice(0, blank),
+    tail: normalized.slice(blank + 2),
+  };
+}
+
+/** Index of the opening fence line when the text ends inside an unclosed fence; else -1. */
+function openFenceStart(text: string): number {
+  const lines = text.split("\n");
+  let open: { char: string; length: number } | null = null;
+  let openAt = -1;
+  let offset = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (open) {
+      if (fenceClose(line, open)) {
+        open = null;
+        openAt = -1;
+      }
+    } else {
+      const started = fenceOpen(line);
+      if (started) {
+        open = { char: started.char, length: started.length };
+        openAt = offset;
+      }
+    }
+    offset += line.length + 1;
+  }
+  return open ? openAt : -1;
+}

@@ -16,6 +16,8 @@ interface RunTranscriptProps {
   /** The user asked to see the record; start with the work section open. */
   defaultOpen?: boolean;
   pending?: PendingPermission;
+  /** Asks waiting behind `pending`. */
+  queued?: number;
   onResolve?(optionId: string): void;
 }
 
@@ -24,7 +26,7 @@ interface RunTranscriptProps {
  * While the turn is live the work section stays open and follows along; when
  * it finishes it folds down to a single line, like Cursor does.
  */
-export function RunTranscript({ events, active, durationLabel, usageLabel, failed, defaultOpen, pending, onResolve }: RunTranscriptProps): JSX.Element {
+export function RunTranscript({ events, active, durationLabel, usageLabel, failed, defaultOpen, pending, queued, onResolve }: RunTranscriptProps): JSX.Element {
   const cursorRef = useRef(createTranscriptCursor());
   const previousRef = useRef<Transcript | null>(null);
   const transcript = useMemo(() => {
@@ -42,16 +44,16 @@ export function RunTranscript({ events, active, durationLabel, usageLabel, faile
     <div className="turn">
       {work.length || (pending && !attached) ? (
         <WorkFold live={active} waiting={waiting} toolCount={toolCount} durationLabel={durationLabel} usageLabel={usageLabel} failed={failed} defaultOpen={Boolean(defaultOpen)}>
-          {pending && !attached && onResolve ? <PermissionAsk pending={pending} onResolve={onResolve} /> : null}
+          {pending && !attached && onResolve ? <PermissionAsk pending={pending} queued={queued} onResolve={onResolve} /> : null}
           {work.map((row) => (
-            <WorkItem key={`${row.type}-${row.seq}`} row={row} failed={failed} pending={pending} onResolve={onResolve} />
+            <WorkItem key={`${row.type}-${row.seq}`} row={row} failed={failed} pending={pending} queued={queued} onResolve={onResolve} />
           ))}
         </WorkFold>
       ) : null}
 
       {answer ? (
         <div className="turn__answer">
-          <Markdown text={answer} />
+          <Markdown text={answer} streaming={active} />
         </div>
       ) : null}
 
@@ -93,11 +95,13 @@ const WorkItem = memo(function WorkItem({
   row,
   failed,
   pending,
+  queued,
   onResolve,
 }: {
   row: WorkRow;
   failed: boolean;
   pending?: PendingPermission;
+  queued?: number;
   onResolve?(optionId: string): void;
 }): JSX.Element | null {
   switch (row.type) {
@@ -110,9 +114,9 @@ const WorkItem = memo(function WorkItem({
         </div>
       );
     case "tool":
-      return <ToolRow tool={row.tool} pending={pending} onResolve={onResolve} />;
+      return <ToolRow tool={row.tool} pending={pending} queued={queued} onResolve={onResolve} />;
     case "tools":
-      return <ToolGroupRow kind={row.kind} tools={row.tools} pending={pending} onResolve={onResolve} />;
+      return <ToolGroupRow kind={row.kind} tools={row.tools} pending={pending} queued={queued} onResolve={onResolve} />;
     case "status":
       return <div className="turn__status">{row.text}</div>;
     case "stderr":

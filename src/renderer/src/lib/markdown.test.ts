@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseBlocks } from "./markdown.ts";
+import { parseBlocks, splitStreamingMarkdown } from "./markdown.ts";
 
 test("GFM tables and fenced code from a release note", () => {
   const blocks = parseBlocks(`
@@ -88,4 +88,20 @@ test("quotes nest and thematic breaks stay out of lists", () => {
     blocks.slice(1).map((block) => block.type),
     ["hr", "list"],
   );
+});
+
+test("splitStreamingMarkdown seals completed paragraphs and open fences", () => {
+  assert.deepEqual(splitStreamingMarkdown("还在写"), { sealed: "", tail: "还在写" });
+  assert.deepEqual(splitStreamingMarkdown("第一段\n\n第二段还在"), {
+    sealed: "第一段",
+    tail: "第二段还在",
+  });
+  assert.deepEqual(splitStreamingMarkdown("前言\n\n```js\nconst x =\n"), {
+    sealed: "前言\n\n",
+    tail: "```js\nconst x =\n",
+  });
+  assert.deepEqual(splitStreamingMarkdown("```js\nok\n```\n\n后记"), {
+    sealed: "```js\nok\n```",
+    tail: "后记",
+  });
 });

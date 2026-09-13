@@ -114,7 +114,7 @@ export function RunBlock({ run, client, opensConversation, delegatedFrom, projec
       ) : open ? (
         events === null ? (
           run.pendingPermission ? (
-            <PermissionAsk pending={run.pendingPermission} onResolve={(optionId) => void client.resolvePermission(run.id, optionId)} />
+            <PermissionAsk pending={run.pendingPermission} queued={run.pendingPermissionQueued} onResolve={(optionId) => void client.resolvePermission(run.id, optionId)} />
           ) : (
             <button type="button" className="fold__head fold__head--lazy" disabled>
               <span className="spinner spinner--small fold__spinner" />
@@ -130,6 +130,7 @@ export function RunBlock({ run, client, opensConversation, delegatedFrom, projec
             failed={failed}
             defaultOpen={expanded}
             pending={run.pendingPermission}
+            queued={run.pendingPermissionQueued}
             onResolve={(optionId) => void client.resolvePermission(run.id, optionId)}
           />
         )

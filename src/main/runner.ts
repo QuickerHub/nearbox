@@ -43,6 +43,7 @@ import {
   spawnEnv,
   truncate,
 } from "./agents";
+import { localPreflightFailure, shouldAttemptWarm, warmFallbackStatus } from "./run-start";
 import { type DelegationConfig, withDelegationPath } from "./delegation";
 import { activeDescendants, nextRunnable } from "./scheduler";
 import {
@@ -321,21 +322,26 @@ export class RunManager extends EventEmitter {
     const settings = this.options.getSettings();
     const override = settings.agents[run.agent]?.command;
     const command = await resolveAgentCommand(run.agent, override);
-    if (!command) {
-      this.append(run, "stderr", `没有找到 ${AGENT_LABELS[run.agent]} 的命令行工具。请先在这台电脑上安装并登录。`);
-      this.finish(state, null, "未安装对应的 CLI");
+    const preflight = localPreflightFailure({
+      agentLabel: AGENT_LABELS[run.agent],
+      hasCommand: Boolean(command),
+      cwd: run.cwd,
+      cwdExists: existsSync(run.cwd),
+    });
+    if (preflight) {
+      this.append(run, "stderr", preflight.stderr);
+      this.finish(state, null, preflight.error);
       return;
     }
-    if (!existsSync(run.cwd)) {
-      this.append(run, "stderr", `项目目录不存在：${run.cwd}`);
-      this.finish(state, null, "项目目录不存在");
+    if (!command) {
       return;
     }
 
     const resumeSessionId = this.resolveResume(run);
     // A delegating run needs its own environment (token, PATH), which a shared host cannot give it.
     const delegation = run.delegate ? this.options.delegationFor(run) : null;
-    if (!delegation && (await this.startWarm(state, resumeSessionId))) {
+    const warm = shouldAttemptWarm({ deviceId: run.deviceId, delegate: Boolean(delegation) });
+    if (warm.attempt && (await this.startWarm(state, resumeSessionId))) {
       return;
     }
     if (state.cancelled) {
@@ -493,7 +499,7 @@ export class RunManager extends EventEmitter {
     const run = state.run;
     const host = await this.hosts.host(run.agent);
     if (!host) {
-      this.append(run, "status", "常驻进程这次没起来，本轮用单独进程（结束就会退出）。");
+      this.append(run, "status", warmFallbackStatus("host-down"));
       return false;
     }
     if (state.cancelled) {
@@ -504,12 +510,13 @@ export class RunManager extends EventEmitter {
     let modelId: string | undefined;
     if (run.model) {
       if (!host.models && !resumeSessionId) {
+        this.append(run, "status", warmFallbackStatus("models-unknown"));
         return false;
       }
       if (host.models) {
         modelId = mapCursorModel(run.model, host.models);
         if (!modelId) {
-          this.append(run, "status", `常驻会话不支持模型 ${run.model}，本轮改用单独进程运行。`);
+          this.append(run, "status", warmFallbackStatus("model-unsupported", run.model));
           return false;
         }
       }
@@ -527,11 +534,11 @@ export class RunManager extends EventEmitter {
         // Conversations begun by one-shot runs stay one-shot; say so once rather than on every turn.
         if (!this.legacySessionsNoticed.has(resumeSessionId)) {
           this.legacySessionsNoticed.add(resumeSessionId);
-          this.append(run, "status", "这段会话是在单独进程模式下开始的，常驻进程接不上，回复会慢一些；想要更快的回复可以「改为新会话」。");
+          this.append(run, "status", warmFallbackStatus("legacy-session"));
         }
         return false;
       }
-      this.append(run, "status", `常驻会话不可用（${error instanceof Error ? error.message : String(error)}），本轮改用单独进程运行。`);
+      this.append(run, "status", warmFallbackStatus("session-error", error instanceof Error ? error.message : String(error)));
       return false;
     }
     if (state.cancelled) {
@@ -542,7 +549,7 @@ export class RunManager extends EventEmitter {
       // The model list only becomes known with the first session; a resumed turn may learn it just now.
       modelId = modelId ?? (host.models ? mapCursorModel(run.model, host.models) : undefined);
       if (!modelId) {
-        this.append(run, "status", `常驻会话不支持模型 ${run.model}，本轮改用单独进程运行。`);
+        this.append(run, "status", warmFallbackStatus("model-unsupported", run.model));
         return false;
       }
       if (session.currentModelId !== modelId) {
@@ -823,30 +830,18 @@ export class RunManager extends EventEmitter {
       };
       state.permissionQueue.push({ resolve, pending });
       // Parallel tool calls may ask more than once; show the head and keep the rest queued.
-      if (state.permissionQueue.length === 1) {
-        state.run.pendingPermission = pending;
-        this.options.onRunChanged(state.run);
-      }
+      this.syncPendingPermission(state);
     });
   }
 
   private settlePermission(state: ActiveRun, optionId: string | null): void {
     const waiter = state.permissionQueue.shift();
     if (!waiter) {
-      if (state.run.pendingPermission) {
-        delete state.run.pendingPermission;
-        this.options.onRunChanged(state.run);
-      }
+      this.syncPendingPermission(state);
       return;
     }
     waiter.resolve(optionId);
-    const next = state.permissionQueue[0];
-    if (next) {
-      state.run.pendingPermission = next.pending;
-    } else {
-      delete state.run.pendingPermission;
-    }
-    this.options.onRunChanged(state.run);
+    this.syncPendingPermission(state);
   }
 
   /** Cancel every queued ask (run finished or user stopped the turn). */
@@ -855,10 +850,32 @@ export class RunManager extends EventEmitter {
       return;
     }
     const waiters = state.permissionQueue.splice(0);
-    delete state.run.pendingPermission;
-    this.options.onRunChanged(state.run);
+    this.syncPendingPermission(state);
     for (const waiter of waiters) {
       waiter.resolve(null);
+    }
+  }
+
+  /** Publish the head ask (if any) and how many more wait behind it. */
+  private syncPendingPermission(state: ActiveRun): void {
+    const head = state.permissionQueue[0];
+    const before = state.run.pendingPermission;
+    const beforeQueued = state.run.pendingPermissionQueued ?? 0;
+    if (head) {
+      state.run.pendingPermission = head.pending;
+      const queued = state.permissionQueue.length - 1;
+      if (queued > 0) {
+        state.run.pendingPermissionQueued = queued;
+      } else {
+        delete state.run.pendingPermissionQueued;
+      }
+    } else {
+      delete state.run.pendingPermission;
+      delete state.run.pendingPermissionQueued;
+    }
+    const afterQueued = state.run.pendingPermissionQueued ?? 0;
+    if (before !== state.run.pendingPermission || beforeQueued !== afterQueued) {
+      this.options.onRunChanged(state.run);
     }
   }
 

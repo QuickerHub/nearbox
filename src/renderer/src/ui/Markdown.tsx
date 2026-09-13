@@ -1,13 +1,28 @@
-import { Fragment, type MouseEvent, type ReactNode } from "react";
+import { Fragment, type MouseEvent, type ReactNode, useMemo } from "react";
 import { splitInline } from "../lib/autolink";
-import { parseBlocks, type MdAlign, type MdBlock } from "../lib/markdown";
+import { parseBlocks, splitStreamingMarkdown, type MdAlign, type MdBlock } from "../lib/markdown";
 
 /**
  * Tiny markdown renderer for agent summaries: headings, lists, tables, fenced
  * code, quotes, inline code, bold and links. The stored text is never rewritten;
  * React escapes everything, so nothing here can inject markup.
+ *
+ * When `streaming` is set, completed block boundaries stay in a sealed Markdown
+ * tree and only the open tail remounts on each delta.
  */
-export function Markdown({ text, className }: { text: string; className?: string }): JSX.Element {
+export function Markdown({ text, className, streaming }: { text: string; className?: string; streaming?: boolean }): JSX.Element {
+  const parts = useMemo(() => (streaming ? splitStreamingMarkdown(text) : null), [streaming, text]);
+  if (parts) {
+    const sealedBlocks = parts.sealed ? parseBlocks(parts.sealed) : [];
+    return (
+      <div className={["md", className].filter(Boolean).join(" ")}>
+        {sealedBlocks.map((block, index) => (
+          <Fragment key={index}>{renderBlock(block)}</Fragment>
+        ))}
+        {parts.tail ? <p className="md__stream-tail">{parts.tail}</p> : null}
+      </div>
+    );
+  }
   const blocks = parseBlocks(text);
   return (
     <div className={["md", className].filter(Boolean).join(" ")}>
