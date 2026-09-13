@@ -17,6 +17,8 @@ import {
   type TaskNote,
 } from "@shared/protocol";
 import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { isPersistedStateRoot, runNeedsPersistAfterLoad } from "./store-load";
+import { FLUSH_RETRY_MIN_MS, nextFlushRetryDelay } from "./store-retry";
 import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
@@ -77,52 +79,93 @@ export class Store {
   private timer: NodeJS.Timeout | null = null;
   private writing: Promise<void> = Promise.resolve();
   private dirty = false;
+  private flushRetryDelay = FLUSH_RETRY_MIN_MS;
 
   constructor(dataDir: string) {
     this.file = join(dataDir, "state.json");
-    this.state = this.load();
+    const loaded = this.load();
+    this.state = loaded.state;
+    // Crash-normalized runs / stripped permission fields live only in memory
+    // until something else calls save(); persist them so disk matches.
+    if (loaded.persist) {
+      this.save();
+    }
   }
 
-  private load(): PersistedState {
+  private load(): { state: PersistedState; persist: boolean } {
     if (!existsSync(this.file)) {
-      return emptyState();
+      return { state: emptyState(), persist: false };
     }
     try {
-      const raw = JSON.parse(readFileSync(this.file, "utf8")) as Partial<PersistedState>;
+      const parsed: unknown = JSON.parse(readFileSync(this.file, "utf8"));
+      // A JSON array/string root used to become an empty-ish state and the next
+      // save silently overwrote the file with no .corrupt backup.
+      if (!isPersistedStateRoot(parsed)) {
+        throw new Error("state root must be an object");
+      }
+      const raw = parsed as Partial<PersistedState>;
       const base = emptyState();
+      let persist = false;
+      const runs = Array.isArray(raw.runs)
+        ? raw.runs.map((run) => {
+            const next = normalizeRun(run);
+            if (runNeedsPersistAfterLoad(run, next)) {
+              persist = true;
+            }
+            return next;
+          })
+        : base.runs;
       return {
-        version: 1,
-        tasks: Array.isArray(raw.tasks) ? raw.tasks.map(normalizeTask) : base.tasks,
-        projects: Array.isArray(raw.projects) ? raw.projects : base.projects,
-        runs: Array.isArray(raw.runs) ? raw.runs.map(normalizeRun) : base.runs,
-        sessions: Array.isArray(raw.sessions) ? raw.sessions : base.sessions,
-        remoteDevices: Array.isArray(raw.remoteDevices) ? raw.remoteDevices.map(normalizeDevice) : base.remoteDevices,
-        files: raw.files && typeof raw.files === "object" ? raw.files : base.files,
-        settings: {
-          ...base.settings,
-          ...(raw.settings ?? {}),
-          agents: { ...(raw.settings?.agents ?? {}) },
+        state: {
+          version: 1,
+          tasks: Array.isArray(raw.tasks) ? raw.tasks.map(normalizeTask) : base.tasks,
+          projects: Array.isArray(raw.projects) ? raw.projects : base.projects,
+          runs,
+          sessions: Array.isArray(raw.sessions) ? raw.sessions : base.sessions,
+          remoteDevices: Array.isArray(raw.remoteDevices) ? raw.remoteDevices.map(normalizeDevice) : base.remoteDevices,
+          files: raw.files && typeof raw.files === "object" ? raw.files : base.files,
+          settings: {
+            ...base.settings,
+            ...(raw.settings ?? {}),
+            agents: { ...(raw.settings?.agents ?? {}) },
+          },
+          agentModels: normalizeCatalogs(raw.agentModels),
         },
-        agentModels: normalizeCatalogs(raw.agentModels),
+        persist,
       };
     } catch {
       // Keep the broken file around for inspection instead of silently replacing it.
       const backup = `${this.file}.corrupt-${Date.now()}`;
       void rename(this.file, backup).catch(() => undefined);
-      return emptyState();
+      return { state: emptyState(), persist: false };
     }
   }
 
   /** Schedule a write; multiple calls within the window collapse into one. */
   save(): void {
     this.dirty = true;
+    this.scheduleFlush(150);
+  }
+
+  private scheduleFlush(delayMs: number): void {
     if (this.timer) {
       return;
     }
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.flush().catch(() => undefined);
-    }, 150);
+      void this.flush()
+        .then(() => {
+          this.flushRetryDelay = FLUSH_RETRY_MIN_MS;
+        })
+        .catch(() => {
+          // A failed flush restores dirty; without a timer we would sit in RAM
+          // until the next unrelated mutation. Back off so a full disk does not spin.
+          if (this.dirty) {
+            this.flushRetryDelay = nextFlushRetryDelay(this.flushRetryDelay);
+            this.scheduleFlush(this.flushRetryDelay);
+          }
+        });
+    }, delayMs);
   }
 
   async flush(): Promise<void> {

@@ -72,6 +72,9 @@ function powershellPath(): string {
   return join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }
 
+/** Cap stdout scanned for NB_READY so a noisy failed bootstrap cannot balloon memory. */
+export const MAX_READY_BANNER_CHARS = 4096;
+
 class WindowsInputInjector implements InputSink {
   readonly supported = true;
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -116,6 +119,10 @@ class WindowsInputInjector implements InputSink {
       let banner = "";
       const onData = (chunk: Buffer) => {
         banner += chunk.toString("utf8");
+        // Keep a tail so "NB_READY" split across the trim boundary is still seen.
+        if (banner.length > MAX_READY_BANNER_CHARS) {
+          banner = banner.slice(-64);
+        }
         if (banner.includes("NB_READY")) {
           child.stdout.off("data", onData);
           this.isReady = true;
