@@ -46,3 +46,11 @@ test("liveInvite hides expired credentials", () => {
   assert.equal(liveInvite({ ...invite, expiresAt: "2026-09-13T11:00:00.000Z" }, now), null);
   assert.equal(liveInvite(null, now), null);
 });
+
+test("nearbox invite with a non-integer port falls back to the default", () => {
+  assert.deepEqual(parseInviteText("nearbox://connect?host=10.0.0.2&port=abc&t=tok"), {
+    host: "10.0.0.2",
+    port: 17831,
+    token: "tok",
+  });
+});
