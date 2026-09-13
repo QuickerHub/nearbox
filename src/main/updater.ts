@@ -3,6 +3,7 @@ import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AppUpdateStatus } from "@shared/protocol";
 import { isNewerVersion, stripTagPrefix } from "../shared/version.ts";
+import { resolveReleaseRepo } from "./updater-repo.ts";
 
 export const DEFAULT_RELEASE_REPO = "QuickerHub/nearbox";
 const STALE_MS = 60 * 60 * 1000;
@@ -141,7 +142,7 @@ export class AppUpdater {
   }
 
   private async refresh(): Promise<AppUpdateStatus> {
-    const repo = this.options.repo ?? DEFAULT_RELEASE_REPO;
+    const repo = resolveReleaseRepo(this.options.repo, DEFAULT_RELEASE_REPO);
     const response = await this.fetchImpl(`https://api.github.com/repos/${repo}/releases/latest`, {
       headers: {
         Accept: "application/vnd.github+json",
@@ -183,6 +184,8 @@ export class AppUpdater {
 
   private async download(version: string, url: string): Promise<string> {
     if (this.readyFile && this.readyVersion === version && existsSync(this.readyFile)) {
+      // Reuse must still surface a finished bar — install can skip refresh entirely.
+      this.snapshot = { ...this.snapshot, downloading: false, progress: 1, error: undefined };
       return this.readyFile;
     }
     await mkdir(this.options.cacheDir, { recursive: true });

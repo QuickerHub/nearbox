@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   countRunStatuses,
   trayAgentLabel,
+  sanitizeTrayHostLabel,
   trayHostLabel,
   trayPhonesLabel,
   trayStatusSignature,
@@ -46,3 +47,10 @@ test("trayTooltip joins Chinese status rows", () => {
   assert.equal(trayTooltip(1, 2, 3), "Nearbox · Agent：1 运行中 · 2 排队 · 3 台手机在线");
 });
 
+
+test("trayHostLabel rejects user@host style values", () => {
+  assert.equal(trayHostLabel("user@192.168.1.8", 7788), "未发现局域网地址");
+  assert.equal(trayHostLabel("  ", 7788), "未发现局域网地址");
+  assert.equal(sanitizeTrayHostLabel("user@host"), undefined);
+  assert.equal(sanitizeTrayHostLabel("192.168.1.8"), "192.168.1.8");
+});

@@ -72,6 +72,23 @@ function powershellPath(): string {
   return join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }
 
+/**
+ * Cap how many injector lines one send()/flush of pending may write. A buggy
+ * viewer can otherwise enqueue huge stdin bursts once the helper is ready
+ * (pending-during-start is capped in other rounds; this covers the ready path).
+ */
+export const MAX_INJECT_BATCH = 256;
+
+export function capInjectorBatch(commands: string[], max = MAX_INJECT_BATCH): string[] {
+  if (!Array.isArray(commands) || commands.length === 0) {
+    return [];
+  }
+  if (!Number.isFinite(max) || max <= 0) {
+    return [];
+  }
+  return commands.length > max ? commands.slice(0, max) : commands;
+}
+
 class WindowsInputInjector implements InputSink {
   readonly supported = true;
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -88,11 +105,18 @@ class WindowsInputInjector implements InputSink {
     if (this.disposed || commands.length === 0) {
       return;
     }
-    if (this.isReady && this.child) {
-      this.writeNow(commands);
+    const batch = capInjectorBatch(commands);
+    if (!batch.length) {
       return;
     }
-    this.pending.push(...commands);
+    if (this.isReady && this.child) {
+      this.writeNow(batch);
+      return;
+    }
+    this.pending.push(...batch);
+    if (this.pending.length > MAX_INJECT_BATCH) {
+      this.pending = this.pending.slice(-MAX_INJECT_BATCH);
+    }
     void this.start();
   }
 
@@ -120,7 +144,7 @@ class WindowsInputInjector implements InputSink {
           child.stdout.off("data", onData);
           this.isReady = true;
           if (this.pending.length) {
-            this.writeNow(this.pending);
+            this.writeNow(capInjectorBatch(this.pending));
             this.pending = [];
           }
           resolve(true);
