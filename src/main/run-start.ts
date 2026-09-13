@@ -67,7 +67,9 @@ export function warmFallbackStatus(kind: WarmFallbackKind, detail?: string): str
     case "models-unknown":
       return "常驻会话还没学到模型列表，本轮改用单独进程运行。";
     case "model-unsupported":
-      return `常驻会话不支持模型 ${detail ?? ""}，本轮改用单独进程运行。`;
+      return detail
+        ? `常驻会话不支持模型 ${detail}，本轮改用单独进程运行。`
+        : "常驻会话不支持所选模型，本轮改用单独进程运行。";
     case "legacy-session":
       return "这段会话是在单独进程模式下开始的，常驻进程接不上，回复会慢一些；想要更快的回复可以「改为新会话」。";
     case "session-error":
