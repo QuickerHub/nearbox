@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /** Same shape as ResolvedCommand, kept local so this file stays free of `@shared`. */
@@ -7,6 +7,31 @@ export interface CursorBundle {
   prefixArgs: string[];
   display: string;
   viaCmd: false;
+}
+
+/**
+ * Bundled node.exe / index.js must be plain non-empty files. `existsSync` /
+ * `statSync` follow symlinks; a versions tree (or binary) symlink could otherwise
+ * point the resolver outside the shim dir, and a zero-byte placeholder would
+ * look "installed" until spawn fails.
+ */
+export function isUsableBundleFile(path: string): boolean {
+  try {
+    const st = lstatSync(path);
+    return st.isFile() && st.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** `versions/` itself must be a real directory — not a symlink to an attacker tree. */
+export function isPlainDirectory(path: string): boolean {
+  try {
+    const st = lstatSync(path);
+    return st.isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function versionKey(name: string): number {
@@ -22,17 +47,30 @@ function versionKey(name: string): number {
 export function resolveCursorAgentBundle(shimDir: string): CursorBundle | null {
   const inPlace = join(shimDir, "index.js");
   const inPlaceNode = join(shimDir, "node.exe");
-  if (existsSync(inPlace) && existsSync(inPlaceNode)) {
+  if (isUsableBundleFile(inPlace) && isUsableBundleFile(inPlaceNode)) {
     return { file: inPlaceNode, prefixArgs: [inPlace], display: `${inPlaceNode} ${inPlace}`, viaCmd: false };
   }
   const versionsDir = join(shimDir, "versions");
-  if (!existsSync(versionsDir)) {
+  if (!existsSync(versionsDir) || !isPlainDirectory(versionsDir)) {
     return null;
   }
-  const versions = readdirSync(versionsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && /^\d{4}\.\d{1,2}\.\d{1,2}/.test(entry.name))
+  let entries;
+  try {
+    entries = readdirSync(versionsDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const versions = entries
+    .filter(
+      (entry) =>
+        !entry.isSymbolicLink() && entry.isDirectory() && /^\d{4}\.\d{1,2}\.\d{1,2}/.test(entry.name),
+    )
     .map((entry) => entry.name)
-    .filter((name) => existsSync(join(versionsDir, name, "node.exe")) && existsSync(join(versionsDir, name, "index.js")))
+    .filter(
+      (name) =>
+        isUsableBundleFile(join(versionsDir, name, "node.exe")) &&
+        isUsableBundleFile(join(versionsDir, name, "index.js")),
+    )
     .sort((a, b) => versionKey(b) - versionKey(a));
   const latest = versions[0];
   if (!latest) {

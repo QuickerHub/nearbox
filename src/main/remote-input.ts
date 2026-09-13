@@ -291,6 +291,11 @@ export function clampQuality(
 
 /** Skip a client whose send buffer is already backed up, so we never queue frames faster than the link drains. */
 export function shouldSendFrame(bufferedAmount: number, threshold = 512 * 1024): boolean {
+  // NaN/Infinity comparisons are always false for `<=`, which would look like
+  // "buffer OK" if we inverted the check later — refuse non-finite values.
+  if (!Number.isFinite(bufferedAmount) || !Number.isFinite(threshold) || threshold < 0) {
+    return false;
+  }
   return bufferedAmount <= threshold;
 }
 

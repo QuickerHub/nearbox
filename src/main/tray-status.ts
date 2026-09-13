@@ -31,9 +31,33 @@ export function trayPhonesLabel(phones: number): string {
   return phonesOnlineLabel(phones);
 }
 
+/**
+ * LAN picker is host/IP only. Control chars break the tray menu; `|` collides
+ * with trayStatusSignature delimiters; whitespace / path / URL punctuation must
+ * not render as `host:port`.
+ */
+export function sanitizeTrayHostLabel(host: string | undefined): string | undefined {
+  if (typeof host !== "string") {
+    return undefined;
+  }
+  // Reject (do not glue) labels that contain controls — `host\nname` must not become `hostname`.
+  if (/[\u0000-\u001f\u007f]/.test(host)) {
+    return undefined;
+  }
+  const cleaned = host.trim().slice(0, 64);
+  if (!cleaned) {
+    return undefined;
+  }
+  if (/[|/\\@#?\s]/.test(cleaned) || cleaned.includes(":")) {
+    return undefined;
+  }
+  return cleaned;
+}
+
 /** Host:port row, or the empty-LAN placeholder. */
 export function trayHostLabel(selectedHost: string | undefined, port: number | undefined): string {
-  return selectedHost ? `${selectedHost}:${port}` : "未发现局域网地址";
+  const host = sanitizeTrayHostLabel(selectedHost);
+  return host ? `${host}:${port}` : "未发现局域网地址";
 }
 
 /**
@@ -47,7 +71,7 @@ export function trayStatusSignature(
   running: number,
   queued: number,
 ): string {
-  return `${selectedHost ?? ""}|${port ?? ""}|${phones}|${running}|${queued}`;
+  return `${sanitizeTrayHostLabel(selectedHost) ?? ""}|${port ?? ""}|${phones}|${running}|${queued}`;
 }
 
 /** Hover tooltip: compact Chinese status next to the app name. */

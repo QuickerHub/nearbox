@@ -187,13 +187,14 @@ function normalizeIdeModels(value: unknown): IdeModelPref[] | undefined {
     if (typeof record.id !== "string" || !record.id.trim()) {
       continue;
     }
-    const pref: IdeModelPref = { id: record.id, visible: record.visible === true };
+    const pref: IdeModelPref = { id: record.id.trim(), visible: record.visible === true };
     if (typeof record.label === "string" && record.label.trim()) {
       pref.label = record.label.trim();
     }
     out.push(pref);
   }
-  return out.length ? out : undefined;
+  // Catalog caps cover CLI model lists; IDE prefs can still be huge without a bound.
+  return out.length ? out.slice(0, 500) : undefined;
 }
 
 function normalizeCatalogs(value: unknown): Partial<Record<AgentKind, ModelCatalog>> {
@@ -210,7 +211,17 @@ function normalizeCatalogs(value: unknown): Partial<Record<AgentKind, ModelCatal
     if (!Array.isArray(models) || typeof checkedAt !== "string") {
       continue;
     }
-    const clean = models.filter((model): model is AgentModel => Boolean(model) && typeof (model as AgentModel).id === "string" && (model as AgentModel).id.length > 0);
+    const clean: AgentModel[] = [];
+    for (const model of models) {
+      if (!model || typeof (model as AgentModel).id !== "string") {
+        continue;
+      }
+      const id = (model as AgentModel).id.trim();
+      if (!id) {
+        continue;
+      }
+      clean.push(id === (model as AgentModel).id ? (model as AgentModel) : { ...(model as AgentModel), id });
+    }
     if (clean.length) {
       const catalog: ModelCatalog = { models: clean, checkedAt };
       const prefs = normalizeIdeModels(ideModels);
