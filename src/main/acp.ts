@@ -875,10 +875,28 @@ export function choosePermission(access: AgentAccess, toolCall: Record<string, u
 }
 
 export function describePermission(toolCall: Record<string, unknown>): { toolCallId: string; title: string; command?: string } {
-  const raw = toolCall.rawInput && typeof toolCall.rawInput === "object" ? (toolCall.rawInput as Record<string, unknown>) : {};
+  const raw = permissionRawInput(toolCall.rawInput);
   const command = [raw.command, toolCall.command, raw.commandLine].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim();
   const title = [toolCall.title, command, toolCall.kind].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim() ?? "命令";
   return { toolCallId: String(toolCall.toolCallId ?? ""), title, command };
+}
+
+/** Agents sometimes send rawInput as a JSON string rather than an object. */
+function permissionRawInput(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === "string" && value.trim().startsWith("{")) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // keep empty
+    }
+  }
+  return {};
 }
 
 /**

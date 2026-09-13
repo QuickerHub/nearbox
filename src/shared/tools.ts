@@ -21,7 +21,7 @@ export function toolKindOf(rawName: string): ToolKind {
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[\s-]+/g, "_")
     .toLowerCase();
-  if (/^(shell|bash|run_command|run_terminal_cmd|command_execution|execute|terminal|powershell|cmd|exec)$/.test(id)) {
+  if (/^(shell|bash|run_command|run_terminal_cmd|run_terminal_command|command_execution|execute|execute_bash|bash_command|terminal|powershell|cmd|exec)$/.test(id)) {
     return "shell";
   }
   if (/^(read|read_file|readfile|view|cat|view_file|read_files)$/.test(id)) {
@@ -30,7 +30,7 @@ export function toolKindOf(rawName: string): ToolKind {
   if (/^(write|write_file|writefile|create_file|create|save_file)$/.test(id)) {
     return "write";
   }
-  if (/^(edit|edit_file|editfile|str_replace|strreplace|str_replace_editor|apply_patch|multi_edit|multiedit|search_replace|patch|notebook_edit)$/.test(id)) {
+  if (/^(edit|edit_file|editfile|file_edit|str_replace|strreplace|str_replace_editor|apply_patch|multi_edit|multiedit|search_replace|patch|notebook_edit)$/.test(id)) {
     return "edit";
   }
   if (/^(delete|delete_file|deletefile|remove|rm)$/.test(id)) {
@@ -51,7 +51,7 @@ export function toolKindOf(rawName: string): ToolKind {
   if (/^(task|agent|subagent|sub_agent|spawn_agent)$/.test(id)) {
     return "task";
   }
-  if (/^(todo|todo_write|todowrite|todo_list|update_todos|todo_read|todoread|update_plan|plan)$/.test(id)) {
+  if (/^(todo|todo_write|todowrite|write_todos|todo_list|update_todos|todo_read|todoread|update_plan|create_plan|plan)$/.test(id)) {
     return "todo";
   }
   if (/^(mcp|mcp_tool_call|mcp_tool)$/.test(id) || id.startsWith("mcp_")) {
@@ -60,10 +60,10 @@ export function toolKindOf(rawName: string): ToolKind {
   return "other";
 }
 
-const PATH_KEYS = ["path", "file_path", "filePath", "target_file", "targetFile", "relativeWorkspacePath", "relative_workspace_path", "file", "filename", "notebook_path"];
+const PATH_KEYS = ["path", "file_path", "filePath", "filepath", "target_file", "targetFile", "target_path", "targetPath", "absolute_path", "absolutePath", "relativeWorkspacePath", "relative_workspace_path", "file", "filename", "notebook_path"];
 const DIR_KEYS = ["targetDirectory", "target_directory", "workingDirectory", "working_directory", "cwd", "dir", "directory", "path"];
 const PATTERN_KEYS = ["globPattern", "glob_pattern", "pattern", "query", "regex", "search"];
-const WEB_KEYS = ["query", "url", "search_term", "searchTerm", "q"];
+const WEB_KEYS = ["query", "url", "uri", "href", "link", "search_term", "searchTerm", "q"];
 
 /** Turn a call's arguments into subject/command/input, independent of which CLI produced them. */
 export function describeArgs(
@@ -80,7 +80,8 @@ export function describeArgs(
   }
   switch (kind) {
     case "shell": {
-      const command = pickString(args, ["command", "cmd", "script"]);
+      // Prefer command strings; some CLIs put argv tokens under `arguments`.
+      const command = pickString(args, ["command", "cmd", "script"]) || argvText(args.arguments);
       call.command = command || undefined;
       call.subject = command || undefined;
       call.cwd = pickString(args, DIR_KEYS.filter((key) => key !== "path")) || undefined;
@@ -121,7 +122,7 @@ export function describeArgs(
           const mark = status === "completed" || todo.completed === true ? "☑" : status === "in_progress" ? "◐" : "☐";
           return `${mark} ${String(todo.content ?? todo.text ?? todo.step ?? todo.title ?? "")}`;
         });
-      call.subject = todos.length ? `${todos.length} 项` : undefined;
+      call.subject = todos.length ? `${todos.length} 项` : pickString(args, ["name", "title", "description"]) || undefined;
       call.output = todos.join("\n") || undefined;
       break;
     }
@@ -238,11 +239,23 @@ export function describeRawResult(result: Record<string, unknown>): Partial<Tool
   if (typeof result.content === "string" && values.every((value) => !isRecord(value) && !Array.isArray(value))) {
     return { output: clipHead(result.content) };
   }
-  if (typeof result.totalMatches === "number") {
-    return { output: `${result.totalMatches} 处匹配${result.truncated === true ? "（结果已截断）" : ""}` };
+  const totalMatches =
+    typeof result.totalMatches === "number"
+      ? result.totalMatches
+      : typeof result.total_matches === "number"
+        ? result.total_matches
+        : undefined;
+  if (totalMatches !== undefined) {
+    return { output: `${totalMatches} 处匹配${result.truncated === true ? "（结果已截断）" : ""}` };
   }
-  if (typeof result.totalFiles === "number") {
-    return { output: `${result.totalFiles} 个文件${result.truncated === true ? "（结果已截断）" : ""}` };
+  const totalFiles =
+    typeof result.totalFiles === "number"
+      ? result.totalFiles
+      : typeof result.total_files === "number"
+        ? result.total_files
+        : undefined;
+  if (totalFiles !== undefined) {
+    return { output: `${totalFiles} 个文件${result.truncated === true ? "（结果已截断）" : ""}` };
   }
   if (typeof result.error === "string" && result.error.trim() && values.length === 1) {
     return { status: "error", error: result.error };
@@ -312,6 +325,17 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+/** Join argv-style token lists for shell display (e.g. `arguments: ["npm","test"]`). */
+export function argvText(value: unknown): string {
+  if (!Array.isArray(value) || !value.length) {
+    return "";
+  }
+  if (!value.every((item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean")) {
+    return "";
+  }
+  return value.map(String).join(" ").trim();
 }
 
 export function pickString(record: Record<string, unknown>, keys: string[]): string {

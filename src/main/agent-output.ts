@@ -782,16 +782,28 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
         out.sessionId = data.sessionId;
       }
       const stop = String(data.stopReason ?? "end_turn");
-      const isError = stop !== "end_turn" && stop !== "max_turns" && stop !== "cancelled";
+      // Length / turn caps are ordinary stops, not failures (ACP: max_tokens, max_turn_requests).
+      const softStop = stop === "end_turn" || stop === "max_turns" || stop === "max_tokens" || stop === "max_turn_requests";
+      const isError = !softStop && stop !== "cancelled";
       out.isError = isError;
       const costUsd = typeof data.total_cost_usd === "number" ? data.total_cost_usd : undefined;
       out.usage = rememberUsage(data.usage ?? data, {
         contextWindow: contextWindowFromModelUsage(data.modelUsage),
         costUsd,
       });
+      const outcomeLabel =
+        stop === "cancelled"
+          ? "已取消"
+          : stop === "max_tokens"
+            ? "已达长度上限"
+            : stop === "max_turn_requests" || stop === "max_turns"
+              ? "已达轮次上限"
+              : isError
+                ? `结束 (${stop})`
+                : "完成";
       events.push({
         kind: "result",
-        text: formatOutcome(stop === "cancelled" ? "已取消" : isError ? `结束 (${stop})` : "完成", { usage: out.usage ?? usage(), costUsd }),
+        text: formatOutcome(outcomeLabel, { usage: out.usage ?? usage(), costUsd }),
       });
       return;
     }
@@ -806,8 +818,16 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
 
 /** Grok puts a chunk's text in `data`; raw ACP wraps it as a content block. */
 function chunkText(data: Record<string, unknown>): string {
-  const content = isRecord(data.content) ? data.content : {};
-  const text = typeof data.data === "string" ? data.data : typeof content.text === "string" ? content.text : "";
+  const content = data.content;
+  const fromBlock = isRecord(content) && typeof content.text === "string" ? content.text : "";
+  const text =
+    typeof data.data === "string"
+      ? data.data
+      : typeof content === "string"
+        ? content
+        : typeof data.text === "string"
+          ? data.text
+          : fromBlock;
   // Some models let their end-of-sequence marker through as text; it is never part of the answer.
   return text.replace(/<\|(?:eos|endoftext|end_of_text|eot_id)\|>/g, "");
 }
@@ -816,6 +836,9 @@ function acpKind(kind: string, title: string): ToolKind {
   switch (kind) {
     case "read":
       return "read";
+    case "write":
+    case "create":
+      return "write";
     case "edit":
     case "move":
       return "edit";
@@ -956,7 +979,7 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, 
   }
   if (partType === "tool" || partType === "tool_use" || partType === "tool-invocation") {
     const state = isRecord(part.state) ? part.state : {};
-    const name = String(part.tool ?? part.name ?? "tool");
+    const name = String(part.tool ?? part.toolName ?? part.tool_name ?? part.name ?? "tool");
     const input = isRecord(state.input) ? state.input : isRecord(part.input) ? part.input : {};
     const id = String(part.callID ?? part.callId ?? part.id ?? `tool-${events.length}`);
     const stateStatus = String(state.status ?? "");

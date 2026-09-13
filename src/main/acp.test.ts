@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { AcpConnection, type AcpModel, choosePermission, mapCursorModel, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
+import { AcpConnection, type AcpModel, choosePermission,
+  describePermission, mapCursorModel, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
 
 /** A fake agent on the other end of the pipes. */
 function pipes() {
@@ -153,4 +154,15 @@ test("list-models aliases map to ACP presets only when they mean the same config
   assert.equal(mapCursorModel("claude-4.5-sonnet-thinking", PRESETS), "claude-sonnet-4-5[thinking=true,context=200k]");
   assert.equal(mapCursorModel("no-such-model", PRESETS), undefined);
   assert.equal(mapCursorModel("", PRESETS), undefined);
+});
+
+test("describePermission parses JSON-string rawInput", () => {
+  assert.deepEqual(
+    describePermission({ toolCallId: "t1", title: "Shell", kind: "execute", rawInput: '{"command":"npm test"}' }),
+    { toolCallId: "t1", title: "Shell", command: "npm test" },
+  );
+  assert.equal(
+    describePermission({ toolCallId: "t2", kind: "execute", rawInput: { command: "ls -la" } }).command,
+    "ls -la",
+  );
 });
