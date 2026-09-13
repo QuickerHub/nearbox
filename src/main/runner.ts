@@ -47,6 +47,7 @@ import {
 import { remoteCwdPreflight, remoteDevicePreflight } from "./remote-preflight";
 import { localPreflightFailure, shouldAttemptWarm, warmFallbackStatus } from "./run-start";
 import {
+  cancelRunAction,
   cancelStartingStatus,
   cancelStoppingProcessStatus,
   markCancelling,
@@ -211,10 +212,11 @@ export class RunManager extends EventEmitter {
       return true;
     }
     this.settleAllPermissions(active);
-    if (active.warm) {
+    const action = cancelRunAction(active);
+    if (action === "warm-host") {
       // The host serves other conversations too: ask it to stop this turn, and only kill it if it will not listen
       // and nobody else is using it. Killing would cancel every other warm session on the same process.
-      const { host, sessionId } = active.warm;
+      const { host, sessionId } = active.warm!;
       this.append(run, "status", `${reason}，正在通知 Agent 停止…`);
       startWarmCancelOnHost(host, sessionId, (ms, fn) => {
         setTimeout(fn, ms).unref();
@@ -233,19 +235,19 @@ export class RunManager extends EventEmitter {
       });
       return true;
     }
-    if (active.remote) {
+    if (action === "stop-remote") {
       // Dropping the ssh connection alone leaves the agent running on the device.
       this.append(run, "status", cancelStoppingProcessStatus(reason));
-      const { device, pidFile } = active.remote;
+      const { device, pidFile } = active.remote!;
       void killRemoteRun(device, pidFile).finally(() => killLocal(active.child));
       return true;
     }
-    if (active.child) {
+    if (action === "stop-local") {
       this.append(run, "status", cancelStoppingProcessStatus(reason));
       killLocal(active.child);
       return true;
     }
-    // Warm startup / pre-spawn: nothing to kill yet; startWarm/runStart finish on cancelled.
+    // Warm startup / local or remote prepare: nothing to kill yet; startup finishes on cancelled.
     this.append(run, "status", cancelStartingStatus(reason));
     return true;
   }
@@ -385,6 +387,10 @@ export class RunManager extends EventEmitter {
 
     const promptFile = join(this.options.runsDir, `${run.id}.prompt.md`);
     await writeFile(promptFile, run.prompt, "utf8");
+    if (state.cancelled) {
+      this.finish(state, null, undefined);
+      return;
+    }
     const invocation = buildInvocation(run.agent, command, {
       prompt: run.prompt,
       cwd: run.cwd,
@@ -458,7 +464,6 @@ export class RunManager extends EventEmitter {
     }
 
     const paths = remoteRunPaths(device, run.id);
-    state.remote = { device, pidFile: paths.pidFile };
     const resumeSessionId = this.resolveResume(run);
     const quote = isWindowsDevice(device) ? quoteForCmd : shQuote;
     const built = buildShellCommandLine(
@@ -525,6 +530,8 @@ export class RunManager extends EventEmitter {
       this.finish(state, null, "无法启动 ssh");
       return;
     }
+    // Bind remote only once the ssh child exists so Stop during upload uses starting UX.
+    state.remote = { device, pidFile: paths.pidFile };
     this.attach(state, child, built.stdin);
   }
 
@@ -593,6 +600,14 @@ export class RunManager extends EventEmitter {
         try {
           await host.setModel(session.sessionId, modelId);
         } catch (error) {
+          if (state.cancelled) {
+            const closeId = warmStartupSessionToClose(session.sessionId, Boolean(resumeSessionId));
+            if (closeId) {
+              void host.closeSession(closeId);
+            }
+            this.finish(state, null, undefined);
+            return true;
+          }
           this.append(run, "status", `设置模型失败（${error instanceof Error ? error.message : String(error)}），本轮改用单独进程运行。`);
           void host.closeSession(session.sessionId);
           return false;

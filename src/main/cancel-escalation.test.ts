@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   CANCEL_GRACE_MS,
   FORCE_CANCEL_GRACE_MS,
+  cancelRunAction,
   cancelStartingStatus,
   cancelStoppingProcessStatus,
   markCancelling,
@@ -35,4 +36,13 @@ test("warmStartupSessionToClose only releases brand-new sessions", () => {
   assert.equal(warmStartupSessionToClose("sess-1", true), undefined);
   assert.equal(warmStartupSessionToClose(undefined, false), undefined);
   assert.equal(warmStartupSessionToClose("", false), undefined);
+});
+
+test("cancelRunAction: remote prepare without child is starting, not stop-remote", () => {
+  assert.equal(cancelRunAction({ warm: { host: 1 } }), "warm-host");
+  assert.equal(cancelRunAction({ remote: { pidFile: "x" }, child: {} }), "stop-remote");
+  // Early remote bind during upload / cwd check — nothing running yet.
+  assert.equal(cancelRunAction({ remote: { pidFile: "x" } }), "starting");
+  assert.equal(cancelRunAction({ child: {} }), "stop-local");
+  assert.equal(cancelRunAction({}), "starting");
 });

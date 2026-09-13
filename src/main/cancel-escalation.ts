@@ -56,3 +56,28 @@ export function warmStartupSessionToClose(
   }
   return sessionId;
 }
+
+/** What Runner.cancel should do given the handles currently on the active run. */
+export type CancelRunAction = "warm-host" | "stop-remote" | "stop-local" | "starting";
+
+/**
+ * Decide the Stop path from attached handles. Remote prepare (pidFile known,
+ * ssh child not attached yet) is `starting` — same UX as local pre-spawn —
+ * so we do not claim「正在停止进程…」or call killRemoteRun with nothing to kill.
+ */
+export function cancelRunAction(active: {
+  warm?: unknown;
+  remote?: unknown;
+  child?: unknown;
+}): CancelRunAction {
+  if (active.warm) {
+    return "warm-host";
+  }
+  if (active.remote && active.child) {
+    return "stop-remote";
+  }
+  if (active.child) {
+    return "stop-local";
+  }
+  return "starting";
+}
