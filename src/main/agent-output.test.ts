@@ -534,6 +534,64 @@ function collect(parser: ReturnType<typeof createOutputParser>, steps: (() => Re
   return { events, sessionId, modelLabel, sessionTitle, result, isError, usage };
 }
 
+
+test("one-shot ACP tool_call with non-zero exitCode is an error", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      title: "`false`",
+      kind: "execute",
+      status: "completed",
+      rawInput: { command: "false" },
+      rawOutput: { exitCode: 1, stdout: "", stderr: "failed\n" },
+    },
+  ]);
+  const tool = all.events.find((event) => event.tool)?.tool;
+  assert.equal(tool?.status, "error");
+  assert.equal(tool?.exitCode, 1);
+  assert.equal(tool?.output, "failed\n");
+});
+
+test("ACP tool_call_update without toolCallId is ignored", () => {
+  const parser = createOutputParser("acp");
+  const events: ParsedEvent[] = [];
+  events.push(...parser.push({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Read", kind: "read", status: "pending" }).events);
+  events.push(...parser.push({ sessionUpdate: "tool_call_update", status: "completed", rawOutput: { content: "leak" } }).events);
+  const tools = events.filter((event) => event.tool).map((event) => event.tool!);
+  assert.equal(tools.length, 1);
+  assert.equal(tools[0]?.id, "t1");
+  assert.equal(tools[0]?.status, "running");
+  assert.equal(tools[0]?.output, undefined);
+});
+
+test("opencode completed shell with non-zero exit is an error", () => {
+  const parser = createOutputParser("opencode");
+  const all = feedAll(parser, [
+    JSON.stringify({
+      type: "tool",
+      part: {
+        type: "tool",
+        callID: "call_1",
+        tool: "bash",
+        state: {
+          status: "completed",
+          title: "false",
+          input: { command: "false" },
+          output: "nope",
+          metadata: { exit: 2 },
+        },
+      },
+    }),
+  ]);
+  const tool = all.events.find((event) => event.tool)?.tool;
+  assert.equal(tool?.kind, "shell");
+  assert.equal(tool?.status, "error");
+  assert.equal(tool?.exitCode, 2);
+  assert.equal(tool?.output, "nope");
+});
+
 test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(400), "400 毫秒");
   assert.equal(formatMsDuration(1200), "1 秒");

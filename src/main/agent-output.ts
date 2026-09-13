@@ -736,6 +736,11 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
     case "tool_call_update":
     case "tool_result": {
       const id = String(data.toolCallId ?? data.id ?? "");
+      // Updates without an id cannot be matched to a call; applying them under ""
+      // would merge unrelated tools into one row.
+      if (!id) {
+        return;
+      }
       const previous = tools.get(id);
       // cursor-agent announces a call first and fills in what it is about (title, arguments, files) a moment later.
       const rawInput = isRecord(data.rawInput) && Object.keys(data.rawInput).length ? data.rawInput : undefined;
@@ -874,6 +879,11 @@ function describeRawOutput(kind: ToolKind, rawOutput: unknown): Partial<ToolCall
       }
       if (typeof rawOutput.exitCode === "number") {
         patch.exitCode = rawOutput.exitCode;
+        // Same rule as tool_call_update / Codex: non-zero exit is a failed call even when
+        // the agent announces the whole thing in one completed tool_call.
+        if (rawOutput.exitCode !== 0) {
+          patch.status = "error";
+        }
       }
       return patch;
     }
@@ -960,9 +970,20 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, 
     const input = isRecord(state.input) ? state.input : isRecord(part.input) ? part.input : {};
     const id = String(part.callID ?? part.callId ?? part.id ?? `tool-${events.length}`);
     const stateStatus = String(state.status ?? "");
-    const status: ToolStatus = stateStatus === "completed" ? "ok" : stateStatus === "error" ? "error" : "running";
     const described = describeArgs(name, input);
     const metadata = isRecord(state.metadata) ? state.metadata : {};
+    const exitCode =
+      typeof metadata.exit === "number"
+        ? metadata.exit
+        : typeof metadata.exitCode === "number"
+          ? metadata.exitCode
+          : typeof metadata.exit_code === "number"
+            ? metadata.exit_code
+            : undefined;
+    let status: ToolStatus = stateStatus === "completed" ? "ok" : stateStatus === "error" ? "error" : "running";
+    if (status === "ok" && exitCode !== undefined && exitCode !== 0) {
+      status = "error";
+    }
     const output = typeof state.output === "string" ? state.output : undefined;
     sink.tool(
       events,
@@ -971,7 +992,7 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, 
         subject: described.subject ?? (typeof state.title === "string" ? state.title : undefined),
         status,
         output: output ? (described.kind === "shell" ? clipTail(output) : clipHead(output)) : undefined,
-        exitCode: typeof metadata.exit === "number" ? metadata.exit : undefined,
+        exitCode,
         error: typeof state.error === "string" ? firstLine(state.error) : undefined,
       }),
     );
