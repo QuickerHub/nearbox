@@ -31,6 +31,7 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 export function ContextMeter({ usage, busy }: { usage?: TokenUsage; busy?: boolean }): JSX.Element {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const label = usage ? formatContextUsage(usage) : "";
   const hasData = Boolean(label);
   const ratio = usage ? usageRatio(usage) : undefined;
@@ -55,6 +56,8 @@ export function ContextMeter({ usage, busy }: { usage?: TokenUsage; busy?: boole
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setOpen(false);
+        // Popup unmounts; return focus to the ring so keyboard users are not dumped onto <body>.
+        queueMicrotask(() => buttonRef.current?.focus());
       }
     };
     document.addEventListener("pointerdown", onPointer);
@@ -68,6 +71,7 @@ export function ContextMeter({ usage, busy }: { usage?: TokenUsage; busy?: boole
   return (
     <div className={`ctx-ring${tone}${busy && !hasData ? " ctx-ring--pending" : ""}${open ? " ctx-ring--open" : ""}`} ref={root}>
       <button
+        ref={buttonRef}
         type="button"
         className="ctx-ring__btn"
         aria-label="上下文使用量"

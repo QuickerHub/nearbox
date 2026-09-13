@@ -105,3 +105,18 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+test("spaced thematic breaks win over list markers", () => {
+  for (const line of ["- - -", "* * *", " - - -", "  * * *"]) {
+    assert.deepEqual(parseBlocks(line), [{ type: "hr" }]);
+  }
+  // Underscore form never matched LIST; keep covering it next to the hyphen/star fixes.
+  assert.deepEqual(parseBlocks("_ _ _"), [{ type: "hr" }]);
+  assert.deepEqual(
+    parseBlocks("before\n\n- - -\n\nafter").map((block) => block.type),
+    ["para", "hr", "para"],
+  );
+  // A real bullet still wins when there are fewer than three markers.
+  assert.deepEqual(parseBlocks("- -"), [{ type: "list", ordered: false, items: ["-"] }]);
+});
+
