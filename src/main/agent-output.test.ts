@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildInvocation,
+  buildShellCommandLine,
   createOutputParser,
   formatMsDuration,
   type ParsedEvent,
@@ -540,4 +541,51 @@ test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(4835), "5 秒");
   assert.equal(formatMsDuration(125_000), "2 分 5 秒");
   assert.equal(formatMsDuration(3_725_000), "1 小时 2 分");
+});
+
+test("buildShellCommandLine never embeds the prompt; cursor/opencode use a file pointer", () => {
+  const identity = (value: string) => value;
+  const cursor = buildShellCommandLine("cursor", "cursor-agent.exe", request, identity);
+  assert.ok(cursor.commandLine.startsWith("cursor-agent.exe "));
+  assert.ok(cursor.commandLine.includes("--workspace"));
+  assert.ok(cursor.commandLine.includes(request.promptFile));
+  assert.ok(cursor.commandLine.includes("请先完整阅读文件"));
+  assert.ok(!cursor.commandLine.includes("带引号"));
+  assert.equal(cursor.stdin, undefined);
+
+  const opencode = buildShellCommandLine("opencode", "opencode", { ...request, access: "full", model: "gpt-5.5" }, identity);
+  assert.ok(opencode.commandLine.includes("--dangerously-skip-permissions"));
+  assert.ok(opencode.commandLine.includes("-m"));
+  assert.ok(opencode.commandLine.includes("gpt-5.5"));
+  assert.ok(opencode.commandLine.includes(request.promptFile));
+  assert.ok(!opencode.commandLine.includes(request.prompt));
+});
+
+test("buildShellCommandLine keeps codex/claude prompts on stdin and quotes via the caller", () => {
+  const quote = (value: string) => (/\s/.test(value) ? `"${value}"` : value);
+  const codex = buildShellCommandLine("codex", "codex", { ...request, model: "gpt-5.5", images: ["D:\\inbox\\a.png"] }, quote);
+  assert.ok(codex.commandLine.startsWith("codex exec -i D:\\inbox\\a.png "));
+  assert.ok(codex.commandLine.includes("--json"));
+  assert.ok(codex.commandLine.includes("-C"));
+  assert.ok(codex.commandLine.includes('"D:\\code\\my app"'));
+  assert.ok(codex.commandLine.endsWith(" -"));
+  assert.equal(codex.stdin, request.prompt);
+
+  const resumed = buildShellCommandLine(
+    "claude",
+    "claude",
+    { ...request, access: "full", resumeSessionId: "sess-9", model: "sonnet" },
+    quote,
+  );
+  assert.ok(resumed.commandLine.includes("--dangerously-skip-permissions"));
+  assert.ok(resumed.commandLine.includes("-r"));
+  assert.ok(resumed.commandLine.includes("sess-9"));
+  assert.equal(resumed.stdin, request.prompt);
+  assert.ok(!resumed.commandLine.includes("修复登录页"));
+
+  const grok = buildShellCommandLine("grok", "grok", { ...request, resumeSessionId: "g-1" }, quote);
+  assert.ok(grok.commandLine.includes("--prompt-file"));
+  assert.ok(grok.commandLine.includes(request.promptFile));
+  assert.ok(grok.commandLine.includes("--resume"));
+  assert.equal(grok.stdin, undefined);
 });

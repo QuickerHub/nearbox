@@ -4,6 +4,7 @@ import {
   clampCrop,
   clampQuality,
   codeToVk,
+  hWheelCommand,
   moveCommand,
   parseControlMessage,
   shouldSendFrame,
@@ -35,6 +36,10 @@ test("scroll notches turn into 120-unit wheel deltas and zero is dropped", () =>
   assert.equal(wheelCommand(1), "W 120");
   assert.equal(wheelCommand(-2.5), "W -300");
   assert.equal(wheelCommand(0), null);
+  assert.equal(hWheelCommand(1), "H 120");
+  assert.equal(hWheelCommand(-0.5), "H -60");
+  assert.equal(hWheelCommand(0), null);
+  assert.equal(hWheelCommand(Number.NaN), null);
   assert.deepEqual(translateInput({ t: "scroll", dy: -1, dx: 0.5 }), ["W -120", "H 60"]);
   assert.deepEqual(translateInput({ t: "scroll", dy: 0 }), []);
   assert.deepEqual(translateInput({ t: "scroll", x: 1, y: 1, dy: 1 }), ["M 65535 65535", "W 120"]);
