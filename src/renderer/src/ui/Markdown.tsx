@@ -126,9 +126,24 @@ function renderInline(text: string): ReactNode[] {
           </a>
         );
       default:
-        return <Fragment key={key}>{piece.text}</Fragment>;
+        // Agent answers often use single newlines for addresses / short lines; keep them visible.
+        return <Fragment key={key}>{renderTextWithBreaks(piece.text)}</Fragment>;
     }
   });
+}
+
+function renderTextWithBreaks(text: string): ReactNode[] {
+  const parts = text.split("\n");
+  const nodes: ReactNode[] = [];
+  parts.forEach((part, index) => {
+    if (index > 0) {
+      nodes.push(<br key={`br-${index}`} />);
+    }
+    if (part) {
+      nodes.push(part);
+    }
+  });
+  return nodes;
 }
 
 function openHref(event: MouseEvent<HTMLAnchorElement>, href: string): void {

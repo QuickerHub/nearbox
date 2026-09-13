@@ -40,9 +40,14 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
   }, [onClose]);
 
   const copy = async (label: string, text: string) => {
-    await navigator.clipboard.writeText(text);
-    setCopied(label);
-    window.setTimeout(() => setCopied(null), 1600);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(label);
+      window.setTimeout(() => setCopied(null), 1600);
+    } catch {
+      // Permission denied / insecure context: leave the button label unchanged.
+      setCopied(null);
+    }
   };
 
   const patchAgent = (kind: AgentKind, patch: Partial<{ access: "safe" | "full"; model: string; command: string }>) => {

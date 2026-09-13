@@ -94,7 +94,7 @@ export function RemoteDirBrowser({ client, deviceId, deviceName, initialPath, on
         ) : null}
       </div>
       <div className="dir-browser__foot">
-        <button type="button" className="primary" disabled={!current || loading} onClick={() => onPick(current)}>
+        <button type="button" className="primary" disabled={!current || loading || Boolean(error)} onClick={() => onPick(current)}>
           <Icon name="check" size={14} />
           选择这个目录
         </button>

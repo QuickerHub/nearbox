@@ -105,3 +105,15 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+
+test("indented continuations stay on the same list item", () => {
+  const blocks = parseBlocks("- first line\n  second line\n  third\n- next");
+  assert.deepEqual(blocks, [
+    { type: "list", ordered: false, items: ["first line\nsecond line\nthird", "next"] },
+  ]);
+  const ordered = parseBlocks("1. alpha\n   beta\n2. gamma");
+  assert.deepEqual(ordered, [
+    { type: "list", ordered: true, items: ["alpha\nbeta", "gamma"] },
+  ]);
+});

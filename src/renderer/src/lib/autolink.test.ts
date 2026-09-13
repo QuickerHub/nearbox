@@ -46,3 +46,18 @@ test("angle-bracket autolinks work and javascript hrefs stay text", () => {
   ]);
   assert.ok(splitInline("[x](javascript:alert(1))").every((piece) => piece.type !== "link"));
 });
+
+test("markdown links keep balanced parentheses and ignore titles", () => {
+  assert.deepEqual(splitInline("[wiki](https://en.wikipedia.org/wiki/Foo_(bar)) more"), [
+    { type: "link", href: "https://en.wikipedia.org/wiki/Foo_(bar)", text: "wiki" },
+    { type: "text", text: " more" },
+  ]);
+  assert.deepEqual(splitInline('see [docs](https://example.com/a "My Docs") please'), [
+    { type: "text", text: "see " },
+    { type: "link", href: "https://example.com/a", text: "docs" },
+    { type: "text", text: " please" },
+  ]);
+  assert.deepEqual(splitInline("[x](<https://example.com/path>)"), [
+    { type: "link", href: "https://example.com/path", text: "x" },
+  ]);
+});

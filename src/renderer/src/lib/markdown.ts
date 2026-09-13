@@ -17,6 +17,8 @@ export type MdBlock =
 
 const LIST = /^\s*(?:[-*•]|\d+[.)])\s+/;
 const ORDERED = /^\s*\d+[.)]\s+/;
+/** Soft-wrapped list item body: at least two spaces (or a tab) then content. */
+const LIST_CONTINUATION = /^(?: {2,}|\t)\S/;
 const HEADING = /^(#{1,6})\s+(.*)$/;
 const QUOTE = /^ {0,3}>\s?/;
 const HR = /^\s{0,3}(?:(?:-[\t ]*){3,}|(?:\*[\t ]*){3,}|(?:_[\t ]*){3,})$/;
@@ -73,8 +75,18 @@ export function parseBlocks(text: string): MdBlock[] {
       const ordered = ORDERED.test(line);
       const items: string[] = [];
       while (index < lines.length && LIST.test(lines[index] ?? "")) {
-        items.push((lines[index] ?? "").replace(LIST, ""));
+        let item = (lines[index] ?? "").replace(LIST, "");
         index += 1;
+        // Indented continuations stay on the same item (agents wrap long bullets).
+        while (index < lines.length) {
+          const cont = lines[index] ?? "";
+          if (!cont.trim() || LIST.test(cont) || !LIST_CONTINUATION.test(cont) || startsBlock(lines, index)) {
+            break;
+          }
+          item += `\n${cont.replace(/^\s+/, "")}`;
+          index += 1;
+        }
+        items.push(item);
       }
       blocks.push({ type: "list", ordered, items });
       continue;
