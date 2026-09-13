@@ -28,6 +28,7 @@ import {
   choosePermission,
   describePermission,
   mapCursorModel,
+  isRejectPermissionKind,
   reviewOptions,
   type PromptHandlers,
   SessionUnknownError,
@@ -269,7 +270,7 @@ export class RunManager extends EventEmitter {
     if (!picked) {
       return false;
     }
-    if (picked.kind.startsWith("reject") && pending.toolCallId) {
+    if (isRejectPermissionKind(picked.kind) && pending.toolCallId) {
       this.absorb(
         state,
         state.parser.push({ sessionUpdate: "tool_call_update", toolCallId: pending.toolCallId, status: "rejected", error: "你拒绝了这条命令" }),
