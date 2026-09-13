@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AGENT_KINDS, type AgentAccess, type AgentKind, type HostSnapshot, countActiveRuns, isTopLevelActiveRun, modelsNeedRefresh, splitCapture, type Task } from "@shared/protocol";
+import { AGENT_KINDS, type AgentAccess, type AgentKind, type HostSnapshot, countActiveRuns, countOnlinePhones, isTopLevelActiveRun, modelsNeedRefresh, phonesOnlineLabel, splitCapture, type Task } from "@shared/protocol";
 import { titleForFiles } from "./lib/attachments";
 import { connectClient, pairWithPin, type ClientHandle } from "./lib/client";
 import { conversationRun, type SendPlan } from "./lib/plan";
@@ -429,7 +429,7 @@ export function App(): JSX.Element {
   }
 
   const activeRun = task ? snapshot.runs.find((run) => run.taskId === task.id && isTopLevelActiveRun(run)) : undefined;
-  const phonesOnline = snapshot.devices.filter((device) => device.role === "phone" && device.online).length;
+  const phonesOnline = countOnlinePhones(snapshot.devices);
   const remoteControllers = snapshot.remote?.controllers ?? 0;
   const canRemote = Boolean(snapshot.remote?.enabled);
   const goHome = () => navigate({ name: "home" });
@@ -518,7 +518,7 @@ export function App(): JSX.Element {
           <div className="sidebar__foot">
             <span className="sidebar__phones" title={snapshot.selectedHost ? `${snapshot.selectedHost}:${snapshot.port}` : "未发现局域网地址"}>
               <span className={phonesOnline ? "dot dot--on" : "dot"} />
-              <span className="muted small">{phonesOnline ? `${phonesOnline} 台手机在线` : "没有手机在线"}</span>
+              <span className="muted small">{phonesOnlineLabel(phonesOnline)}</span>
             </span>
             {canRemote ? (
               <button type="button" className="icon-btn icon-btn--plain" onClick={openRemote} title="远程控制">

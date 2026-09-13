@@ -2,20 +2,11 @@
  * Snapshot helpers for the paired-device Map. Reuse the values array across
  * coalesce ticks when the Map membership is unchanged (in-place online flips
  * still show up via the same DeviceInfo object references).
+ *
+ * Phone counting lives in shared/devices so the renderer header can use it too.
  */
 
-export type DeviceLike = { role: string; online?: boolean };
-
-/** Count online phones without allocating a filtered array. */
-export function countOnlinePhones(devices: Iterable<DeviceLike>): number {
-  let count = 0;
-  for (const device of devices) {
-    if (device.role === "phone" && device.online) {
-      count += 1;
-    }
-  }
-  return count;
-}
+export { countOnlinePhones, type DeviceLike } from "../shared/devices.ts";
 
 /**
  * Return `cached` when `revision` matches; otherwise build a fresh values array.

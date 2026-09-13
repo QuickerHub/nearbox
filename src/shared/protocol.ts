@@ -660,6 +660,7 @@ export function isRunActive(run: Pick<AgentRun, "status">): boolean {
 }
 
 export { canContinueRun, countActiveRuns, hasParentRunId, isTopLevelActiveRun, sessionIdAlongChain } from "./conversation";
+export { countOnlinePhones, phonesOnlineLabel } from "./devices";
 export { parseCursorIdeModels } from "./cursor-ide-models";
 export { BUILTIN_MODELS, canListModels, filterModels, modelLabel, modelsForAgent, modelsNeedRefresh, normalizeModelId } from "./models";
 export {

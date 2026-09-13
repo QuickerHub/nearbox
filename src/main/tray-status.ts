@@ -1,3 +1,5 @@
+import { phonesOnlineLabel } from "../shared/devices.ts";
+
 /**
  * Pure tray-menu status helpers. refreshTrayMenu runs on every coalesced
  * snapshot; keep counting/labels free of Electron so they stay unit-tested.
@@ -26,7 +28,7 @@ export function trayAgentLabel(running: number, queued: number): string {
 
 /** "没有手机在线" / "N 台手机在线" */
 export function trayPhonesLabel(phones: number): string {
-  return phones ? `${phones} 台手机在线` : "没有手机在线";
+  return phonesOnlineLabel(phones);
 }
 
 /** Host:port row, or the empty-LAN placeholder. */
