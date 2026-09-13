@@ -105,3 +105,51 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+test("plus lists, setext headings, indented ATX and lazy quotes", () => {
+  const plus = parseBlocks("+ one\n+ two\n- three");
+  assert.equal(plus[0]?.type, "list");
+  if (plus[0]?.type === "list") {
+    assert.equal(plus[0].ordered, false);
+    assert.deepEqual(plus[0].items, ["one", "two", "three"]);
+  }
+
+  const h1 = parseBlocks("Release notes\n=============\n\nBody");
+  assert.equal(h1[0]?.type, "heading");
+  if (h1[0]?.type === "heading") {
+    assert.equal(h1[0].level, 1);
+    assert.equal(h1[0].text, "Release notes");
+  }
+  assert.equal(h1[1]?.type, "para");
+
+  const h2 = parseBlocks("Next\n---\n\nafter");
+  assert.equal(h2[0]?.type, "heading");
+  if (h2[0]?.type === "heading") {
+    assert.equal(h2[0].level, 2);
+    assert.equal(h2[0].text, "Next");
+  }
+  assert.equal(h2[1]?.type, "para");
+  assert.equal(h2[1]?.type === "para" ? h2[1].text : "", "after");
+
+  const rule = parseBlocks("para\n\n---\n\nnext");
+  assert.deepEqual(
+    rule.map((block) => block.type),
+    ["para", "hr", "para"],
+  );
+
+  const indented = parseBlocks("  ## Indented");
+  assert.equal(indented[0]?.type, "heading");
+  if (indented[0]?.type === "heading") {
+    assert.equal(indented[0].level, 2);
+    assert.equal(indented[0].text, "Indented");
+  }
+
+  const lazy = parseBlocks("> first line\nstill the quote\n\noutside");
+  assert.equal(lazy[0]?.type, "quote");
+  if (lazy[0]?.type === "quote") {
+    assert.equal(lazy[0].blocks[0]?.type, "para");
+    assert.equal(lazy[0].blocks[0]?.type === "para" ? lazy[0].blocks[0].text : "", "first line\nstill the quote");
+  }
+  assert.equal(lazy[1]?.type, "para");
+  assert.equal(lazy[1]?.type === "para" ? lazy[1].text : "", "outside");
+});

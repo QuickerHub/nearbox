@@ -23,7 +23,7 @@ export function isLikelyImage(file: Pick<FileLike, "name" | "type">): boolean {
   if (/^image\//i.test(file.type)) {
     return true;
   }
-  return /\.(png|jpe?g|gif|webp|bmp|heic|heif|avif)$/i.test(file.name);
+  return /\.(png|jpe?g|gif|webp|bmp|heic|heif|avif|svg|ico)$/i.test(file.name);
 }
 
 function identity(file: FileLike): string {

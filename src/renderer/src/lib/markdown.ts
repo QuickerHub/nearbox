@@ -15,9 +15,11 @@ export type MdBlock =
   | { type: "hr" }
   | { type: "para"; text: string };
 
-const LIST = /^\s*(?:[-*•]|\d+[.)])\s+/;
+const LIST = /^\s*(?:[-*+•]|\d+[.)])\s+/;
 const ORDERED = /^\s*\d+[.)]\s+/;
-const HEADING = /^(#{1,6})\s+(.*)$/;
+const HEADING = /^ {0,3}(#{1,6})\s+(.*)$/;
+const SETEXT_H1 = /^ {0,3}=+[ \t]*$/;
+const SETEXT_H2 = /^ {0,3}-+[ \t]*$/;
 const QUOTE = /^ {0,3}>\s?/;
 const HR = /^\s{0,3}(?:(?:-[\t ]*){3,}|(?:\*[\t ]*){3,}|(?:_[\t ]*){3,})$/;
 const FENCE = /^(\s*)(`{3,}|~{3,})(.*)$/;
@@ -55,16 +57,34 @@ export function parseBlocks(text: string): MdBlock[] {
       index = next;
       continue;
     }
-    if (HR.test(line) && !LIST.test(line)) {
+    const underline = setextLevel(lines[index + 1] ?? "");
+    if (underline && isSetextCandidate(line)) {
+      blocks.push({ type: "heading", level: underline, text: line.trim() });
+      index += 2;
+      continue;
+    }
+    if (isThematicBreak(line)) {
       blocks.push({ type: "hr" });
       index += 1;
       continue;
     }
     if (QUOTE.test(line)) {
       const quoted: string[] = [];
-      while (index < lines.length && QUOTE.test(lines[index] ?? "")) {
-        quoted.push((lines[index] ?? "").replace(QUOTE, ""));
-        index += 1;
+      while (index < lines.length) {
+        const current = lines[index] ?? "";
+        if (QUOTE.test(current)) {
+          quoted.push(current.replace(QUOTE, ""));
+          index += 1;
+          continue;
+        }
+        // CommonMark lazy continuation: a quote paragraph may keep going
+        // without a leading `>` until the next real block.
+        if (quoted.length && current.trim() && !startsBlock(lines, index)) {
+          quoted.push(current);
+          index += 1;
+          continue;
+        }
+        break;
       }
       blocks.push({ type: "quote", blocks: parseBlocks(quoted.join("\n")) });
       continue;
@@ -98,7 +118,31 @@ function startsBlock(lines: string[], index: number): boolean {
   if (!line.trim()) {
     return true;
   }
-  return Boolean(fenceOpen(line)) || HEADING.test(line) || startsTable(lines, index) || (HR.test(line) && !LIST.test(line)) || QUOTE.test(line) || LIST.test(line);
+  return Boolean(fenceOpen(line)) || HEADING.test(line) || startsTable(lines, index) || isThematicBreak(line) || QUOTE.test(line) || LIST.test(line);
+}
+
+function isThematicBreak(line: string): boolean {
+  return HR.test(line) && !LIST.test(line);
+}
+
+function setextLevel(line: string): 1 | 2 | null {
+  if (SETEXT_H1.test(line)) {
+    return 1;
+  }
+  if (SETEXT_H2.test(line)) {
+    return 2;
+  }
+  return null;
+}
+
+function isSetextCandidate(line: string): boolean {
+  if (!line.trim()) {
+    return false;
+  }
+  if (fenceOpen(line) || HEADING.test(line) || QUOTE.test(line) || LIST.test(line) || isThematicBreak(line)) {
+    return false;
+  }
+  return true;
 }
 
 function fenceOpen(line: string): { char: string; length: number; lang: string } | null {
