@@ -105,3 +105,27 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+test("delimiter row decides the column count (GFM)", () => {
+  const blocks = parseBlocks("| a | b | c |\n|---|---|\n| 1 | 2 | 3 |\n| only |");
+  assert.equal(blocks[0]?.type, "table");
+  if (blocks[0]?.type !== "table") {
+    return;
+  }
+  assert.deepEqual(blocks[0].headers, ["a", "b"]);
+  assert.deepEqual(blocks[0].rows, [
+    ["1", "2"],
+    ["only", ""],
+  ]);
+});
+
+test("a table can start without outer pipes", () => {
+  const blocks = parseBlocks("name | qty\n---- | ---:\none | 2");
+  assert.equal(blocks[0]?.type, "table");
+  if (blocks[0]?.type !== "table") {
+    return;
+  }
+  assert.deepEqual(blocks[0].aligns, ["left", "right"]);
+  assert.deepEqual(blocks[0].headers, ["name", "qty"]);
+  assert.deepEqual(blocks[0].rows, [["one", "2"]]);
+});

@@ -292,7 +292,14 @@ export function ChatComposer({
           event.preventDefault();
           setDragging(true);
         }}
-        onDragLeave={() => setDragging(false)}
+        onDragLeave={(event) => {
+          // Crossing into a child (textarea / chips) fires dragleave on the form; ignore those.
+          const next = event.relatedTarget;
+          if (next instanceof Node && event.currentTarget.contains(next)) {
+            return;
+          }
+          setDragging(false);
+        }}
         onDrop={(event) => {
           event.preventDefault();
           setDragging(false);

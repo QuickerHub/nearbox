@@ -1,6 +1,6 @@
 import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { PendingPermission, ToolCall, ToolKind } from "@shared/protocol";
-import { trackPermissionResolve } from "../lib/permissionAsk";
+import { releasePermissionAsk, retainPermissionAsk, trackPermissionResolve } from "../lib/permissionAsk";
 import { diffLines, displayTool, groupLabel, hasDetail, isFailed, prettyToolName, statusLabel, toolVerb } from "../lib/runTranscript";
 import { Icon, TOOL_ICONS } from "./Icons";
 
@@ -69,8 +69,11 @@ export function PermissionAsk({
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
   // FIFO head swap reuses this component; clear busy so the next ask is clickable.
+  // Retain/release so dock + transcript share one in-flight mark for this askId.
   useEffect(() => {
     setBusy(false);
+    retainPermissionAsk(pending.askId);
+    return () => releasePermissionAsk(pending.askId);
   }, [pending.askId]);
   return (
     <div className="perm-ask">
@@ -80,20 +83,25 @@ export function PermissionAsk({
         {queued > 0 ? <span className="perm-ask__more">还有 {queued} 条等待确认</span> : null}
       </div>
       <div className="perm-ask__actions">
-        {pending.options.map((option) => (
-          <button
-            key={option.optionId}
-            type="button"
-            className={`perm-ask__btn${option.kind.startsWith("allow") ? " perm-ask__btn--allow" : " perm-ask__btn--deny"}`}
-            disabled={busy}
-            onClick={() => {
-              // Failed resolve (stale askId, gone, network) must unlock; success stays busy until askId changes.
-              trackPermissionResolve(setBusy, () => onResolve(option.optionId));
-            }}
-          >
-            {option.label}
-          </button>
-        ))}
+        {pending.options.length ? (
+          pending.options.map((option) => (
+            <button
+              key={option.optionId}
+              type="button"
+              className={`perm-ask__btn${option.kind.startsWith("allow") ? " perm-ask__btn--allow" : " perm-ask__btn--deny"}`}
+              disabled={busy}
+              onClick={() => {
+                // Failed resolve (stale askId, gone, network) must unlock; success stays busy until askId changes.
+                // askId-keyed in-flight set dedupes dock + transcript mounts of the same ask.
+                trackPermissionResolve(pending.askId, setBusy, () => onResolve(option.optionId));
+              }}
+            >
+              {option.label}
+            </button>
+          ))
+        ) : (
+          <span className="perm-ask__more">没有可点的选项</span>
+        )}
       </div>
     </div>
   );

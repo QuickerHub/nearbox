@@ -140,9 +140,11 @@ function isTableSeparator(line: string): boolean {
 }
 
 function readTable(lines: string[], index: number): { block: Extract<MdBlock, { type: "table" }>; next: number } {
-  const headers = splitTableRow(lines[index] ?? "");
-  const aligns = splitTableRow(lines[index + 1] ?? "").map(alignOf);
-  const width = Math.max(headers.length, 1);
+  const headerCells = splitTableRow(lines[index] ?? "");
+  const alignCells = splitTableRow(lines[index + 1] ?? "");
+  // GFM: the delimiter row decides how many columns the table has.
+  const width = Math.max(alignCells.length, 1);
+  const aligns = alignCells.map(alignOf);
   while (aligns.length < width) {
     aligns.push("left");
   }
@@ -157,7 +159,7 @@ function readTable(lines: string[], index: number): { block: Extract<MdBlock, { 
     cursor += 1;
   }
   return {
-    block: { type: "table", aligns: aligns.slice(0, width), headers: padRow(headers, width), rows },
+    block: { type: "table", aligns: aligns.slice(0, width), headers: padRow(headerCells, width), rows },
     next: cursor,
   };
 }

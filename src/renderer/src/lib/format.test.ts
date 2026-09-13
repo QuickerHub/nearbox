@@ -14,6 +14,9 @@ test("formatBytes scales", () => {
   assert.equal(formatBytes(500), "500 B");
   assert.equal(formatBytes(2048), "2.0 KB");
   assert.equal(formatBytes(3 * 1024 * 1024), "3.0 MB");
+  assert.equal(formatBytes(Number.NaN), "0 B");
+  assert.equal(formatBytes(-12), "0 B");
+  assert.equal(formatBytes(Number.POSITIVE_INFINITY), "0 B");
 });
 
 test("formatRelative covers near and far", () => {

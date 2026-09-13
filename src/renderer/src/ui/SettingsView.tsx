@@ -32,12 +32,21 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.stopPropagation();
         onClose();
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Expired / missing invite with a LAN host: ask the host for a fresh QR instead of sitting on the empty state.
+  useEffect(() => {
+    if (!desktop || !snapshot.selectedHost || invite?.qrDataUrl) {
+      return;
+    }
+    void client.refreshInvite();
+  }, [desktop, snapshot.selectedHost, invite, client]);
 
   const copy = async (label: string, text: string) => {
     await navigator.clipboard.writeText(text);

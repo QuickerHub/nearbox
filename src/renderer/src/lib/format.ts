@@ -70,8 +70,11 @@ export function formatDuration(from: string | undefined, to: string | undefined)
 }
 
 export function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value < 0) {
+    return "0 B";
+  }
   if (value < 1024) {
-    return `${value} B`;
+    return `${Math.round(value)} B`;
   }
   if (value < 1024 * 1024) {
     return `${(value / 1024).toFixed(1)} KB`;
