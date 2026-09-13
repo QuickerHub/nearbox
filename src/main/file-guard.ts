@@ -82,3 +82,25 @@ export function assertAllowedFile(fileName: string, mediaType: string): void {
     throw Object.assign(new Error("出于安全考虑，不接收可执行文件。"), { code: "FILE_FORBIDDEN" });
   }
 }
+
+/**
+ * Inbox folder segment for a paired device. Prefer the stable device id so two
+ * phones that share a UA-derived display name (e.g. both "Android 手机") do not
+ * write into the same directory.
+ */
+export function deviceInboxSegment(device: { id: string; name: string }): string {
+  const raw = device.id && device.id !== "desktop" ? device.id : device.name;
+  const cleaned = raw.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "phone";
+  return cleaned.slice(0, 60);
+}
+
+/** Reject oversized uploads from Content-Length before streaming into staging. */
+export function assertUploadSize(contentLength: string | number | undefined, maxBytes: number): void {
+  if (contentLength === undefined || contentLength === "") {
+    return;
+  }
+  const declared = typeof contentLength === "number" ? contentLength : Number(contentLength);
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw Object.assign(new Error("文件超过允许的大小。"), { code: "FILE_TOO_LARGE" });
+  }
+}

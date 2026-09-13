@@ -4,9 +4,9 @@ import { basename, extname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { IncomingMessage } from "node:http";
 import { isImageMediaType } from "@shared/protocol";
-import { assertAllowedFile, sanitizeFileName } from "./file-guard";
+import { assertAllowedFile, assertUploadSize, sanitizeFileName } from "./file-guard";
 
-export { assertAllowedFile, sanitizeFileName } from "./file-guard";
+export { assertAllowedFile, assertUploadSize, deviceInboxSegment, sanitizeFileName } from "./file-guard";
 
 export async function uniquePath(directory: string, fileName: string): Promise<string> {
   const ext = extname(fileName);
@@ -41,6 +41,7 @@ export async function receiveToInbox(options: {
 }): Promise<{ storedName: string; byteLength: number; mediaType: string }> {
   const fileName = sanitizeFileName(options.fileName, isImageMediaType(options.mediaType) ? "image" : "file");
   assertAllowedFile(fileName, options.mediaType);
+  assertUploadSize(options.request.headers["content-length"], options.maxBytes);
   await mkdir(options.stagingDir, { recursive: true });
   await mkdir(options.inboxDir, { recursive: true });
 

@@ -127,17 +127,34 @@ export function probeSshPort(host: string, port = SSH_PORT): Promise<PortProbe> 
     const socket = new net.Socket();
     let settled = false;
     let banner = "";
+    let connectTimer: NodeJS.Timeout | null = null;
+    let bannerTimer: NodeJS.Timeout | null = null;
     const finish = (result: PortProbe) => {
-      if (!settled) {
-        settled = true;
-        socket.destroy();
-        resolve(result);
+      if (settled) {
+        return;
       }
+      settled = true;
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
+      if (bannerTimer) {
+        clearTimeout(bannerTimer);
+        bannerTimer = null;
+      }
+      socket.destroy();
+      resolve(result);
     };
-    const connectTimer = setTimeout(() => finish({ reachable: false }), CONNECT_TIMEOUT_MS);
+    connectTimer = setTimeout(() => finish({ reachable: false }), CONNECT_TIMEOUT_MS);
     socket.once("connect", () => {
-      clearTimeout(connectTimer);
-      setTimeout(() => finish({ reachable: true, banner: banner.trim() || undefined }), BANNER_TIMEOUT_MS);
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
+      bannerTimer = setTimeout(
+        () => finish({ reachable: true, banner: banner.trim() || undefined }),
+        BANNER_TIMEOUT_MS,
+      );
     });
     socket.on("data", (chunk: Buffer) => {
       banner += chunk.toString("latin1");
@@ -146,7 +163,6 @@ export function probeSshPort(host: string, port = SSH_PORT): Promise<PortProbe> 
       }
     });
     socket.once("error", () => {
-      clearTimeout(connectTimer);
       finish({ reachable: false });
     });
     socket.connect(port, host);
