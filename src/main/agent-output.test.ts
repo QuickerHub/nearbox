@@ -534,6 +534,62 @@ function collect(parser: ReturnType<typeof createOutputParser>, steps: (() => Re
   return { events, sessionId, modelLabel, sessionTitle, result, isError, usage };
 }
 
+
+test("ACP snake_case raw_input/raw_output and capitalized kinds still describe the call", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "s1",
+      title: "Shell",
+      kind: "Execute",
+      status: "pending",
+      raw_input: { command: "echo hi" },
+    },
+    {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "s1",
+      status: "completed",
+      raw_output: { exitCode: 0, stdout: "hi\n", stderr: "" },
+    },
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      title: "Shell",
+      kind: "Terminal",
+      status: "completed",
+      raw_input: { command: "pwd" },
+      raw_output: { exitCode: 0, stdout: "/tmp\n", stderr: "" },
+    },
+  ]);
+  const shell = all.events.filter((event) => event.tool?.id === "s1").map((event) => event.tool!);
+  assert.equal(shell[0]?.kind, "shell");
+  assert.equal(shell[0]?.command, "echo hi");
+  assert.equal(shell.at(-1)?.status, "ok");
+  assert.equal(shell.at(-1)?.exitCode, 0);
+  assert.equal(shell.at(-1)?.output, "hi\n");
+  const term = all.events.find((event) => event.tool?.id === "t1")?.tool;
+  assert.equal(term?.kind, "shell");
+  assert.equal(term?.command, "pwd");
+  assert.equal(term?.exitCode, 0);
+});
+
+test("ACP plan updates accept items/steps in place of entries", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    {
+      sessionUpdate: "plan",
+      items: [
+        { content: "one", status: "completed" },
+        { content: "two", status: "pending" },
+      ],
+    },
+  ]);
+  const plan = all.events.find((event) => event.tool?.kind === "todo")?.tool;
+  assert.equal(plan?.subject, "2 项");
+  assert.equal(plan?.output, "☑ one\n☐ two");
+});
+
 test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(400), "400 毫秒");
   assert.equal(formatMsDuration(1200), "1 秒");

@@ -701,7 +701,8 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       sink.delta(events, "text", chunkText(data));
       return;
     case "plan": {
-      const entries = asArray(data.entries).filter(isRecord);
+      // ACP uses `entries`; a few hosts send `items` / `steps`.
+      const entries = asArray(data.entries ?? data.items ?? data.steps).filter(isRecord);
       if (!entries.length) {
         return;
       }
@@ -717,7 +718,7 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
     case "tool_use": {
       const id = String(data.toolCallId ?? data.id ?? `tool-${events.length}`);
       const title = String(data.title ?? data.name ?? data.tool ?? "tool").replace(/^`(.*)`$/s, "$1");
-      const rawInput = isRecord(data.rawInput) ? data.rawInput : isRecord(data.input) ? data.input : {};
+      const rawInput = acpToolInputOf(data);
       const described = describeArgs(title, rawInput, undefined, acpKind(String(data.kind ?? ""), title));
       const files = acpLocations(data);
       sink.tool(
@@ -728,7 +729,7 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
           subject: described.subject ?? (files?.length === 1 ? basenameOf(files[0]!) : undefined) ?? title,
           status: acpStatus(String(data.status ?? "")),
           ...describeAcpContent(asArray(data.content)),
-          ...describeRawOutput(described.kind, data.rawOutput),
+          ...describeRawOutput(described.kind, acpRawOutputOf(data)),
         }),
       );
       return;
@@ -738,13 +739,14 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       const id = String(data.toolCallId ?? data.id ?? "");
       const previous = tools.get(id);
       // cursor-agent announces a call first and fills in what it is about (title, arguments, files) a moment later.
-      const rawInput = isRecord(data.rawInput) && Object.keys(data.rawInput).length ? data.rawInput : undefined;
+      const parsedInput = acpToolInputOf(data);
+      const rawInput = Object.keys(parsedInput).length ? parsedInput : undefined;
       const title = typeof data.title === "string" ? data.title.replace(/^`(.*)`$/s, "$1") : undefined;
       const files = acpLocations(data);
       const kindHint = typeof data.kind === "string" ? acpKind(data.kind, title ?? "") : previous?.kind ?? acpKind("", title ?? "");
       const redescribed = rawInput || title ? describeArgs(title ?? previous?.name ?? "tool", rawInput ?? {}, undefined, kindHint) : undefined;
       const content = describeAcpContent(asArray(data.content));
-      const output = describeRawOutput(redescribed?.kind ?? previous?.kind ?? "other", data.rawOutput);
+      const output = describeRawOutput(redescribed?.kind ?? previous?.kind ?? "other", acpRawOutputOf(data));
       const hasNews = Boolean(content.output || content.diff || output.output || output.error || output.exitCode !== undefined || redescribed || files);
       // Empty updates are progress ticks; only emit when there is something new to show.
       if (!hasNews && (data.status === undefined || (previous && acpStatus(String(data.status)) === previous.status))) {
@@ -813,7 +815,8 @@ function chunkText(data: Record<string, unknown>): string {
 }
 
 function acpKind(kind: string, title: string): ToolKind {
-  switch (kind) {
+  // ACP kinds are lowercase; a few hosts capitalize them (Execute, Read, Terminal).
+  switch (kind.trim().toLowerCase()) {
     case "read":
       return "read";
     case "edit":
@@ -824,12 +827,25 @@ function acpKind(kind: string, title: string): ToolKind {
     case "search":
       return "grep";
     case "execute":
+    case "shell":
+    case "terminal":
       return "shell";
     case "fetch":
       return "web";
     default:
       return toolKindOf(title);
   }
+}
+
+/** ACP tool args: camelCase rawInput/input or snake_case raw_input. */
+function acpToolInputOf(data: Record<string, unknown>): Record<string, unknown> {
+  const candidate = data.rawInput ?? data.raw_input ?? data.input;
+  return isRecord(candidate) ? candidate : {};
+}
+
+/** ACP tool result blob: rawOutput or snake_case raw_output. */
+function acpRawOutputOf(data: Record<string, unknown>): unknown {
+  return data.rawOutput !== undefined ? data.rawOutput : data.raw_output;
 }
 
 /** ACP statuses, plus "rejected" which the runner adds when it refuses a permission request. */

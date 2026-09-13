@@ -656,7 +656,7 @@ export class AgentHost extends EventEmitter {
     if (this.loading.has(sessionId)) {
       return;
     }
-    const update = params.update && typeof params.update === "object" ? (params.update as Record<string, unknown>) : null;
+    const update = sessionUpdateOf(params);
     const active = this.prompts.get(sessionId);
     if (active && update) {
       active.handlers.onUpdate(update);
@@ -837,6 +837,42 @@ export class AgentHostPool {
     this.hosts.set(kind, host);
     return host;
   }
+}
+
+
+/**
+ * ACP `session/update` payload: nested `update` object, a JSON string, or a
+ * flattened params body that already carries `sessionUpdate` / `type`.
+ */
+export function sessionUpdateOf(params: Record<string, unknown>): Record<string, unknown> | null {
+  const nested = params.update;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    return nested as Record<string, unknown>;
+  }
+  if (typeof nested === "string" && nested.trim().startsWith("{")) {
+    try {
+      const parsed = JSON.parse(nested) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Fall through to flat-shape check.
+    }
+  }
+  // Some stacks flatten the update onto params (sessionUpdate/type + fields).
+  if (
+    typeof params.sessionUpdate === "string" ||
+    typeof params.session_update === "string" ||
+    typeof params.type === "string"
+  ) {
+    const flat: Record<string, unknown> = { ...params };
+    delete flat.sessionId;
+    delete flat.session_id;
+    delete flat.sessionID;
+    delete flat.update;
+    return flat;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
