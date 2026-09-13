@@ -669,7 +669,8 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
  * synthetic `end` when a prompt returns.
  */
 function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track, tools, rememberUsage, usage }: DialectContext): void {
-  const type = String(data.type ?? data.sessionUpdate ?? "");
+  // Flat Grok lines use `type`; warm ACP uses `sessionUpdate` / snake `session_update`.
+  const type = String(data.type ?? data.sessionUpdate ?? data.session_update ?? "");
   const events = out.events;
   const metaUsage = rememberUsage(isRecord(data._meta) ? data._meta : undefined);
   if (metaUsage) {
@@ -781,8 +782,12 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       if (typeof data.sessionId === "string") {
         out.sessionId = data.sessionId;
       }
-      const stop = String(data.stopReason ?? "end_turn");
-      const isError = stop !== "end_turn" && stop !== "max_turns" && stop !== "cancelled";
+      // Blank / whitespace stop reasons are ordinary ends; max_request is a singular soft-cap alias
+      // (max_tokens / max_turn_requests remain #71; max_requests remains #91; canceled remains #86).
+      const stopRaw = typeof data.stopReason === "string" ? data.stopReason.trim() : "";
+      const stop = stopRaw || "end_turn";
+      const softStop = stop === "end_turn" || stop === "max_turns" || stop === "max_request";
+      const isError = !softStop && stop !== "cancelled";
       out.isError = isError;
       const costUsd = typeof data.total_cost_usd === "number" ? data.total_cost_usd : undefined;
       out.usage = rememberUsage(data.usage ?? data, {
@@ -791,7 +796,10 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       });
       events.push({
         kind: "result",
-        text: formatOutcome(stop === "cancelled" ? "已取消" : isError ? `结束 (${stop})` : "完成", { usage: out.usage ?? usage(), costUsd }),
+        text: formatOutcome(
+          stop === "cancelled" ? "已取消" : stop === "max_request" ? "已达轮次上限" : isError ? `结束 (${stop})` : "完成",
+          { usage: out.usage ?? usage(), costUsd },
+        ),
       });
       return;
     }

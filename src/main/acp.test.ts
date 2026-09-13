@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { AcpConnection, type AcpModel, choosePermission, mapCursorModel, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
+import { AcpConnection, type AcpModel, choosePermission, describePermission, mapCursorModel, permissionToolCallOf, RpcError, rpcErrorOf, rpcParamsOf, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
 
 /** A fake agent on the other end of the pipes. */
 function pipes() {
@@ -69,6 +69,36 @@ test("string response ids still resolve the matching numeric request", async () 
   assert.deepEqual(await pending, { protocolVersion: 1 });
 });
 
+test("string JSON-RPC errors reject the pending request instead of resolving", async () => {
+  const { connection, agentSays, flush } = pipes();
+  const pending = connection.request("session/set_model", { modelId: "x" });
+  await flush();
+  agentSays({ jsonrpc: "2.0", id: 1, error: "Invalid model value: x" });
+  await assert.rejects(pending, (error: unknown) => error instanceof RpcError && error.message === "Invalid model value: x");
+  assert.equal(rpcErrorOf("boom").message, "boom");
+  assert.equal(rpcErrorOf({ code: 1, message: "nope" }).code, 1);
+});
+
+test("stringified JSON-RPC params still surface on notifications and requests", async () => {
+  const { connection, agentSays, flush } = pipes();
+  const notifications: [string, unknown][] = [];
+  const requests: RpcIncomingRequest[] = [];
+  connection.on("notification", (method: string, params: unknown) => notifications.push([method, params]));
+  connection.on("request", (request: RpcIncomingRequest) => requests.push(request));
+  agentSays({ jsonrpc: "2.0", method: "session/update", params: JSON.stringify({ sessionId: "s1", update: { sessionUpdate: "agent_message_chunk" } }) });
+  agentSays({
+    jsonrpc: "2.0",
+    id: 9,
+    method: "session/request_permission",
+    params: JSON.stringify({ sessionId: "s1", tool_call: { kind: "execute", raw_input: { command: "ls" } }, options: [] }),
+  });
+  await flush();
+  assert.equal((notifications[0]?.[1] as { sessionId?: string })?.sessionId, "s1");
+  assert.equal(requests[0]?.params.sessionId, "s1");
+  assert.deepEqual(rpcParamsOf('{"a":1}'), { a: 1 });
+  assert.deepEqual(rpcParamsOf(null), {});
+});
+
 test("$/cancel_request notifies with the pending request id", async () => {
   const { connection, sent, flush } = pipes();
   const out = { id: 0 };
@@ -115,6 +145,25 @@ test("permission policy: full access allows, safe mode asks before commands", ()
   assert.deepEqual(choosePermission("safe", { kind: "edit" }, options), { action: "select", optionId: "allow-once", rejected: false });
   // Some CLIs only offer "always"; full access still has to pick it or every command dies.
   assert.deepEqual(choosePermission("full", { kind: "execute" }, [{ optionId: "x", kind: "allow_always" }]), { action: "select", optionId: "x", rejected: false });
+});
+
+test("permission tool_call / raw_input snake_case still asks in safe mode with the command", () => {
+  const options = [
+    { optionId: "allow-once", kind: "allow_once" },
+    { optionId: "reject-once", kind: "reject_once" },
+  ];
+  const toolCall = permissionToolCallOf({
+    sessionId: "s",
+    tool_call: { kind: "execute", title: "Shell", raw_input: { command: "rm -rf /tmp/x" } },
+  });
+  assert.deepEqual(choosePermission("safe", toolCall, options), { action: "ask" });
+  assert.deepEqual(describePermission(toolCall), {
+    toolCallId: "",
+    title: "Shell",
+    command: "rm -rf /tmp/x",
+  });
+  // Bare toolCall remains the common shape.
+  assert.equal(permissionToolCallOf({ toolCall: { kind: "edit" } }).kind, "edit");
 });
 
 const PRESETS: AcpModel[] = [
