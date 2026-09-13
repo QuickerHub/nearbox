@@ -8,6 +8,7 @@ import {
   cancelStoppingProcessStatus,
   markCancelling,
   warmCancelAfterSoftGrace,
+  warmHostAfterLookup,
   warmStartupSessionToClose,
 } from "./cancel-escalation.ts";
 
@@ -45,4 +46,11 @@ test("cancelRunAction: remote prepare without child is starting, not stop-remote
   assert.equal(cancelRunAction({ remote: { pidFile: "x" } }), "starting");
   assert.equal(cancelRunAction({ child: {} }), "stop-local");
   assert.equal(cancelRunAction({}), "starting");
+});
+
+test("warmHostAfterLookup: Stop wins over host-down fallback", () => {
+  assert.equal(warmHostAfterLookup(true, false), "cancel");
+  assert.equal(warmHostAfterLookup(true, true), "cancel");
+  assert.equal(warmHostAfterLookup(false, false), "fallback");
+  assert.equal(warmHostAfterLookup(false, true), "continue");
 });

@@ -57,6 +57,24 @@ export function warmStartupSessionToClose(
   return sessionId;
 }
 
+/**
+ * After `hosts.host()` returns: Stop wins over the host-down fallback line.
+ * `cancel` finishes the run; `fallback` falls through to a one-shot process;
+ * `continue` uses the warm host.
+ */
+export function warmHostAfterLookup(
+  cancelled: boolean,
+  hostAvailable: boolean,
+): "cancel" | "fallback" | "continue" {
+  if (cancelled) {
+    return "cancel";
+  }
+  if (!hostAvailable) {
+    return "fallback";
+  }
+  return "continue";
+}
+
 /** What Runner.cancel should do given the handles currently on the active run. */
 export type CancelRunAction = "warm-host" | "stop-remote" | "stop-local" | "starting";
 
