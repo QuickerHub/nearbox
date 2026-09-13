@@ -49,3 +49,23 @@ test("cancel settles every permission ask before soft-cancel timeline continues"
   assert.equal(queue.length, 0);
   assert.deepEqual(pendingPermissionView(queue), {});
 });
+
+test("settlePermissionsOnCancel on empty queue is zero and idempotent", () => {
+  const queue: PermissionWaiter<Pending>[] = [];
+  assert.equal(settlePermissionsOnCancel(queue), 0);
+  assert.equal(settlePermissionsOnCancel(queue), 0);
+});
+
+test("soft-cancel phase always settles permissions before sole-user force timeline", () => {
+  const phases = warmCancelPhases(false);
+  assert.equal(phases[0]?.phase, "soft-cancel");
+  assert.equal(phases[0] && "settlePermissions" in phases[0] && phases[0].settlePermissions, true);
+  assert.equal(phases[1]?.phase, "after-soft-grace");
+  assert.equal(phases[2]?.phase, "after-force-grace");
+});
+
+test("shared-host cancel never schedules force grace", () => {
+  const phases = warmCancelPhases(true);
+  assert.equal(phases.some((phase) => phase.phase === "after-force-grace"), false);
+  assert.equal(phases.length, 2);
+});

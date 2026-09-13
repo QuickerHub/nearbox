@@ -167,3 +167,26 @@ test("pictures alone are a message everywhere words are", () => {
   const busy = planSend(input({ ...pictures, task: task(), latestRun: run({ status: "running", sessionId: undefined }), fresh: true }));
   assert.equal(busy.action, "note-run");
 });
+
+test("conversationRun / planSend ignore nullish parentRunId like missing", () => {
+  // Odd JSON left parentRunId null/"" — still a top-level conversation to resume.
+  const odd = run({ id: "r-odd", parentRunId: null as unknown as string, sessionId: "sess-odd" });
+  const empty = run({ id: "r-empty", parentRunId: "", sessionId: "sess-empty", createdAt: "2026-09-06T00:02:00.000Z" });
+  const plan = planSend(input({ task: task(), runs: [odd, empty] }));
+  assert.equal(plan.action, "reply");
+  assert.equal(plan.resumeRunId, "r-empty");
+});
+
+test("conversationRun skips delegated children even when they are newer", () => {
+  const parent = run({ id: "r1", agent: "codex", sessionId: "sess-parent" });
+  const child = run({
+    id: "r2",
+    agent: "codex",
+    sessionId: "sess-child",
+    parentRunId: "r1",
+    createdAt: "2026-09-06T00:05:00.000Z",
+  });
+  const plan = planSend(input({ task: task(), runs: [parent, child] }));
+  assert.equal(plan.action, "reply");
+  assert.equal(plan.resumeRunId, "r1");
+});

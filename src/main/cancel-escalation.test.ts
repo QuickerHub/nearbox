@@ -54,3 +54,21 @@ test("warmHostAfterLookup: Stop wins over host-down fallback", () => {
   assert.equal(warmHostAfterLookup(false, false), "fallback");
   assert.equal(warmHostAfterLookup(false, true), "continue");
 });
+
+test("cancelRunAction prefers warm over remote/local handles", () => {
+  assert.equal(cancelRunAction({ warm: {}, remote: {}, child: {} }), "warm-host");
+  assert.equal(cancelRunAction({ warm: {}, child: {} }), "warm-host");
+});
+
+test("markCancelling then cancelRunAction still reports starting until handles attach", () => {
+  const state = { cancelled: false };
+  assert.equal(markCancelling(state), true);
+  assert.equal(cancelRunAction({}), "starting");
+  assert.equal(cancelStartingStatus("已取消"), "已取消，正在取消…");
+});
+
+test("warmHostAfterLookup cancel beats both available and missing host", () => {
+  // Second Stop / cascade: cancelled flag already set before host() returns.
+  assert.equal(warmHostAfterLookup(true, true), "cancel");
+  assert.equal(warmHostAfterLookup(true, false), "cancel");
+});
