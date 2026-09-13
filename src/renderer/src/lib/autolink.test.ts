@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { peelAutolink, safeHttpUrl, splitInline } from "./autolink.ts";
+import { peelAutolink, safeHttpUrl, safeMailto, splitInline } from "./autolink.ts";
 
 test("only http(s) urls become links", () => {
   assert.equal(safeHttpUrl("https://localhost:3000/"), "https://localhost:3000/");
@@ -45,4 +45,15 @@ test("angle-bracket autolinks work and javascript hrefs stay text", () => {
     { type: "link", href: "https://example.com/a", text: "https://example.com/a" },
   ]);
   assert.ok(splitInline("[x](javascript:alert(1))").every((piece) => piece.type !== "link"));
+});
+
+test("angle-bracket emails become mailto links; javascript stays text", () => {
+  assert.equal(safeMailto("dev@example.com"), "mailto:dev@example.com");
+  assert.equal(safeMailto("javascript:alert(1)"), null);
+  assert.equal(safeMailto("not-an-email"), null);
+  assert.deepEqual(splitInline("写给 <dev@example.com>"), [
+    { type: "text", text: "写给 " },
+    { type: "link", href: "mailto:dev@example.com", text: "dev@example.com" },
+  ]);
+  assert.ok(splitInline("<javascript:alert(1)>").every((piece) => piece.type !== "link"));
 });

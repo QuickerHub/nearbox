@@ -21,6 +21,8 @@ test("a pasted screenshot with an empty type is still treated as an image by its
   assert.equal(isLikelyImage({ name: "image.png", type: "" }), true);
   assert.equal(isLikelyImage({ name: "report.pdf", type: "application/pdf" }), false);
   assert.equal(isLikelyImage({ name: "blob", type: "image/webp" }), true);
+  assert.equal(isLikelyImage({ name: "icon.svg", type: "" }), true);
+  assert.equal(isLikelyImage({ name: "favicon.ico", type: "" }), true);
 });
 
 test("the same file twice is kept once, and the message stops at the limit", () => {

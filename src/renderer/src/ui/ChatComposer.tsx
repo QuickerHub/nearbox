@@ -322,7 +322,7 @@ export function ChatComposer({
             resize();
           }}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey && desktop && !event.nativeEvent.isComposing) {
+            if (event.key === "Enter" && !event.shiftKey && desktop && !event.nativeEvent.isComposing && event.keyCode !== 229) {
               event.preventDefault();
               void submit();
               return;

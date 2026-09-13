@@ -120,6 +120,14 @@ export function App(): JSX.Element {
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (noticeTimer.current !== null) {
+        window.clearTimeout(noticeTimer.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     applyTheme(themeMode);
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => applyTheme(readThemeMode());

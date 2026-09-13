@@ -10,12 +10,21 @@
       | { type: "link"; href: string; text: string };
 
     const TOKEN =
-      /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)\s]+\)|<https?:\/\/[^>\s]+>|https?:\/\/[^\s<>"'`]+)/g;
+      /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)\s]+\)|<https?:\/\/[^>\s]+>|<[^>\s]+@[^>\s]+>|https?:\/\/[^\s<>"'`]+)/g;
 
     const MARKDOWN_LINK = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
     const ANGLE_LINK = /^<(https?:\/\/[^>\s]+)>$/;
+    const ANGLE_EMAIL = /^<([^>\s]+@[^>\s]+)>$/;
     const BARE_LINK = /^(https?:\/\/[^\s<>"'`]+)$/;
     const TRAILING = /[),.;:!?，。；：！？）」』>]+$/;
+
+    /** mailto: only for a plain addr@host, so `<javascript:alert(1)>` never becomes a link. */
+    export function safeMailto(address: string): string | null {
+      if (/[:\/\s<>"'`]/.test(address) || !/^[^@]+@[^@]+\.[^@]+$/.test(address)) {
+        return null;
+      }
+      return `mailto:${address}`;
+    }
 
     export function safeHttpUrl(href: string): string | null {
       try {
@@ -82,6 +91,11 @@
       if (angled) {
         const href = safeHttpUrl(angled[1]!);
         return href ? [{ type: "link", href, text: angled[1]! }] : [{ type: "text", text: token }];
+      }
+      const email = ANGLE_EMAIL.exec(token);
+      if (email) {
+        const href = safeMailto(email[1]!);
+        return href ? [{ type: "link", href, text: email[1]! }] : [{ type: "text", text: token }];
       }
       if (BARE_LINK.test(token)) {
         const { href, trail } = peelAutolink(token);
