@@ -42,6 +42,8 @@ export function extraPathEntries(): string[] {
     join(home, ".cursor", "bin"),
     join(home, ".codex", "bin"),
     join(home, ".opencode", "bin"),
+    join(home, ".claude", "bin"),
+    join(home, ".claude", "local", "bin"),
   ];
   if (IS_WINDOWS) {
     const local = process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");

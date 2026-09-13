@@ -117,8 +117,7 @@ export function describeArgs(
       const todos = asArray(args.todos ?? args.items ?? args.plan)
         .filter(isRecord)
         .map((todo) => {
-          const status = String(todo.status ?? "");
-          const mark = status === "completed" || todo.completed === true ? "☑" : status === "in_progress" ? "◐" : "☐";
+          const mark = todoMark(todo.status, todo.completed);
           return `${mark} ${String(todo.content ?? todo.text ?? todo.step ?? todo.title ?? "")}`;
         });
       call.subject = todos.length ? `${todos.length} 项` : undefined;
@@ -328,6 +327,24 @@ export function basenameOf(path: string): string {
   const cleaned = path.replace(/[\\/]+$/, "");
   const index = Math.max(cleaned.lastIndexOf("/"), cleaned.lastIndexOf("\\"));
   return index >= 0 ? cleaned.slice(index + 1) || cleaned : cleaned;
+}
+
+/** Checkbox for a todo/plan row. Agents disagree on `completed` vs `done` vs `inProgress`. */
+export function todoMark(status: unknown, completed?: unknown): string {
+  if (completed === true) {
+    return "☑";
+  }
+  const id = String(status ?? "")
+    .trim()
+    .replace(/-/g, "_")
+    .toLowerCase();
+  if (id === "completed" || id === "complete" || id === "done") {
+    return "☑";
+  }
+  if (id === "in_progress" || id === "inprogress" || id === "active") {
+    return "◐";
+  }
+  return "☐";
 }
 
 /** First non-empty line, without splitting the whole string. */
