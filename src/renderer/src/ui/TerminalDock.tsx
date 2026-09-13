@@ -92,7 +92,7 @@ export function TerminalDock({ client, run, onStop }: TerminalDockProps): JSX.El
               pending={run.pendingPermission?.toolCallId === terminal.id ? run.pendingPermission : undefined}
               queued={run.pendingPermission?.toolCallId === terminal.id ? run.pendingPermissionQueued : undefined}
               onToggle={() => setOpenId((current) => (current === terminal.id ? null : terminal.id))}
-              onResolve={(optionId) => void client.resolvePermission(run.id, optionId, run.pendingPermission!.askId)}
+              onResolve={(optionId) => client.resolvePermission(run.id, optionId, run.pendingPermission!.askId)}
             />
           ))}
         </ul>
@@ -114,7 +114,7 @@ function TerminalRow({
   pending?: AgentRun["pendingPermission"];
   queued?: number;
   onToggle(): void;
-  onResolve(optionId: string): void;
+  onResolve(optionId: string): void | Promise<void>;
 }): JSX.Element {
   const outputRef = useRef<HTMLPreElement>(null);
   const output = terminal.output?.replace(/\s+$/, "") ?? "";
