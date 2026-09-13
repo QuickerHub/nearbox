@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentRun } from "./protocol.ts";
-import { canContinueRun, isTopLevelActiveRun, sessionIdAlongChain } from "./conversation.ts";
+import { canContinueRun, hasParentRunId, isTopLevelActiveRun, sessionIdAlongChain } from "./conversation.ts";
 
 const actor = { id: "desktop", name: "PC", role: "desktop" as const };
 
@@ -61,3 +61,9 @@ test("isTopLevelActiveRun ignores delegated children", () => {
   assert.equal(isTopLevelActiveRun(run("empty", { status: "running", parentRunId: "" })), true);
 });
 
+test("hasParentRunId treats null/empty like missing", () => {
+  assert.equal(hasParentRunId(run("top")), false);
+  assert.equal(hasParentRunId(run("child", { parentRunId: "parent" })), true);
+  assert.equal(hasParentRunId(run("nullish", { parentRunId: null as unknown as string })), false);
+  assert.equal(hasParentRunId(run("empty", { parentRunId: "" })), false);
+});
