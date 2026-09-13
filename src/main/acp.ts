@@ -11,6 +11,11 @@ import type { ResolvedCommand } from "./agent-output";
 import { resolveCursorAgentBundle } from "./cursor-bundle.ts";
 import { killTree } from "./kill.ts";
 import { MAX_LOADED_SESSIONS, sessionsToPrune, shouldCloseSessionsBeforeIdleKill } from "./idle-session.ts";
+import {
+  abandonSessionPrompt,
+  forceCancelSessionPrompt,
+  softCancelSessionPrompt,
+} from "./prompt-control.ts";
 
 // A warm agent process speaking ACP (Agent Client Protocol: JSON-RPC 2.0, one
 // message per line over stdio). Starting an agent CLI costs 10-15 s on a
@@ -548,9 +553,7 @@ export class AgentHost extends EventEmitter {
 
   /** Ask the agent to stop the turn; `prompt` then resolves with stopReason "cancelled". */
   cancel(sessionId: string): void {
-    if (this.prompts.has(sessionId)) {
-      this.connection.notify("session/cancel", { sessionId });
-    }
+    softCancelSessionPrompt(this.connection, this.prompts, sessionId);
   }
 
   /**
@@ -558,11 +561,7 @@ export class AgentHost extends EventEmitter {
    * was ignored. Keeps the host process up for other sessions.
    */
   forceCancel(sessionId: string): void {
-    const prompt = this.prompts.get(sessionId);
-    if (!prompt?.requestId) {
-      return;
-    }
-    this.connection.cancelRequest(prompt.requestId);
+    forceCancelSessionPrompt(this.connection, this.prompts, sessionId);
   }
 
   /**
@@ -570,12 +569,10 @@ export class AgentHost extends EventEmitter {
    * the agent ignores soft cancel and `$/cancel_request`.
    */
   abandonPrompt(sessionId: string, reason = "本轮已取消"): boolean {
-    const prompt = this.prompts.get(sessionId);
-    if (!prompt?.requestId) {
+    if (!this.prompts.has(sessionId)) {
       return false;
     }
-    const rejected = this.connection.rejectPending(prompt.requestId, new Error(reason));
-    this.prompts.delete(sessionId);
+    const rejected = abandonSessionPrompt(this.connection, this.prompts, sessionId, reason);
     this.touch();
     return rejected;
   }

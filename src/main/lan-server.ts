@@ -37,6 +37,7 @@ import {
   type TaskPatch,
 } from "@shared/protocol";
 import { receiveToInbox } from "./files";
+import { recentRuns } from "./snapshot-runs.ts";
 import type { TaskHub } from "./hub";
 import { isLoopbackOrPrivate, listPrivateLanAddresses, normalizeRemoteIp } from "./network";
 import type { RemoteControlHub } from "./remote";
@@ -262,7 +263,7 @@ export class LanServer extends EventEmitter {
       remoteDevices: this.hub.remoteDevices,
       tasks: this.hub.tasks,
       projects: this.hub.projects,
-      runs: this.hub.runs.slice(-120),
+      runs: recentRuns(this.hub.runs),
       agents: this.hub.agents,
       settings: this.hub.settings,
       limits: this.limits,
