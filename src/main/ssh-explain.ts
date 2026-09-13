@@ -40,9 +40,22 @@ export function explainSshFailure(target: SshExplainTarget, stderr: string): str
   return line ? `连接 ${where} 失败：${line}` : `连接 ${where} 失败。`;
 }
 
+const WINDOWS_RESERVED_SEGMENT = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$/i;
+
 /** Reject anything that could not be a single path: control chars break every shell we talk to. */
 export function assertSafeRemotePath(path: string): void {
   if (!path.trim() || /[\r\n\u0000]/.test(path)) {
     throw new Error("路径不合法。");
+  }
+  // Windows device namespaces (\\.\\ PhysicalDrive, \\?\\ extended) and reserved
+  // device names (NUL, CON, COM1, …) must never be handed to upload / cd / list.
+  const normalized = path.replace(/\//g, "\\");
+  if (/^\\\\[.?]\\/.test(normalized) || /^\/\/[.?]\//.test(path)) {
+    throw new Error("路径不合法。");
+  }
+  for (const segment of path.split(/[\\/]+/)) {
+    if (segment && WINDOWS_RESERVED_SEGMENT.test(segment)) {
+      throw new Error("路径不合法。");
+    }
   }
 }

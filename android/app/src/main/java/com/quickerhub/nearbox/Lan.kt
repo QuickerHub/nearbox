@@ -45,7 +45,9 @@ object Lan {
                     continue
                 }
                 for (address in nic.inetAddresses) {
-                    if (address is Inet4Address && address.isSiteLocalAddress) {
+                    // Site-local (RFC1918) and link-local (APIPA 169.254/16) both mean
+                    // the PC can be on the same L2 segment when DHCP failed or a cable is direct.
+                    if (address is Inet4Address && (address.isSiteLocalAddress || address.isLinkLocalAddress)) {
                         result.add(address)
                     }
                 }

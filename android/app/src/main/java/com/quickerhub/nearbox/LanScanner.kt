@@ -147,6 +147,7 @@ class LanScanner(
         const val DISCOVERY_PORT = 17832
         private const val SWEEP_TIMEOUT_MS = 350
         private const val LAST_HOST_TIMEOUT_MS = 1500
+        private const val MAX_DISCOVER_BYTES = 8 * 1024
 
         /** Asks one address whether a Nearbox host answers there. Blocking; call it off the main thread. */
         fun probe(host: String, port: Int, timeoutMs: Int): FoundHost? {
@@ -164,13 +165,34 @@ class LanScanner(
                 if (conn.responseCode != 200) {
                     null
                 } else {
-                    parseHost(conn.inputStream.bufferedReader(Charsets.UTF_8).readText(), host, port)
+                    // Discover JSON is tiny; a hostile LAN peer must not fill the heap.
+                    val length = conn.contentLength
+                    if (length > MAX_DISCOVER_BYTES) {
+                        return null
+                    }
+                    parseHost(readLimited(conn.inputStream, MAX_DISCOVER_BYTES) ?: return null, host, port)
                 }
             } catch (_: Exception) {
                 null
             } finally {
                 conn.disconnect()
             }
+        }
+
+        private fun readLimited(input: java.io.InputStream, maxBytes: Int): String? {
+            val buffer = ByteArray(maxBytes + 1)
+            var offset = 0
+            while (offset < buffer.size) {
+                val n = input.read(buffer, offset, buffer.size - offset)
+                if (n < 0) {
+                    break
+                }
+                offset += n
+            }
+            if (offset == 0 || offset > maxBytes) {
+                return null
+            }
+            return String(buffer, 0, offset, Charsets.UTF_8)
         }
 
         private fun parseHost(raw: String, connectHost: String, fallbackPort: Int): FoundHost? {
