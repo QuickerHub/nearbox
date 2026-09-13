@@ -1,4 +1,4 @@
-import { hasParentRunId } from "../../../shared/conversation.ts";
+import { hasParentRunId, isRunActive } from "../../../shared/conversation.ts";
 import type { AgentKind, AgentRun, Project, Task, TaskStatus } from "../../../shared/protocol";
 
 // How the task list is organised: what needs the user, what is running, and
@@ -15,10 +15,6 @@ export const AGENT_SHORT_LABELS: Record<AgentKind, string> = {
   claude: "Claude",
   opencode: "opencode",
 };
-
-function isActive(run: Pick<AgentRun, "status">): boolean {
-  return run.status === "queued" || run.status === "running";
-}
 
 /** Newest first, important ones before the rest. */
 function byRecent(a: Task, b: Task): number {
@@ -54,7 +50,7 @@ export function activeRuns(runs: readonly AgentRun[]): Map<string, AgentRun> {
   const map = new Map<string, AgentRun>();
   const score = (run: AgentRun) => (run.status === "running" ? 2 : 0) + (hasParentRunId(run) ? 0 : 1);
   for (const run of runs) {
-    if (!isActive(run)) {
+    if (!isRunActive(run)) {
       continue;
     }
     const current = map.get(run.taskId);
@@ -92,6 +88,17 @@ export function seenMarker(run: AgentRun | undefined): string {
 
 const ATTENTION_RANK: Record<AttentionReason, number> = { permission: 0, failed: 1, finished: 2 };
 
+/** First active run waiting on permission, per task (matches `.find` order). */
+function pendingPermissionByTask(runs: readonly AgentRun[]): Map<string, AgentRun> {
+  const map = new Map<string, AgentRun>();
+  for (const run of runs) {
+    if (isRunActive(run) && run.pendingPermission && !map.has(run.taskId)) {
+      map.set(run.taskId, run);
+    }
+  }
+  return map;
+}
+
 /**
  * Tasks the user has to act on or look at: a turn waiting for permission
  * (live, on any run of the task), or a turn that ended since the task was
@@ -100,9 +107,10 @@ const ATTENTION_RANK: Record<AttentionReason, number> = { permission: 0, failed:
  */
 export function attentionFor(tasks: readonly Task[], runs: readonly AgentRun[], seen: Readonly<Record<string, string>>): AttentionItem[] {
   const latest = latestTurns(runs);
+  const waitingByTask = pendingPermissionByTask(runs);
   const items: AttentionItem[] = [];
   for (const task of tasks) {
-    const waiting = runs.find((run) => run.taskId === task.id && isActive(run) && run.pendingPermission);
+    const waiting = waitingByTask.get(task.id);
     if (waiting) {
       items.push({ task, run: waiting, reason: "permission" });
       continue;
@@ -111,7 +119,7 @@ export function attentionFor(tasks: readonly Task[], runs: readonly AgentRun[], 
       continue;
     }
     const turn = latest.get(task.id);
-    if (!turn || isActive(turn) || turn.status === "cancelled" || seen[task.id] === seenMarker(turn)) {
+    if (!turn || isRunActive(turn) || turn.status === "cancelled" || seen[task.id] === seenMarker(turn)) {
       continue;
     }
     items.push({ task, run: turn, reason: turn.status === "failed" ? "failed" : "finished" });
@@ -221,17 +229,31 @@ function section(key: string, kind: TaskSection["kind"], tasks: Task[], active: 
  */
 export function buildSections({ tasks, runs, projects, grouped, query }: SectionInput): TaskSection[] {
   const needle = (query ?? "").trim().toLowerCase();
-  const matches = tasks.filter((task) => matchesQuery(task, needle));
+  const matches = needle ? tasks.filter((task) => matchesQuery(task, needle)) : (tasks as Task[]);
   const active = activeRuns(runs);
   if (!grouped) {
     return matches.length ? [section("all", "all", matches, active)] : [];
   }
   const known = new Set(projects.map((project) => project.id));
-  const inbox = matches.filter((task) => !task.projectId || !known.has(task.projectId));
+  const inbox: Task[] = [];
+  const byProject = new Map<string, Task[]>();
+  for (const task of matches) {
+    const projectId = task.projectId;
+    if (!projectId || !known.has(projectId)) {
+      inbox.push(task);
+      continue;
+    }
+    const bucket = byProject.get(projectId);
+    if (bucket) {
+      bucket.push(task);
+    } else {
+      byProject.set(projectId, [task]);
+    }
+  }
   const sections: TaskSection[] = inbox.length ? [section("inbox", "inbox", inbox, active)] : [];
   for (const project of projects) {
-    const own = matches.filter((task) => task.projectId === project.id);
-    if (own.length) {
+    const own = byProject.get(project.id);
+    if (own?.length) {
       sections.push(section(project.id, "project", own, active, project));
     }
   }
