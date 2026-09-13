@@ -105,12 +105,18 @@ class MainActivity : AppCompatActivity() {
             "${binding.webView.settings.userAgentString} NearboxShell/${packageManager.getPackageInfo(packageName, 0).versionName}"
         binding.webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val url = request.url.toString()
-                if (isApkUrl(url)) {
+                val uri = request.url
+                val url = uri.toString()
+                if (isSessionApkUrl(url)) {
                     ApkInstaller.start(this@MainActivity, url)
                     return true
                 }
-                return false
+                // Stay on the paired PC. A LAN peer (router, another box) must not take the WebView.
+                val sessionHost = lastTarget?.host
+                if (uri.scheme == "http" && !sessionHost.isNullOrBlank() && hostEquals(uri.host, sessionHost)) {
+                    return false
+                }
+                return true
             }
 
             override fun onPageFinished(view: WebView, url: String) {
@@ -130,8 +136,8 @@ class MainActivity : AppCompatActivity() {
                 showPairing("连不上电脑 $host，正在重新查找…")
             }
         }
-        binding.webView.setDownloadListener { url, _, _, mimeType, _ ->
-            if (isApkUrl(url) || mimeType.contains("android.package", ignoreCase = true)) {
+        binding.webView.setDownloadListener { url, _, _, _, _ ->
+            if (isSessionApkUrl(url)) {
                 ApkInstaller.start(this, url)
             }
         }
@@ -421,8 +427,20 @@ class MainActivity : AppCompatActivity() {
         binding.scanStatus.visibility = if (text.isNullOrBlank()) View.GONE else View.VISIBLE
     }
 
-    private fun isApkUrl(url: String): Boolean {
-        return url.contains("/app/nearbox.apk") || url.endsWith(".apk", ignoreCase = true)
+    /** Only the paired PC's `/app/nearbox.apk` — not any LAN `.apk` link. */
+    private fun isSessionApkUrl(url: String): Boolean {
+        val sessionHost = lastTarget?.host ?: return false
+        val uri = runCatching { Uri.parse(url) }.getOrNull() ?: return false
+        return uri.scheme == "http" &&
+            hostEquals(uri.host, sessionHost) &&
+            uri.path.orEmpty().endsWith("/app/nearbox.apk", ignoreCase = true)
+    }
+
+    private fun hostEquals(a: String?, b: String?): Boolean {
+        if (a.isNullOrBlank() || b.isNullOrBlank()) {
+            return false
+        }
+        return a.equals(b, ignoreCase = true)
     }
 
     private fun prefs() = getSharedPreferences("nearbox", MODE_PRIVATE)

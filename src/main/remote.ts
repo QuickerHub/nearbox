@@ -221,15 +221,18 @@ export class RemoteControlHub {
   private kickAll(message: string): void {
     for (const client of [...this.clients]) {
       sendJson(client.socket, { t: "error", message });
+      // Same leftover as forget/dropDevice: close() leaves `message` live through
+      // the handshake, so a phone can keep injecting input after the user flips
+      // remote control off. Strip listeners and terminate now.
       try {
-        client.socket.close();
+        client.socket.removeAllListeners("message");
+        client.socket.terminate();
       } catch {
-        /* ignore */
+        /* already closed */
       }
-      this.clients.delete(client);
+      this.detach(client);
     }
     this.stopSource();
-    this.options.onControllersChanged?.(0);
   }
 
   stop(): void {

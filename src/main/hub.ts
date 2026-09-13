@@ -47,7 +47,7 @@ import type { DelegationConfig } from "./delegation";
 import { discoverDevices } from "./lan-discover";
 import { buildDelegatedPrompt, buildTurnPrompt, delegationSection, imagePaths, type PromptAttachment } from "./prompt";
 import { type RunAttachment, RunManager } from "./runner";
-import { assertSafeRemotePath, directoryExists, listDirectory, probeDevice, remoteAttachmentPath } from "./ssh";
+import { assertSafeIdentityFile, assertSafeRemotePath, directoryExists, listDirectory, probeDevice, remoteAttachmentPath } from "./ssh";
 import { Store, type StoredFile } from "./store";
 
 function fail(message: string, code = "BAD_REQUEST"): never {
@@ -514,6 +514,9 @@ export class TaskHub extends EventEmitter {
     const user = String(input.user ?? "").trim() || undefined;
     const port = normalizePort(input.port);
     const identityFile = String(input.identityFile ?? "").trim() || undefined;
+    if (identityFile) {
+      assertSafeIdentityFile(identityFile);
+    }
     const existing = this.remoteDevices.find(
       (device) => device.host.toLowerCase() === host.toLowerCase() && (device.user ?? "") === (user ?? "") && (device.port ?? 22) === (port ?? 22),
     );
@@ -565,6 +568,9 @@ export class TaskHub extends EventEmitter {
     }
     if (patch.identityFile !== undefined) {
       const identityFile = String(patch.identityFile ?? "").trim() || undefined;
+      if (identityFile) {
+        assertSafeIdentityFile(identityFile);
+      }
       reconnect = reconnect || identityFile !== device.identityFile;
       device.identityFile = identityFile;
     }

@@ -46,3 +46,26 @@ export function assertSafeRemotePath(path: string): void {
     throw new Error("路径不合法。");
   }
 }
+
+/** Probe HOME used for ~/.nearbox uploads and pid files. Control chars and `..` would escape that tree. */
+export function sanitizeRemoteHome(home: unknown): string {
+  const text = String(home ?? "");
+  if (!text) {
+    return "";
+  }
+  if (/[\r\n\u0000]/.test(text)) {
+    throw new Error("路径不合法。");
+  }
+  if (text.split(/[\\/]+/).some((segment) => segment === "..")) {
+    throw new Error("路径不合法。");
+  }
+  return text;
+}
+
+/** `-i` path for ssh: no control chars and no leading dash (would look like another option). */
+export function assertSafeIdentityFile(filePath: string): void {
+  const value = filePath.trim();
+  if (!value || value.startsWith("-") || /[\r\n\u0000]/.test(filePath)) {
+    throw new Error("密钥文件路径不合法。");
+  }
+}

@@ -2,9 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type DevicePlatform, type RemoteDevice, type RemoteDirListing } from "@shared/protocol";
 import { COMMAND_NAMES } from "./agents";
 import { killTree as killLocal } from "./kill";
-import { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
+import { assertSafeRemotePath, describeTarget, explainSshFailure, sanitizeRemoteHome } from "./ssh-explain";
 
-export { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
+export { assertSafeIdentityFile, assertSafeRemotePath, describeTarget, explainSshFailure, sanitizeRemoteHome } from "./ssh-explain";
 
 /**
  * Everything Nearbox does on another computer goes through the local `ssh`
@@ -237,7 +237,7 @@ export async function probeDevice(target: SshTarget): Promise<ProbeResult> {
       platform: "windows",
       hostName: String(winJson.hostName ?? ""),
       user: String(winJson.user ?? ""),
-      home: String(winJson.home ?? ""),
+      home: sanitizeRemoteHome(winJson.home),
       agents: agentsFromMap(asStringMap(winJson.agents)),
     };
   }
@@ -252,7 +252,7 @@ export async function probeDevice(target: SshTarget): Promise<ProbeResult> {
       platform: uname.includes("darwin") ? "macos" : uname.includes("linux") ? "linux" : "unknown",
       hostName: String(posixJson.hostName ?? ""),
       user: String(posixJson.user ?? ""),
-      home: String(posixJson.home ?? ""),
+      home: sanitizeRemoteHome(posixJson.home),
       agents: agentsFromMap(asStringMap(posixJson.agents)),
     };
   }

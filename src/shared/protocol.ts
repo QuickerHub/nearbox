@@ -625,6 +625,26 @@ export const FORBIDDEN_EXTENSIONS = [
   ".reg",
   ".url",
   ".apk",
+  // Leftover after script/binary bans: Office macros, CHM, disk images, Excel data connections.
+  ".docm",
+  ".xlsm",
+  ".pptm",
+  ".dotm",
+  ".xltm",
+  ".potm",
+  ".ppam",
+  ".xlam",
+  ".xll",
+  ".wll",
+  ".chm",
+  ".iso",
+  ".img",
+  ".msu",
+  ".mst",
+  ".appxbundle",
+  ".msixbundle",
+  ".iqy",
+  ".slk",
 ];
 
 export function isImageMediaType(mediaType: string | undefined): boolean {
