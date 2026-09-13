@@ -21,37 +21,37 @@ export function toolKindOf(rawName: string): ToolKind {
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[\s-]+/g, "_")
     .toLowerCase();
-  if (/^(shell|bash|run_command|run_terminal_cmd|command_execution|execute|terminal|powershell|cmd|exec)$/.test(id)) {
+  if (/^(shell|bash|run_command|run_terminal_cmd|command_execution|execute|terminal|powershell|cmd|exec|shell_execute|exec_command|run_bash|terminal_cmd|shell_tool|run_pty_cmd)$/.test(id)) {
     return "shell";
   }
-  if (/^(read|read_file|readfile|view|cat|view_file|read_files)$/.test(id)) {
+  if (/^(read|read_file|readfile|view|cat|view_file|read_files|get_file_contents|read_resource)$/.test(id)) {
     return "read";
   }
-  if (/^(write|write_file|writefile|create_file|create|save_file)$/.test(id)) {
+  if (/^(write|write_file|writefile|create_file|create|save_file|new_file|make_file|touch_file)$/.test(id)) {
     return "write";
   }
-  if (/^(edit|edit_file|editfile|str_replace|strreplace|str_replace_editor|apply_patch|multi_edit|multiedit|search_replace|patch|notebook_edit)$/.test(id)) {
+  if (/^(edit|edit_file|editfile|str_replace|strreplace|str_replace_editor|str_replace_based_edit_tool|apply_patch|apply_diff|multi_edit|multiedit|search_replace|search_and_replace|replace_string|patch|notebook_edit|move_file|rename_file)$/.test(id)) {
     return "edit";
   }
-  if (/^(delete|delete_file|deletefile|remove|rm)$/.test(id)) {
+  if (/^(delete|delete_file|deletefile|remove|rm|unlink|erase_file)$/.test(id)) {
     return "delete";
   }
-  if (/^(glob|find_files|file_search|find)$/.test(id)) {
+  if (/^(glob|find_files|file_search|find|file_finder)$/.test(id)) {
     return "glob";
   }
-  if (/^(grep|search|codebase_search|sem_search|semsearch|ripgrep|grep_search|search_files|search_code)$/.test(id)) {
+  if (/^(grep|search|codebase_search|sem_search|semsearch|ripgrep|rg|grep_search|search_files|search_code|workspace_search)$/.test(id)) {
     return "grep";
   }
-  if (/^(ls|list_dir|list|list_directory|listdir|tree)$/.test(id)) {
+  if (/^(ls|list_dir|list|list_directory|listdir|tree|dir_list|list_tree)$/.test(id)) {
     return "ls";
   }
-  if (/^(web_search|websearch|search_web|fetch|web_fetch|webfetch|fetch_url|browse|read_url|http)$/.test(id)) {
+  if (/^(web_search|websearch|search_web|fetch|web_fetch|webfetch|fetch_url|browse|read_url|http|browse_url|fetch_webpage|open_url)$/.test(id)) {
     return "web";
   }
   if (/^(task|agent|subagent|sub_agent|spawn_agent)$/.test(id)) {
     return "task";
   }
-  if (/^(todo|todo_write|todowrite|todo_list|update_todos|todo_read|todoread|update_plan|plan)$/.test(id)) {
+  if (/^(todo|todo_write|todowrite|todo_list|update_todos|todo_read|todoread|update_plan|plan|manage_todo_list|set_todos|edit_todos)$/.test(id)) {
     return "todo";
   }
   if (/^(mcp|mcp_tool_call|mcp_tool)$/.test(id) || id.startsWith("mcp_")) {
@@ -60,10 +60,10 @@ export function toolKindOf(rawName: string): ToolKind {
   return "other";
 }
 
-const PATH_KEYS = ["path", "file_path", "filePath", "target_file", "targetFile", "relativeWorkspacePath", "relative_workspace_path", "file", "filename", "notebook_path"];
+const PATH_KEYS = ["path", "file_path", "filePath", "fileName", "pathname", "target_file", "targetFile", "relativeWorkspacePath", "relative_workspace_path", "file", "filename", "notebook_path"];
 const DIR_KEYS = ["targetDirectory", "target_directory", "workingDirectory", "working_directory", "cwd", "dir", "directory", "path"];
-const PATTERN_KEYS = ["globPattern", "glob_pattern", "pattern", "query", "regex", "search"];
-const WEB_KEYS = ["query", "url", "search_term", "searchTerm", "q"];
+const PATTERN_KEYS = ["globPattern", "glob_pattern", "pattern", "query", "regex", "search", "search_pattern", "searchPattern"];
+const WEB_KEYS = ["query", "url", "search_term", "searchTerm", "search_query", "searchQuery", "address", "q"];
 
 /** Turn a call's arguments into subject/command/input, independent of which CLI produced them. */
 export function describeArgs(
@@ -80,7 +80,7 @@ export function describeArgs(
   }
   switch (kind) {
     case "shell": {
-      const command = pickString(args, ["command", "cmd", "script"]);
+      const command = pickString(args, ["command", "cmd", "script", "cmd_line"]);
       call.command = command || undefined;
       call.subject = command || undefined;
       call.cwd = pickString(args, DIR_KEYS.filter((key) => key !== "path")) || undefined;
@@ -154,11 +154,12 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
   }
   switch (kind) {
     case "shell": {
-      const stdout = pickString(body, ["interleavedOutput", "stdout", "output"]);
+      const stdout = pickString(body, ["interleavedOutput", "interleaved_output", "stdout", "output"]);
       const stderr = pickString(body, ["stderr"]);
       const combined = stdout && stderr && !stdout.includes(stderr) ? `${stdout}\n${stderr}` : stdout || stderr;
       patch.output = combined.trim() ? clipTail(combined) : undefined;
-      patch.exitCode = typeof body.exitCode === "number" ? body.exitCode : undefined;
+      const exitRaw = body.exitCode ?? body.exit_status ?? body.status_code;
+      patch.exitCode = typeof exitRaw === "number" ? exitRaw : undefined;
       if (status === "ok" && patch.exitCode !== undefined && patch.exitCode !== 0) {
         patch.status = "error";
       }
@@ -187,7 +188,8 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
       break;
     }
     case "read": {
-      patch.output = typeof body.content === "string" ? clipHead(body.content) : undefined;
+      const content = pickString(body, ["content", "data", "body"]);
+      patch.output = content ? clipHead(content) : undefined;
       break;
     }
     case "glob":
@@ -204,10 +206,27 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
       }
       break;
     }
+    case "grep": {
+      const matchCount =
+        typeof body.matchCount === "number"
+          ? body.matchCount
+          : typeof body.totalMatches === "number"
+            ? body.totalMatches
+            : typeof body.total_matches === "number"
+              ? body.total_matches
+              : undefined;
+      if (matchCount !== undefined) {
+        patch.output = `${matchCount} 处匹配${body.truncated === true ? "（结果已截断）" : ""}`;
+      } else {
+        const text = pickString(body, ["content", "text", "output", "result", "message"]);
+        patch.output = text ? clipHead(text) : Object.keys(body).length ? clipHead(prettyArgs(body)) : undefined;
+      }
+      break;
+    }
     case "task": {
       const steps = asArray(body.conversationSteps).filter(isRecord);
       const answer = findLast(steps, (step) => isRecord(step.assistantMessage) && typeof step.assistantMessage.text === "string");
-      const text = answer && isRecord(answer.assistantMessage) ? String(answer.assistantMessage.text) : pickString(body, ["result", "text", "output"]);
+      const text = answer && isRecord(answer.assistantMessage) ? String(answer.assistantMessage.text) : pickString(body, ["result", "text", "output", "answer"]);
       patch.output = text ? clipHead(text) : undefined;
       break;
     }
@@ -244,8 +263,16 @@ export function describeRawResult(result: Record<string, unknown>): Partial<Tool
   if (typeof result.totalFiles === "number") {
     return { output: `${result.totalFiles} 个文件${result.truncated === true ? "（结果已截断）" : ""}` };
   }
-  if (typeof result.error === "string" && result.error.trim() && values.length === 1) {
-    return { status: "error", error: result.error };
+  const errorText =
+    typeof result.error === "string" && result.error.trim()
+      ? result.error
+      : typeof result.errorMessage === "string" && result.errorMessage.trim()
+        ? result.errorMessage
+        : typeof result.error_message === "string" && result.error_message.trim()
+          ? result.error_message
+          : "";
+  if (errorText && values.length === 1) {
+    return { status: "error", error: errorText };
   }
   return null;
 }

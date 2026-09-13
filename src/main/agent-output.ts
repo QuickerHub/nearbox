@@ -476,8 +476,11 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
     }
     case "thinking": {
       const subtype = String(data.subtype ?? "");
-      if (subtype === "delta" && typeof data.text === "string") {
-        sink.delta(events, "thinking", data.text);
+      // Claude streams `thinking`; cursor-agent streams `text`.
+      const chunk =
+        typeof data.text === "string" ? data.text : typeof data.thinking === "string" ? data.thinking : "";
+      if (subtype === "delta" && chunk) {
+        sink.delta(events, "thinking", chunk);
       } else if (subtype === "completed") {
         sink.flush(events);
       }
@@ -608,8 +611,15 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
       }
       case "file_change": {
         const changes = asArray(item.changes).filter(isRecord);
-        const files = changes.map((change) => String(change.path ?? "")).filter(Boolean);
+        let files = changes.map((change) => String(change.path ?? "")).filter(Boolean);
+        // Some Codex builds put a single path on the item when `changes` is absent.
+        if (!files.length && typeof item.path === "string" && item.path) {
+          files = [item.path];
+        }
         const kinds = new Set(changes.map((change) => String(change.kind ?? "update")));
+        if (!changes.length && typeof item.kind === "string" && item.kind) {
+          kinds.add(item.kind);
+        }
         const kind: ToolKind = kinds.size === 1 && kinds.has("add") ? "write" : kinds.size === 1 && kinds.has("delete") ? "delete" : "edit";
         sink.tool(
           events,
@@ -638,9 +648,18 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
         );
         return;
       }
-      case "web_search":
-        sink.tool(events, track(id, { name: itemType, kind: "web", status, subject: typeof item.query === "string" ? item.query : undefined }));
+      case "web_search": {
+        const subject =
+          typeof item.query === "string" && item.query
+            ? item.query
+            : typeof item.url === "string" && item.url
+              ? item.url
+              : typeof item.href === "string" && item.href
+                ? item.href
+                : undefined;
+        sink.tool(events, track(id, { name: itemType, kind: "web", status, subject }));
         return;
+      }
       case "todo_list": {
         if (phase === "updated") {
           return;
