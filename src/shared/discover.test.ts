@@ -46,3 +46,27 @@ test("liveInvite hides expired credentials", () => {
   assert.equal(liveInvite({ ...invite, expiresAt: "2026-09-13T11:00:00.000Z" }, now), null);
   assert.equal(liveInvite(null, now), null);
 });
+
+test("parseDiscover rejects incomplete or out-of-range hosts", () => {
+  assert.equal(parseDiscover({ service: "other", name: "x", host: "1.1.1.1", port: 17831 }), null);
+  assert.equal(parseDiscover({ service: "nearbox", name: "", host: "1.1.1.1", port: 17831 }), null);
+  assert.equal(parseDiscover({ service: "nearbox", name: "x", host: "", port: 17831 }), null);
+  assert.equal(parseDiscover({ service: "nearbox", name: "x", host: "1.1.1.1", port: 0 }), null);
+  assert.equal(parseDiscover({ service: "nearbox", name: "x", host: "1.1.1.1", port: 70000 }), null);
+  assert.equal(parseDiscover({ service: "nearbox", name: "x", host: "1.1.1.1", port: 1.5 }), null);
+  const parsed = parseDiscover({ service: "nearbox", name: " LAPTOP ", host: " 10.0.0.2 ", port: 9, version: 1 });
+  assert.equal(parsed?.name, "LAPTOP");
+  assert.equal(parsed?.host, "10.0.0.2");
+  assert.equal(parsed?.port, 9);
+  assert.equal(parsed?.version, "");
+  assert.equal(parsed?.protocolVersion, 1);
+});
+
+test("parseInviteText accepts https, pin/token aliases, and rejects junk", () => {
+  assert.deepEqual(parseInviteText("https://10.0.0.3/?token=abc"), { host: "10.0.0.3", port: 17831, token: "abc" });
+  assert.deepEqual(parseInviteText("http://10.0.0.3:9/?pin=123456"), { host: "10.0.0.3", port: 9, token: "123456" });
+  assert.equal(parseInviteText("nearbox://connect?port=17831&t=pin6"), null);
+  assert.equal(parseInviteText("nearbox://connect?host=10.0.0.2&t="), null);
+  assert.equal(parseInviteText(""), null);
+  assert.equal(parseInviteText("not a url"), null);
+});

@@ -154,3 +154,28 @@ test("list-models aliases map to ACP presets only when they mean the same config
   assert.equal(mapCursorModel("no-such-model", PRESETS), undefined);
   assert.equal(mapCursorModel("", PRESETS), undefined);
 });
+
+test("sessionCloseAdvertised treats a truthy session blob and rejects close:false", () => {
+  assert.equal(sessionCloseAdvertised({ sessionCapabilities: true }), true);
+  assert.equal(sessionCloseAdvertised({ sessionCapabilities: "yes" }), true);
+  assert.equal(sessionCloseAdvertised({ sessionCapabilities: { close: false } }), false);
+  assert.equal(sessionCloseAdvertised({ sessionCapabilities: { close: 1 } }), true);
+});
+
+test("mapCursorModel trims default/auto aliases", () => {
+  assert.equal(mapCursorModel("  default  ", PRESETS), "default[]");
+  assert.equal(mapCursorModel("  auto  ", PRESETS), "default[]");
+});
+
+test("full access without an allow option rejects rather than hanging", () => {
+  assert.deepEqual(choosePermission("full", { kind: "execute" }, [{ optionId: "no", kind: "reject_once" }]), {
+    action: "select",
+    optionId: "no",
+    rejected: true,
+  });
+  assert.deepEqual(choosePermission("full", { kind: "edit" }, []), {
+    action: "select",
+    optionId: null,
+    rejected: true,
+  });
+});
