@@ -166,10 +166,12 @@ function ShellCard({ tool, pending, queued, onResolve }: { tool: ToolCall } & As
   const outputRef = useRef<HTMLPreElement>(null);
   const output = tool.output?.replace(/\s+$/, "") ?? "";
   useEffect(() => {
-    if (running && outputRef.current) {
+    // Include `open`: collapsing unmounts the <pre>, and reopening must stick to the live tip
+    // (TerminalDock already lists `open` here; without it a mid-run expand stays at scrollTop 0).
+    if (open && running && outputRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
-  }, [output, running]);
+  }, [open, output, running]);
   const body = output || tool.error;
   const expandable = Boolean(body);
   return (

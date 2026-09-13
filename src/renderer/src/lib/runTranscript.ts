@@ -118,7 +118,7 @@ function applyEvent(items: TranscriptItem[], toolIndex: Map<string, number>, eve
       if (existing !== undefined) {
         const item = items[existing];
         if (item?.type === "tool") {
-          items[existing] = { ...item, tool: { ...item.tool, ...tool } };
+          items[existing] = { ...item, tool: mergeToolUpdate(item.tool, tool) };
         }
       } else {
         toolIndex.set(tool.id, items.length);
@@ -525,6 +525,23 @@ function legacyResult(text: string): unknown {
     return parsed;
   }
   return { [outcome]: parsed ?? {} };
+}
+
+/**
+ * Later tool events often omit fields the first event already filled (JSON drops
+ * `undefined`, but in-memory patches and tests can still carry it). Skip undefined
+ * so a status-only update cannot wipe output the dock/transcript already showed.
+ * liveTerminals.mergeTerminal uses the same `??` discipline per field.
+ */
+function mergeToolUpdate(prior: ToolCall, patch: ToolCall): ToolCall {
+  const next: ToolCall = { ...prior };
+  for (const key of Object.keys(patch) as Array<keyof ToolCall>) {
+    const value = patch[key];
+    if (value !== undefined) {
+      Object.assign(next, { [key]: value });
+    }
+  }
+  return next;
 }
 
 function joinText(left: string, right: string): string {

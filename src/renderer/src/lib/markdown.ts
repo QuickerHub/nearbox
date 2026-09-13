@@ -55,7 +55,8 @@ export function parseBlocks(text: string): MdBlock[] {
       index = next;
       continue;
     }
-    if (HR.test(line) && !LIST.test(line)) {
+    // Spaced forms (- - - / * * *) also match LIST; CommonMark still treats them as breaks.
+    if (HR.test(line)) {
       blocks.push({ type: "hr" });
       index += 1;
       continue;
@@ -98,7 +99,7 @@ function startsBlock(lines: string[], index: number): boolean {
   if (!line.trim()) {
     return true;
   }
-  return Boolean(fenceOpen(line)) || HEADING.test(line) || startsTable(lines, index) || (HR.test(line) && !LIST.test(line)) || QUOTE.test(line) || LIST.test(line);
+  return Boolean(fenceOpen(line)) || HEADING.test(line) || startsTable(lines, index) || HR.test(line) || QUOTE.test(line) || LIST.test(line);
 }
 
 function fenceOpen(line: string): { char: string; length: number; lang: string } | null {

@@ -235,3 +235,15 @@ test("advanceTranscript rebuilds when history is replaced", () => {
   assert.equal(cursor.count, 1);
   assert.equal(cursor.items[0]?.type === "text" ? cursor.items[0].text : "", "new");
 });
+
+test("status-only tool update keeps prior output", () => {
+  const items = buildTranscript([
+    ev(1, "tool", "$ npm test", call("s1", { kind: "shell", command: "npm test", output: "line1\n" })),
+    ev(2, "tool", "done", call("s1", { kind: "shell", command: "npm test", status: "ok", exitCode: 0, output: undefined })),
+  ]);
+  const tool = items.find((item) => item.type === "tool");
+  assert.equal(tool?.type === "tool" ? tool.tool.output : undefined, "line1\n");
+  assert.equal(tool?.type === "tool" ? tool.tool.status : undefined, "ok");
+  assert.equal(tool?.type === "tool" ? tool.tool.exitCode : undefined, 0);
+});
+
