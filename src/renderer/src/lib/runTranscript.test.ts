@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { RunEvent, RunEventKind, ToolCall } from "../../../shared/protocol.ts";
-import { advanceTranscript, buildTranscript, createTranscriptCursor, diffLines, displayTool, groupLabel, summarizeTranscript, toolVerb } from "./runTranscript.ts";
+import { advanceTranscript, buildTranscript, createTranscriptCursor, diffLines, displayTool, groupLabel, hasDetail, isFailed, isNoisyStatus, prettyToolName, statusLabel, summarizeTranscript, toolVerb } from "./runTranscript.ts";
 
 function ev(seq: number, kind: RunEventKind, text: string, tool?: ToolCall, delta?: boolean): RunEvent {
   return { seq, at: "2026-09-06T00:00:00.000Z", kind, text, ...(tool ? { tool } : {}), ...(delta ? { delta } : {}) };
@@ -234,4 +234,22 @@ test("advanceTranscript rebuilds when history is replaced", () => {
   cursor = advanceTranscript(cursor, [ev(10, "text", "new")]);
   assert.equal(cursor.count, 1);
   assert.equal(cursor.items[0]?.type === "text" ? cursor.items[0].text : "", "new");
+});
+
+test("prettyToolName, statusLabel, failure and detail helpers", () => {
+  assert.equal(prettyToolName("ReadFileToolCall"), "read File");
+  assert.equal(prettyToolName("shell_exec"), "shell exec");
+  assert.equal(prettyToolName(""), "tool");
+  assert.equal(statusLabel({ id: "1", name: "t", kind: "shell", status: "running" }), "进行中");
+  assert.equal(statusLabel({ id: "1", name: "t", kind: "shell", status: "rejected" }), "被拦截");
+  assert.equal(statusLabel({ id: "1", name: "t", kind: "shell", status: "error", exitCode: 7 }), "退出码 7");
+  assert.equal(statusLabel({ id: "1", name: "t", kind: "shell", status: "error" }), "失败");
+  assert.equal(statusLabel({ id: "1", name: "t", kind: "shell", status: "ok" }), "");
+  assert.equal(isFailed("error"), true);
+  assert.equal(isFailed("rejected"), true);
+  assert.equal(isFailed("ok"), false);
+  assert.equal(hasDetail({ id: "1", name: "t", kind: "read", status: "ok", output: "hi" }), true);
+  assert.equal(hasDetail({ id: "1", name: "t", kind: "read", status: "ok" }), false);
+  assert.equal(isNoisyStatus("启动 cursor-agent"), true);
+  assert.equal(isNoisyStatus("正在分析仓库"), false);
 });

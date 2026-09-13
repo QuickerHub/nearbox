@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type DraftAttachment, type FileLike, isLikelyImage, partitionImages, stageFiles, stageNotice, titleForFiles } from "./attachments.ts";
+import { type DraftAttachment, type FileLike, isLikelyImage, partitionImages, stageFiles, stageNotice, titleForFiles, extractFiles } from "./attachments.ts";
 
 function file(name: string, type = "image/png", size = 1000, lastModified = 1): FileLike {
   return { name, type, size, lastModified };
@@ -86,3 +86,9 @@ test("partitionImages splits in one pass", () => {
   );
 });
 
+
+test("extractFiles tolerates null transfer and stageNotice is quiet when nothing dropped", () => {
+  assert.deepEqual(extractFiles(null), []);
+  assert.deepEqual(extractFiles(undefined), []);
+  assert.equal(stageNotice({ duplicates: 0, overflow: 0 }, 8), null);
+});

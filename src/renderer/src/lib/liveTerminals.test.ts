@@ -69,3 +69,19 @@ test("labels and the last output line are what the dock shows", () => {
   assert.equal(lastOutputLine("   \n\t"), "");
   assert.equal(formatTerminalDuration("2026-09-07T00:00:00.000Z", "2026-09-07T00:01:05.000Z"), "1 分 5 秒");
 });
+
+test("error without exitCode is 失败; duration rejects bad stamps", () => {
+  assert.equal(dockStatusLabel({ status: "error" }), "失败");
+  assert.equal(dockStatusLabel({ status: "error", exitCode: 0 }), "失败");
+  assert.equal(formatTerminalDuration(undefined), "");
+  assert.equal(formatTerminalDuration("not-a-date", "2026-09-07T00:00:01.000Z"), "");
+  assert.equal(formatTerminalDuration("2026-09-07T00:00:00.000Z", "bogus"), "");
+});
+
+test("subject falls back when a shell has no command yet", () => {
+  const terminals = collectDockTerminals([
+    ev(1, "tool", shell("s9", { command: undefined, subject: "powershell.exe" })),
+  ]);
+  assert.equal(terminals[0]?.command, "powershell.exe");
+  assert.ok(isLiveTerminal(terminals[0]!));
+});

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   clampCrop,
   clampQuality,
+  clampUnit,
   codeToVk,
   moveCommand,
   parseControlMessage,
@@ -118,4 +119,13 @@ test("control messages are validated before they reach the injector", () => {
     maxWidth: 1920,
     crop: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
   });
+});
+
+test("tiny or overflowing crops are dropped by clampCrop", () => {
+  assert.equal(clampCrop({ x: 0.9, y: 0.9, w: 0.02, h: 0.02 }), undefined);
+  assert.ok(Math.abs((clampCrop({ x: 0.8, y: 0.8, w: 0.5, h: 0.5 })?.w ?? -1) - 0.2) < 1e-9);
+  assert.equal(clampCrop({ x: Number.NaN, y: 0.1, w: 0.4, h: 0.4 })?.x, 0);
+  assert.equal(clampUnit(-1), 0);
+  assert.equal(clampUnit(2), 1);
+  assert.equal(toAbsolute(0.5), 32768);
 });

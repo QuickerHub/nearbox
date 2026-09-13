@@ -43,3 +43,21 @@ test("adoptDetectedAgents carries models onto a replaced detection row", () => {
   assert.deepEqual(next[0]?.models, ["auto"]);
   assert.equal(next[0]?.modelsCheckedAt, "t0");
 });
+
+test("adoptDetectedAgents returns a fresh empty array for empty detection", () => {
+  const previous = [row("cursor")];
+  const next = adoptDetectedAgents(previous, []);
+  assert.deepEqual(next, []);
+  assert.notEqual(next, previous);
+});
+
+test("adoptDetectedAgents rebuilds when kind order changes", () => {
+  const previous = [row("cursor"), row("grok")];
+  const detected = [row("grok"), row("cursor")];
+  const next = adoptDetectedAgents(previous, detected);
+  assert.notEqual(next, previous);
+  assert.deepEqual(
+    next.map((item) => item.kind),
+    ["grok", "cursor"],
+  );
+});

@@ -27,3 +27,14 @@ test("countAllProjectRuns walks every project once", () => {
   assert.deepEqual(projectRunCount(counts, "missing"), { active: 0, total: 0 });
   assert.deepEqual(countProjectRuns(runs, "p1"), projectRunCount(counts, "p1"));
 });
+
+test("failed and cancelled runs count toward total but not active", () => {
+  const runs = [
+    { projectId: "p1", status: "failed" as const },
+    { projectId: "p1", status: "cancelled" as const },
+    { projectId: "p1", status: "succeeded" as const },
+    { projectId: "p1", status: "running" as const },
+  ];
+  assert.deepEqual(countProjectRuns(runs, "p1"), { active: 1, total: 4 });
+  assert.deepEqual(countAllProjectRuns([]).size, 0);
+});

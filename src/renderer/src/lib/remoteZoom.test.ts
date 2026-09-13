@@ -3,12 +3,18 @@ import test from "node:test";
 import {
   FULL_CROP,
   MAX_SCALE,
+  clampScale,
   clampTransform,
+  cropsClose,
+  distance,
   fitSize,
   fitTransform,
+  frameMatchesCrop,
   isFullCrop,
+  midpoint,
   panBy,
   pointToFrame,
+  qualityEqual,
   quantizeCrop,
   refitTransform,
   streamQuality,
@@ -199,4 +205,25 @@ test("wheelZoomFactor zooms in on wheel-up and is symmetric", () => {
   assert.equal(wheelZoomFactor(0), 1);
   assert.equal(wheelZoomFactor(Number.NaN), 1);
   close(wheelZoomFactor(-100_000), Math.exp(1), "huge deltas are capped");
+});
+
+test("distance, midpoint, cropsClose and qualityEqual are geometric helpers", () => {
+  assert.equal(distance({ x: 0, y: 0 }, { x: 3, y: 4 }), 5);
+  assert.deepEqual(midpoint({ x: 0, y: 0 }, { x: 10, y: 4 }), { x: 5, y: 2 });
+  assert.equal(clampScale(3), 3);
+  assert.equal(clampScale(0.5), 1);
+  assert.equal(clampScale(99), MAX_SCALE);
+  assert.equal(cropsClose({ x: 0.1, y: 0.1, w: 0.4, h: 0.4 }, { x: 0.11, y: 0.1, w: 0.4, h: 0.4 }, 0.02), true);
+  assert.equal(cropsClose({ x: 0, y: 0, w: 1, h: 1 }, { x: 0.1, y: 0, w: 0.9, h: 1 }, 0.02), false);
+  assert.equal(qualityEqual({ quality: 72, fps: 12, maxWidth: 1920 }, { quality: 72, fps: 12, maxWidth: 1920 }), true);
+  assert.equal(
+    qualityEqual(
+      { quality: 72, fps: 12, maxWidth: 1920, crop: { x: 0.1, y: 0.1, w: 0.4, h: 0.4 } },
+      { quality: 72, fps: 12, maxWidth: 1920, crop: { x: 0.1, y: 0.1, w: 0.4, h: 0.4 } },
+    ),
+    true,
+  );
+  assert.equal(qualityEqual({ quality: 72, fps: 12, maxWidth: 1920 }, { quality: 80, fps: 12, maxWidth: 1920 }), false);
+  assert.equal(frameMatchesCrop({ width: 400, height: 200 }, { width: 1600, height: 900 }, { x: 0, y: 0, w: 0.5, h: 0.5 }), false);
+  assert.equal(frameMatchesCrop({ width: 800, height: 450 }, frame, FULL_CROP), true);
 });

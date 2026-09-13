@@ -27,3 +27,15 @@ test("reuseMapValues keeps the same array until the revision bumps", () => {
   assert.equal(bumped.revision, 2);
   assert.equal(bumped.values.length, 1);
 });
+
+test("reuseMapValues builds when cache is null or undefined", () => {
+  const built = reuseMapValues(3, null, () => [{ id: "x" }]);
+  assert.equal(built.revision, 3);
+  assert.deepEqual(built.values, [{ id: "x" }]);
+  const again = reuseMapValues(3, undefined, () => [{ id: "y" }]);
+  assert.deepEqual(again.values, [{ id: "y" }]);
+});
+
+test("countOnlinePhones is zero for an empty device list", () => {
+  assert.equal(countOnlinePhones([]), 0);
+});
