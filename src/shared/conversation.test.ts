@@ -56,5 +56,8 @@ test("isTopLevelActiveRun ignores delegated children", () => {
   assert.equal(isTopLevelActiveRun(run("queued", { status: "queued" })), true);
   assert.equal(isTopLevelActiveRun(run("done", { status: "succeeded" })), false);
   assert.equal(isTopLevelActiveRun(run("child", { status: "running", parentRunId: "parent" })), false);
+  // null/empty mean "no parent" (top-level), matching plan/taskList `!parentRunId`
+  assert.equal(isTopLevelActiveRun(run("nullish", { status: "running", parentRunId: null as unknown as string })), true);
+  assert.equal(isTopLevelActiveRun(run("empty", { status: "running", parentRunId: "" })), true);
 });
 
