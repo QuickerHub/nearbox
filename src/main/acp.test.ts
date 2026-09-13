@@ -113,6 +113,20 @@ test("permission policy: full access allows, safe mode asks before commands", ()
   assert.deepEqual(choosePermission("full", { kind: "execute" }, options), { action: "select", optionId: "allow-once", rejected: false });
   assert.deepEqual(choosePermission("safe", { kind: "execute" }, options), { action: "ask" });
   assert.deepEqual(choosePermission("safe", { kind: "edit" }, options), { action: "select", optionId: "allow-once", rejected: false });
+  // Agents sometimes omit kind / use "other" while still sending the shell line.
+  assert.deepEqual(
+    choosePermission("safe", { kind: "other", rawInput: { command: "rm -rf /tmp/x" } }, options),
+    { action: "ask" },
+  );
+  assert.deepEqual(
+    choosePermission("safe", { rawInput: { cmd: "npm test" } }, options),
+    { action: "ask" },
+  );
+  // File work without a command still auto-allows in safe mode.
+  assert.deepEqual(
+    choosePermission("safe", { kind: "other", rawInput: { path: "src/a.ts" } }, options),
+    { action: "select", optionId: "allow-once", rejected: false },
+  );
   // Some CLIs only offer "always"; full access still has to pick it or every command dies.
   assert.deepEqual(choosePermission("full", { kind: "execute" }, [{ optionId: "x", kind: "allow_always" }]), { action: "select", optionId: "x", rejected: false });
 });

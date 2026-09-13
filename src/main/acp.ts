@@ -856,7 +856,16 @@ export function reviewOptions(options: PermissionOption[]): { allow?: Permission
 
 export function isExecuteTool(toolCall: Record<string, unknown>): boolean {
   const kind = String(toolCall.kind ?? "");
-  return kind === "execute" || kind === "shell";
+  if (kind === "execute" || kind === "shell") {
+    return true;
+  }
+  // Some agents omit kind (or use "other") but still put the shell line in rawInput.
+  // Safe mode must ask before those run, same as an explicit execute call.
+  const raw = toolCall.rawInput && typeof toolCall.rawInput === "object" ? (toolCall.rawInput as Record<string, unknown>) : {};
+  const command = [toolCall.command, raw.command, raw.cmd, raw.script, raw.commandLine].find(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  return Boolean(command);
 }
 
 /**
