@@ -17,8 +17,9 @@ Merge **FIFO from #2 upward**. Do **not** merge #1 onto main.
 | **#8** | `opt/local-batch-8` | composer chip-row memo, fake-host warm-cancel smoke, 0010 lean note |
 | **#9** | `opt/local-batch-9` | hung-prompt ACP smoke, snapshot `runs` reuse ≤120, live-event catch-up helpers |
 | **#10** | `opt/local-batch-10` | devices/hostAddresses snapshot reuse, Chinese run duration, `isTopLevelActiveRun` null-safety, file sanitize tests |
+| **#11** | `opt/local-batch-11` | tray run-count/labels + skip unchanged Menu, `hasParentRunId` / RunBlock null-safety, dock duration dedupe |
 
-Exact order: **#2 → #3 → #4 → #5 → #6 → #7 → #8 → #9 → #10**.
+Exact order: **#2 → #3 → #4 → #5 → #6 → #7 → #8 → #9 → #10 → #11**.
 
 Each batch branch was cut from the previous (`opt/local-batch-N` from `opt/local-batch-(N-1)`), so merging in order is a fast-forward-friendly stack onto `main`.
 
@@ -37,4 +38,4 @@ Overlapping fixes (warm session-first model mapping, live event batching, run-st
 
 ## Backlogs
 
-Per-batch next-hour notes live under `docs/backlog-local-batch-*.md` (latest: `docs/backlog-local-batch-10.md` after #10 lands).
+Per-batch next-hour notes live under `docs/backlog-local-batch-*.md` (latest: `docs/backlog-local-batch-11.md` after #11 lands).
