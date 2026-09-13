@@ -80,7 +80,7 @@ export function describeArgs(
   }
   switch (kind) {
     case "shell": {
-      const command = pickString(args, ["command", "cmd", "script"]);
+      const command = pickCommand(args, ["command", "cmd", "script"]);
       call.command = command || undefined;
       call.subject = command || undefined;
       call.cwd = pickString(args, DIR_KEYS.filter((key) => key !== "path")) || undefined;
@@ -319,6 +319,30 @@ export function pickString(record: Record<string, unknown>, keys: string[]): str
     const value = record[key];
     if (typeof value === "string" && value.trim()) {
       return value;
+    }
+  }
+  return "";
+}
+
+/** Shell argv may arrive as a string or as a string/number array; join arrays for display. */
+export function commandText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (Array.isArray(value) && value.length) {
+    if (!value.every((item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean")) {
+      return "";
+    }
+    return value.map(String).join(" ").trim();
+  }
+  return "";
+}
+
+export function pickCommand(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const text = commandText(record[key]);
+    if (text) {
+      return text;
     }
   }
   return "";

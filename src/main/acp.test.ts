@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { AcpConnection, type AcpModel, choosePermission, mapCursorModel, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
+import { AcpConnection, type AcpModel, choosePermission, describePermission, mapCursorModel, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
 
 /** A fake agent on the other end of the pipes. */
 function pipes() {
@@ -153,4 +153,24 @@ test("list-models aliases map to ACP presets only when they mean the same config
   assert.equal(mapCursorModel("claude-4.5-sonnet-thinking", PRESETS), "claude-sonnet-4-5[thinking=true,context=200k]");
   assert.equal(mapCursorModel("no-such-model", PRESETS), undefined);
   assert.equal(mapCursorModel("", PRESETS), undefined);
+});
+
+test("describePermission reads id/cmd/script and argv arrays", () => {
+  assert.deepEqual(
+    describePermission({
+      id: "tc-9",
+      kind: "execute",
+      rawInput: { cmd: "  rm -rf /tmp/x  " },
+    }),
+    { toolCallId: "tc-9", title: "rm -rf /tmp/x", command: "rm -rf /tmp/x" },
+  );
+  assert.deepEqual(
+    describePermission({
+      toolCallId: "tc-10",
+      title: "Run",
+      rawInput: { script: ["npm", "test", "--", "--runInBand"] },
+    }),
+    { toolCallId: "tc-10", title: "Run", command: "npm test -- --runInBand" },
+  );
+  assert.deepEqual(describePermission({ kind: "read" }), { toolCallId: "", title: "read", command: undefined });
 });

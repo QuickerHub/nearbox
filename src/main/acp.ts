@@ -876,9 +876,36 @@ export function choosePermission(access: AgentAccess, toolCall: Record<string, u
 
 export function describePermission(toolCall: Record<string, unknown>): { toolCallId: string; title: string; command?: string } {
   const raw = toolCall.rawInput && typeof toolCall.rawInput === "object" ? (toolCall.rawInput as Record<string, unknown>) : {};
-  const command = [raw.command, toolCall.command, raw.commandLine].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim();
-  const title = [toolCall.title, command, toolCall.kind].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim() ?? "命令";
-  return { toolCallId: String(toolCall.toolCallId ?? ""), title, command };
+  // Agents vary: toolCallId vs id, command vs cmd/script, and argv arrays instead of a string.
+  const command =
+    [raw.command, raw.cmd, raw.script, toolCall.command, raw.commandLine, toolCall.commandLine]
+      .map(permissionCommandText)
+      .find((value) => value.length > 0) || undefined;
+  const title =
+    [toolCall.title, command, toolCall.kind]
+      .find((value): value is string => typeof value === "string" && value.trim().length > 0)
+      ?.trim() ?? "命令";
+  const idRaw = toolCall.toolCallId ?? toolCall.id;
+  const toolCallId =
+    typeof idRaw === "number" && Number.isFinite(idRaw)
+      ? String(idRaw)
+      : typeof idRaw === "string"
+        ? idRaw.trim()
+        : "";
+  return { toolCallId, title, command };
+}
+
+function permissionCommandText(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (Array.isArray(value) && value.length) {
+    if (!value.every((item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean")) {
+      return "";
+    }
+    return value.map(String).join(" ").trim();
+  }
+  return "";
 }
 
 /**

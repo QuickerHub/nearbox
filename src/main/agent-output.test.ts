@@ -541,3 +541,37 @@ test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(125_000), "2 分 5 秒");
   assert.equal(formatMsDuration(3_725_000), "1 小时 2 分");
 });
+
+test("empty tool ids get distinct anon ids across messages", () => {
+  const parser = createOutputParser("acp");
+  const first = parser.push({ sessionUpdate: "tool_call", toolCallId: "", title: "one", kind: "execute", status: "pending", rawInput: { command: "echo 1" } });
+  const second = parser.push({ sessionUpdate: "tool_call", toolCallId: "", title: "two", kind: "execute", status: "pending", rawInput: { command: "echo 2" } });
+  const a = first.events.find((event) => event.tool)?.tool;
+  const b = second.events.find((event) => event.tool)?.tool;
+  assert.ok(a?.id);
+  assert.ok(b?.id);
+  assert.notEqual(a?.id, b?.id);
+  assert.equal(a?.command, "echo 1");
+  assert.equal(b?.command, "echo 2");
+});
+
+test("cancelled ACP tools become error instead of spinning forever", () => {
+  const parser = createOutputParser("acp");
+  const events = [
+    ...parser.push({ sessionUpdate: "tool_call", toolCallId: "c1", title: "`sleep 60`", kind: "execute", status: "pending", rawInput: { command: "sleep 60" } }).events,
+    ...parser.push({ sessionUpdate: "tool_call_update", toolCallId: "c1", status: "cancelled" }).events,
+  ];
+  const tools = events.filter((event) => event.tool).map((event) => event.tool!);
+  assert.equal(tools.at(-1)?.status, "error");
+  assert.equal(tools.at(-1)?.error, "命令已取消");
+});
+
+test("claude error_* result subtypes are failures even when is_error is omitted", () => {
+  const parser = createOutputParser("claude");
+  const all = feedAll(parser, [
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"hit the wall"}]}}',
+    '{"type":"result","subtype":"error_max_turns","duration_ms":100,"result":"hit the wall"}',
+  ]);
+  assert.equal(all.isError, true);
+  assert.equal(all.result, "hit the wall");
+});
