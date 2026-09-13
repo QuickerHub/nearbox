@@ -324,7 +324,9 @@ export function sessionCloseAdvertised(agentCapabilities: unknown): boolean {
   if (!agentCapabilities || typeof agentCapabilities !== "object") {
     return false;
   }
-  const session = (agentCapabilities as { sessionCapabilities?: unknown }).sessionCapabilities;
+  const caps = agentCapabilities as Record<string, unknown>;
+  // Some stacks snake_case the capability object (`session_capabilities`).
+  const session = caps.sessionCapabilities ?? caps.session_capabilities;
   if (session == null) {
     return false;
   }
@@ -333,6 +335,29 @@ export function sessionCloseAdvertised(agentCapabilities: unknown): boolean {
   }
   const close = (session as { close?: unknown }).close;
   return close != null && close !== false;
+}
+
+/** Allow/reject kind tokens: camelCase (`allowOnce`) and spaces become snake_case. Hyphen forms remain #86. */
+
+/** Initialize may nest capabilities under `agentCapabilities` or `agent_capabilities`. */
+export function agentCapabilitiesOf(result: Record<string, unknown> | null | undefined): unknown {
+  if (!result) {
+    return undefined;
+  }
+  return result.agentCapabilities ?? result.agent_capabilities;
+}
+export function permissionKindKey(kind: string): string {
+  return kind
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/\s+/g, "_")
+    .toLowerCase();
+}
+
+/** True when a permission option is a reject/deny choice (case / camelCase tolerant). */
+export function isRejectPermissionKind(kind: string): boolean {
+  const key = permissionKindKey(kind);
+  return key.startsWith("reject") || key.startsWith("deny");
 }
 
 /**
@@ -415,7 +440,7 @@ export class AgentHost extends EventEmitter {
         INITIALIZE_TIMEOUT_MS,
       ),
     ]).then((result) => {
-      this.supportsSessionClose = sessionCloseAdvertised(result?.agentCapabilities);
+      this.supportsSessionClose = sessionCloseAdvertised(agentCapabilitiesOf(result));
       // One line per host start so we can see whether Cursor (and peers) advertise close.
       this.log(
         `[${this.kind}] sessionCapabilities.close ${this.supportsSessionClose ? "advertised" : "absent"}`,
@@ -847,7 +872,8 @@ export type PermissionDecision = { action: "select"; optionId: string | null; re
 
 /** Allow/deny pair the UI can show; prefers once over always. */
 export function reviewOptions(options: PermissionOption[]): { allow?: PermissionOption; reject?: PermissionOption } {
-  const kinds = new Map(options.map((option) => [option.kind, option]));
+  // Match allowOnce / Allow_Once; hyphenated allow-once remains round-15 (#86).
+  const kinds = new Map(options.map((option) => [permissionKindKey(option.kind), option]));
   return {
     allow: kinds.get("allow_once") ?? kinds.get("allow_always"),
     reject: kinds.get("reject_once") ?? kinds.get("reject_always"),

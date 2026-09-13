@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { AcpConnection, type AcpModel, choosePermission, mapCursorModel, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
+import { AcpConnection, type AcpModel, choosePermission, agentCapabilitiesOf, isRejectPermissionKind, mapCursorModel, permissionKindKey, reviewOptions, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
 
 /** A fake agent on the other end of the pipes. */
 function pipes() {
@@ -103,6 +103,29 @@ test("sessionCloseAdvertised follows ACP empty-object capability shape", () => {
   assert.equal(sessionCloseAdvertised({ sessionCapabilities: { close: {} } }), true);
   assert.equal(sessionCloseAdvertised({ sessionCapabilities: { close: true } }), true);
   assert.equal(sessionCloseAdvertised({ sessionCapabilities: { close: null } }), false);
+  assert.equal(sessionCloseAdvertised({ session_capabilities: { close: {} } }), true);
+  assert.equal(sessionCloseAdvertised({ session_capabilities: { close: false } }), false);
+  assert.equal(sessionCloseAdvertised(agentCapabilitiesOf({ agent_capabilities: { session_capabilities: { close: {} } } })), true);
+  assert.equal(sessionCloseAdvertised(agentCapabilitiesOf({ agentCapabilities: { sessionCapabilities: { close: true } } })), true);
+});
+
+test("permission kinds accept camelCase allowOnce / RejectOnce", () => {
+  assert.equal(permissionKindKey("allowOnce"), "allow_once");
+  assert.equal(permissionKindKey("RejectOnce"), "reject_once");
+  assert.equal(isRejectPermissionKind("REJECT_ONCE"), true);
+  assert.equal(isRejectPermissionKind("DenyAlways"), true);
+  assert.equal(isRejectPermissionKind("allow_once"), false);
+  const options = [
+    { optionId: "a", kind: "allowOnce" },
+    { optionId: "r", kind: "RejectOnce" },
+  ];
+  assert.equal(reviewOptions(options).allow?.optionId, "a");
+  assert.equal(reviewOptions(options).reject?.optionId, "r");
+  assert.deepEqual(choosePermission("full", { kind: "execute" }, options), {
+    action: "select",
+    optionId: "a",
+    rejected: false,
+  });
 });
 test("permission policy: full access allows, safe mode asks before commands", () => {
   const options = [

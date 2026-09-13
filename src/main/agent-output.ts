@@ -609,8 +609,15 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
       case "file_change": {
         const changes = asArray(item.changes).filter(isRecord);
         const files = changes.map((change) => String(change.path ?? "")).filter(Boolean);
-        const kinds = new Set(changes.map((change) => String(change.kind ?? "update")));
-        const kind: ToolKind = kinds.size === 1 && kinds.has("add") ? "write" : kinds.size === 1 && kinds.has("delete") ? "delete" : "edit";
+        const kinds = new Set(changes.map((change) => String(change.kind ?? "update").toLowerCase()));
+        const writeKinds = ["add", "create", "write"];
+        const deleteKinds = ["delete", "remove", "unlink"];
+        const kind: ToolKind =
+          kinds.size === 1 && writeKinds.includes([...kinds][0]!)
+            ? "write"
+            : kinds.size === 1 && deleteKinds.includes([...kinds][0]!)
+              ? "delete"
+              : "edit";
         sink.tool(
           events,
           track(id, {
@@ -781,8 +788,11 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       if (typeof data.sessionId === "string") {
         out.sessionId = data.sessionId;
       }
-      const stop = String(data.stopReason ?? "end_turn");
-      const isError = stop !== "end_turn" && stop !== "max_turns" && stop !== "cancelled";
+      const stop = String(data.stopReason ?? "end_turn").trim();
+      // Soft caps: max_turns (legacy) and max_requests (alias of ACP max_turn_requests).
+      // max_tokens / max_turn_requests remain round-11 (#71); canceled spelling remains #86.
+      const softStop = stop === "end_turn" || stop === "max_turns" || stop === "max_requests";
+      const isError = !softStop && stop !== "cancelled";
       out.isError = isError;
       const costUsd = typeof data.total_cost_usd === "number" ? data.total_cost_usd : undefined;
       out.usage = rememberUsage(data.usage ?? data, {
@@ -791,7 +801,10 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       });
       events.push({
         kind: "result",
-        text: formatOutcome(stop === "cancelled" ? "已取消" : isError ? `结束 (${stop})` : "完成", { usage: out.usage ?? usage(), costUsd }),
+        text: formatOutcome(
+          stop === "cancelled" ? "已取消" : stop === "max_requests" ? "已达轮次上限" : isError ? `结束 (${stop})` : "完成",
+          { usage: out.usage ?? usage(), costUsd },
+        ),
       });
       return;
     }
@@ -881,9 +894,24 @@ function describeRawOutput(kind: ToolKind, rawOutput: unknown): Partial<ToolCall
     if (known) {
       return known;
     }
+    // Some hosts only send `{ message }` / `{ result }` / `{ text }` for tool output.
+    const plain = pickStringish(rawOutput, ["message", "result", "text"]);
+    if (plain) {
+      return { output: kind === "shell" ? clipTail(plain) : clipHead(plain) };
+    }
   }
   const text = typeof rawOutput === "string" ? rawOutput : prettyJson(rawOutput);
   return text ? { output: kind === "shell" ? clipTail(text) : clipHead(text) } : {};
+}
+
+function pickStringish(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+  }
+  return "";
 }
 
 function prettyJson(value: unknown): string {

@@ -534,6 +534,46 @@ function collect(parser: ReturnType<typeof createOutputParser>, steps: (() => Re
   return { events, sessionId, modelLabel, sessionTitle, result, isError, usage };
 }
 
+
+
+test("codex file_change create/remove map to write/delete", () => {
+  const parser = createOutputParser("codex");
+  const created = parser.push({
+    type: "item.completed",
+    item: { id: "f1", type: "file_change", changes: [{ path: "new.ts", kind: "create" }], status: "completed" },
+  });
+  assert.equal(created.events.find((event) => event.tool)?.tool?.kind, "write");
+  const removed = parser.push({
+    type: "item.completed",
+    item: { id: "f2", type: "file_change", changes: [{ path: "old.ts", kind: "remove" }], status: "completed" },
+  });
+  assert.equal(removed.events.find((event) => event.tool)?.tool?.kind, "delete");
+});
+
+test("ACP max_requests is a soft stop, not a failure", () => {
+  const all = createOutputParser("acp").push({ type: "end", stopReason: "max_requests" });
+  assert.equal(all.isError, false);
+  assert.match(all.events.at(-1)?.text ?? "", /已达轮次上限/);
+});
+
+test("ACP rawOutput message/result/text become tool output", () => {
+  const parser = createOutputParser("acp");
+  const message = parser.push({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "m1",
+    status: "completed",
+    rawOutput: { message: "done via message" },
+  });
+  assert.equal(message.events.find((event) => event.tool)?.tool?.output, "done via message");
+  const result = parser.push({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "m2",
+    status: "completed",
+    rawOutput: { result: "done via result" },
+  });
+  assert.equal(result.events.find((event) => event.tool)?.tool?.output, "done via result");
+});
+
 test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(400), "400 毫秒");
   assert.equal(formatMsDuration(1200), "1 秒");
