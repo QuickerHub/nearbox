@@ -27,7 +27,7 @@ export function toolKindOf(rawName: string): ToolKind {
   if (/^(read|read_file|readfile|view|cat|view_file|read_files)$/.test(id)) {
     return "read";
   }
-  if (/^(write|write_file|writefile|create_file|create|save_file)$/.test(id)) {
+  if (/^(write|write_file|writefile|write_to_file|create_file|create_new_file|create|save_file)$/.test(id)) {
     return "write";
   }
   if (/^(edit|edit_file|editfile|str_replace|strreplace|str_replace_editor|apply_patch|multi_edit|multiedit|search_replace|patch|notebook_edit)$/.test(id)) {
@@ -42,7 +42,7 @@ export function toolKindOf(rawName: string): ToolKind {
   if (/^(grep|search|codebase_search|sem_search|semsearch|ripgrep|grep_search|search_files|search_code)$/.test(id)) {
     return "grep";
   }
-  if (/^(ls|list_dir|list|list_directory|listdir|tree)$/.test(id)) {
+  if (/^(ls|list_dir|list|list_directory|listdir|list_files|tree)$/.test(id)) {
     return "ls";
   }
   if (/^(web_search|websearch|search_web|fetch|web_fetch|webfetch|fetch_url|browse|read_url|http)$/.test(id)) {
@@ -181,13 +181,15 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
         patch.linesAdded = typeof body.linesAdded === "number" ? body.linesAdded : undefined;
         patch.linesRemoved = typeof body.linesRemoved === "number" ? body.linesRemoved : undefined;
       }
-      if (typeof body.path === "string" && body.path) {
-        patch.files = [body.path];
+      const path = pickString(body, ["path", "file_path", "filePath", "target_file", "targetFile", "file", "filename"]);
+      if (path) {
+        patch.files = [path];
       }
       break;
     }
     case "read": {
-      patch.output = typeof body.content === "string" ? clipHead(body.content) : undefined;
+      const content = pickString(body, ["content", "text"]);
+      patch.output = content ? clipHead(content) : undefined;
       break;
     }
     case "glob":
@@ -235,8 +237,10 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
  */
 export function describeRawResult(result: Record<string, unknown>): Partial<ToolCall> | null {
   const values = Object.values(result);
-  if (typeof result.content === "string" && values.every((value) => !isRecord(value) && !Array.isArray(value))) {
-    return { output: clipHead(result.content) };
+  const text =
+    typeof result.content === "string" ? result.content : typeof result.text === "string" ? result.text : "";
+  if (text && values.every((value) => !isRecord(value) && !Array.isArray(value))) {
+    return { output: clipHead(text) };
   }
   if (typeof result.totalMatches === "number") {
     return { output: `${result.totalMatches} 处匹配${result.truncated === true ? "（结果已截断）" : ""}` };

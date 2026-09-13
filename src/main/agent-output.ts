@@ -436,8 +436,11 @@ interface DialectContext {
 function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink, track, tools, rememberUsage, usage }: DialectContext): void {
   const type = String(data.type ?? "");
   const events = out.events;
-  if (typeof data.session_id === "string" && data.session_id) {
-    out.sessionId = data.session_id;
+  {
+    const sessionId = firstNonEmptyString(data.session_id, data.sessionId);
+    if (sessionId) {
+      out.sessionId = sessionId;
+    }
   }
   if (type === "usage") {
     out.usage = rememberUsage(data);
@@ -544,8 +547,9 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
   const type = String(data.type ?? "");
   const events = out.events;
   if (type === "thread.started") {
-    if (typeof data.thread_id === "string") {
-      out.sessionId = data.thread_id;
+    const threadId = firstNonEmptyString(data.thread_id, data.threadId);
+    if (threadId) {
+      out.sessionId = threadId;
     }
     return;
   }
@@ -591,7 +595,12 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
       case "command_execution": {
         const command = String(item.command ?? "");
         const exitCode = typeof item.exit_code === "number" ? item.exit_code : undefined;
-        const output = typeof item.aggregated_output === "string" ? item.aggregated_output : "";
+        const output =
+          typeof item.aggregated_output === "string"
+            ? item.aggregated_output
+            : typeof item.aggregatedOutput === "string"
+              ? item.aggregatedOutput
+              : "";
         sink.tool(
           events,
           track(id, {
@@ -717,7 +726,7 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
     case "tool_use": {
       const id = String(data.toolCallId ?? data.id ?? `tool-${events.length}`);
       const title = String(data.title ?? data.name ?? data.tool ?? "tool").replace(/^`(.*)`$/s, "$1");
-      const rawInput = isRecord(data.rawInput) ? data.rawInput : isRecord(data.input) ? data.input : {};
+      const rawInput = toolInputOf(data.rawInput ?? data.input);
       const described = describeArgs(title, rawInput, undefined, acpKind(String(data.kind ?? ""), title));
       const files = acpLocations(data);
       sink.tool(
@@ -738,7 +747,8 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       const id = String(data.toolCallId ?? data.id ?? "");
       const previous = tools.get(id);
       // cursor-agent announces a call first and fills in what it is about (title, arguments, files) a moment later.
-      const rawInput = isRecord(data.rawInput) && Object.keys(data.rawInput).length ? data.rawInput : undefined;
+      const parsedInput = toolInputOf(data.rawInput ?? data.input);
+      const rawInput = Object.keys(parsedInput).length ? parsedInput : undefined;
       const title = typeof data.title === "string" ? data.title.replace(/^`(.*)`$/s, "$1") : undefined;
       const files = acpLocations(data);
       const kindHint = typeof data.kind === "string" ? acpKind(data.kind, title ?? "") : previous?.kind ?? acpKind("", title ?? "");
@@ -778,8 +788,11 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
     }
     case "end": {
       sink.flush(events);
-      if (typeof data.sessionId === "string") {
-        out.sessionId = data.sessionId;
+      {
+        const sessionId = firstNonEmptyString(data.sessionId, data.session_id, data.sessionID);
+        if (sessionId) {
+          out.sessionId = sessionId;
+        }
       }
       const stop = String(data.stopReason ?? "end_turn");
       const isError = stop !== "end_turn" && stop !== "max_turns" && stop !== "cancelled";
@@ -958,7 +971,7 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, 
     const state = isRecord(part.state) ? part.state : {};
     const name = String(part.tool ?? part.name ?? "tool");
     const input = isRecord(state.input) ? state.input : isRecord(part.input) ? part.input : {};
-    const id = String(part.callID ?? part.callId ?? part.id ?? `tool-${events.length}`);
+    const id = String(part.callID ?? part.callId ?? part.call_id ?? part.id ?? `tool-${events.length}`);
     const stateStatus = String(state.status ?? "");
     const status: ToolStatus = stateStatus === "completed" ? "ok" : stateStatus === "error" ? "error" : "running";
     const described = describeArgs(name, input);
@@ -1045,6 +1058,33 @@ function textOf(block: unknown): string {
     return block.text;
   }
   return "";
+}
+
+
+/** First non-empty trimmed string among candidates. */
+function firstNonEmptyString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+/** tool rawInput / input may arrive as an object or a JSON string. */
+function toolInputOf(value: unknown): Record<string, unknown> {
+  if (isRecord(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return isRecord(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
 }
 
 export function truncate(value: string, max: number): string {
