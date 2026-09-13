@@ -16,6 +16,9 @@ test("assertAllowedFile rejects executables and scripts", () => {
   assert.throws(() => assertAllowedFile("x.ps1", "text/plain"), /可执行文件或脚本/);
   assert.throws(() => assertAllowedFile("ok.bin", "application/x-msdownload"), /可执行文件/);
   assert.throws(() => assertAllowedFile("app.apk", "application/vnd.android.package-archive"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("desk.cpl", "application/octet-stream"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("pkg.msix", "application/octet-stream"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("run.command", "text/plain"), /可执行文件或脚本/);
   assert.doesNotThrow(() => assertAllowedFile("note.md", "text/markdown"));
   assert.doesNotThrow(() => assertAllowedFile("shot.png", "image/png"));
 });
