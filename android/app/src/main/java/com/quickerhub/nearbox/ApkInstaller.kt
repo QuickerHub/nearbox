@@ -45,8 +45,13 @@ object ApkInstaller {
 
     private fun download(activity: Activity, url: String): File {
         val dest = File(activity.cacheDir, "nearbox-update.apk")
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            instanceFollowRedirects = true
+        val parsed = URL(url)
+        val path = parsed.path.orEmpty()
+        if (parsed.protocol != "http" || !path.endsWith("/app/nearbox.apk")) {
+            throw IllegalStateException("只能从配对的电脑下载安装包。")
+        }
+        val connection = (parsed.openConnection() as HttpURLConnection).apply {
+            instanceFollowRedirects = false
             connectTimeout = 15_000
             readTimeout = 60_000
             setRequestProperty("User-Agent", "Nearbox")
