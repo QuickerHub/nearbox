@@ -119,6 +119,10 @@ function renderInline(text: string): ReactNode[] {
         return <code key={key}>{piece.text}</code>;
       case "bold":
         return <strong key={key}>{renderInline(piece.text)}</strong>;
+      case "italic":
+        return <em key={key}>{renderInline(piece.text)}</em>;
+      case "strike":
+        return <del key={key}>{renderInline(piece.text)}</del>;
       case "link":
         return (
           <a key={key} className="md__link" href={piece.href} target="_blank" rel="noreferrer noopener" onClick={(event) => openHref(event, piece.href)}>

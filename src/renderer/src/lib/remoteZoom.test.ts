@@ -200,3 +200,20 @@ test("wheelZoomFactor zooms in on wheel-up and is symmetric", () => {
   assert.equal(wheelZoomFactor(Number.NaN), 1);
   close(wheelZoomFactor(-100_000), Math.exp(1), "huge deltas are capped");
 });
+
+test("non-finite geometry does not poison fit, pan, tap, or stream quality", () => {
+  assert.deepEqual(fitSize({ width: Number.NaN, height: 100 }, phone), { width: 0, height: 0 });
+  assert.deepEqual(fitSize(frame, { width: Number.POSITIVE_INFINITY, height: 640 }), { width: 0, height: 0 });
+  const start = zoomTo(fitTransform(phoneFit, phone), 3, phoneFit, phone);
+  const poisoned = panBy(start, Number.NaN, Number.NaN, phoneFit, phone);
+  assert.deepEqual(poisoned, start);
+  const moved = panBy(start, -40, 0, phoneFit, phone);
+  assert.notEqual(moved.x, start.x);
+  const tap = pointToFrame({ x: Number.NaN, y: 320 }, fitTransform(phoneFit, phone), phoneFit)!;
+  assert.equal(tap.x, 0);
+  assert.equal(tap.inside, false);
+  const crop = { x: 0.2, y: 0.1, w: 0.4, h: 0.5 };
+  const quality = streamQuality({ quality: 72, fps: 12, maxWidth: 1920 }, crop, { width: Number.NaN, height: Number.NaN }, 2);
+  assert.equal(Number.isFinite(quality.maxWidth), true);
+  assert.ok(quality.maxWidth >= 960);
+});

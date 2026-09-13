@@ -45,7 +45,7 @@ export function parseBlocks(text: string): MdBlock[] {
     }
     const heading = HEADING.exec(line);
     if (heading) {
-      blocks.push({ type: "heading", level: heading[1]!.length, text: heading[2] ?? "" });
+      blocks.push({ type: "heading", level: heading[1]!.length, text: trimAtxHeading(heading[2] ?? "") });
       index += 1;
       continue;
     }
@@ -99,6 +99,12 @@ function startsBlock(lines: string[], index: number): boolean {
     return true;
   }
   return Boolean(fenceOpen(line)) || HEADING.test(line) || startsTable(lines, index) || (HR.test(line) && !LIST.test(line)) || QUOTE.test(line) || LIST.test(line);
+}
+
+
+/** Drop CommonMark ATX closing hashes (`## Title ##` → `Title`). */
+function trimAtxHeading(text: string): string {
+  return text.replace(/[ \t]+#+[ \t]*$/, "").trimEnd();
 }
 
 function fenceOpen(line: string): { char: string; length: number; lang: string } | null {

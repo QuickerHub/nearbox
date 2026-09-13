@@ -105,3 +105,9 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+test("ATX headings drop a CommonMark closing hash run", () => {
+  assert.deepEqual(parseBlocks("## Title ##"), [{ type: "heading", level: 2, text: "Title" }]);
+  assert.deepEqual(parseBlocks("### Still open"), [{ type: "heading", level: 3, text: "Still open" }]);
+  assert.deepEqual(parseBlocks("# Tag with # inside"), [{ type: "heading", level: 1, text: "Tag with # inside" }]);
+});

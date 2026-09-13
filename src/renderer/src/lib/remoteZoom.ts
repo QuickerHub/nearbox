@@ -33,7 +33,7 @@ export function clampScale(scale: number): number {
 
 /** Largest box with the frame's aspect ratio that fits inside the viewport. */
 export function fitSize(frame: Size, viewport: Size): Size {
-  if (frame.width <= 0 || frame.height <= 0 || viewport.width <= 0 || viewport.height <= 0) {
+  if (!Number.isFinite(frame.width) || !Number.isFinite(frame.height) || !Number.isFinite(viewport.width) || !Number.isFinite(viewport.height) || frame.width <= 0 || frame.height <= 0 || viewport.width <= 0 || viewport.height <= 0) {
     return { width: 0, height: 0 };
   }
   const ratio = Math.min(viewport.width / frame.width, viewport.height / frame.height);
@@ -101,7 +101,9 @@ export function zoomTo(t: ViewTransform, scale: number, fit: Size, viewport: Siz
 }
 
 export function panBy(t: ViewTransform, dx: number, dy: number, fit: Size, viewport: Size): ViewTransform {
-  return clampTransform({ scale: t.scale, x: t.x + dx, y: t.y + dy }, fit, viewport);
+  const safeDx = Number.isFinite(dx) ? dx : 0;
+  const safeDy = Number.isFinite(dy) ? dy : 0;
+  return clampTransform({ scale: t.scale, x: t.x + safeDx, y: t.y + safeDy }, fit, viewport);
 }
 
 /**
@@ -135,6 +137,9 @@ export interface FramePoint extends Point {
 }
 
 function clamp01(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
   return value < 0 ? 0 : value > 1 ? 1 : value;
 }
 
@@ -260,11 +265,14 @@ export function streamQuality(
     return { quality: preset.quality, fps: preset.fps, maxWidth: preset.maxWidth };
   }
   const pixelRatio = Math.min(3.5, Math.max(1, Number.isFinite(dpr) ? dpr : 1));
-  const longest = Math.max(viewport.width, viewport.height) * pixelRatio;
+  const vw = Number.isFinite(viewport.width) ? viewport.width : 0;
+  const vh = Number.isFinite(viewport.height) ? viewport.height : 0;
+  const longest = Math.max(vw, vh) * pixelRatio;
+  const maxWidth = Number.isFinite(longest) && longest > 0 ? Math.min(3840, Math.max(960, Math.round(longest))) : Math.max(960, preset.maxWidth);
   return {
     quality: Math.max(preset.quality, 82),
     fps: Math.min(preset.fps, 10),
-    maxWidth: Math.min(3840, Math.max(960, Math.round(longest))),
+    maxWidth,
     crop,
   };
 }
