@@ -67,14 +67,8 @@ function parseCursorModels(stdout: string): AgentModel[] {
  * Hidden entries are internal (auto-review, reserves) and not meant for `-m`.
  */
 function parseCodexModels(stdout: string): AgentModel[] {
-  const start = stdout.indexOf("{");
-  if (start === -1) {
-    return [];
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdout.slice(start));
-  } catch {
+  const parsed = parseLeadingJsonObject(stdout);
+  if (!parsed) {
     return [];
   }
   const list = parsed && typeof parsed === "object" ? (parsed as { models?: unknown }).models : undefined;
@@ -107,11 +101,28 @@ function parseCodexModels(stdout: string): AgentModel[] {
 function parseGrokModels(stdout: string): AgentModel[] {
   const out: AgentModel[] = [];
   for (const raw of lines(stdout)) {
-    const match = /^[*•-]\s+(\S+)(?:\s+\((default|current)\))?$/i.exec(raw);
+    const match = /^[*•-]\s+(\S+)(.*)$/.exec(raw);
     if (!match) {
       continue;
     }
-    pushModel(out, { id: match[1]!, isDefault: match[2]?.toLowerCase() === "default" || undefined });
+    let rest = match[2] ?? "";
+    let isDefault = false;
+    // Markers come last, possibly both: "grok-4.6 (default) (current)".
+    for (;;) {
+      const marker = /\s*\((default|current)\)$/i.exec(rest);
+      if (!marker) {
+        break;
+      }
+      if (marker[1]!.toLowerCase() === "default") {
+        isDefault = true;
+      }
+      rest = rest.slice(0, marker.index).trimEnd();
+    }
+    if (rest.trim()) {
+      // Not a bare model bullet (e.g. prose after the id).
+      continue;
+    }
+    pushModel(out, { id: match[1]!, isDefault: isDefault || undefined });
   }
   return out;
 }
@@ -125,6 +136,64 @@ function parseOpencodeModels(stdout: string): AgentModel[] {
     }
   }
   return out;
+}
+
+/** First top-level JSON object in `text`, tolerant of leading logs and trailing chatter. */
+function parseLeadingJsonObject(text: string): unknown | undefined {
+  let from = 0;
+  while (from < text.length) {
+    const start = text.indexOf("{", from);
+    if (start === -1) {
+      return undefined;
+    }
+    const parsed = parseJsonObjectAt(text, start);
+    if (parsed !== undefined) {
+      return parsed;
+    }
+    from = start + 1;
+  }
+  return undefined;
+}
+
+function parseJsonObjectAt(text: string, start: number): unknown | undefined {
+  try {
+    return JSON.parse(text.slice(start));
+  } catch {
+    // fall through: may be a false `{` in a log line, or trailing chatter
+  }
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      depth += 1;
+    } else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1));
+        } catch {
+          return undefined;
+        }
+      }
+    }
+  }
+  return undefined;
 }
 
 function lines(stdout: string): string[] {

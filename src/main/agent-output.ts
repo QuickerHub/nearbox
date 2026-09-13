@@ -864,10 +864,12 @@ function describeRawOutput(kind: ToolKind, rawOutput: unknown): Partial<ToolCall
     return {};
   }
   if (isRecord(rawOutput)) {
+    // Shell-shaped payloads use stdout/stderr; some agents only send `output` (+ exitCode).
     if ("stdout" in rawOutput || "stderr" in rawOutput || "exitCode" in rawOutput) {
       const stdout = typeof rawOutput.stdout === "string" ? rawOutput.stdout : "";
       const stderr = typeof rawOutput.stderr === "string" ? rawOutput.stderr : "";
-      const combined = stdout && stderr ? `${stdout}\n${stderr}` : stdout || stderr;
+      const fallback = typeof rawOutput.output === "string" ? rawOutput.output : "";
+      const combined = stdout && stderr ? `${stdout}\n${stderr}` : stdout || stderr || fallback;
       const patch: Partial<ToolCall> = {};
       if (combined.trim()) {
         patch.output = clipTail(combined);
@@ -880,6 +882,10 @@ function describeRawOutput(kind: ToolKind, rawOutput: unknown): Partial<ToolCall
     const known = describeRawResult(rawOutput);
     if (known) {
       return known;
+    }
+    // Plain `{ output: "…" }` without other known keys — keep the text, not indented JSON.
+    if (typeof rawOutput.output === "string" && rawOutput.output.trim()) {
+      return { output: kind === "shell" ? clipTail(rawOutput.output) : clipHead(rawOutput.output) };
     }
   }
   const text = typeof rawOutput === "string" ? rawOutput : prettyJson(rawOutput);

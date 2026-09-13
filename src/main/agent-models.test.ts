@@ -47,6 +47,27 @@ test("grok models: bullets with the default flagged", () => {
   assert.deepEqual(parseModelList("grok", stdout), [{ id: "grok-4.6", isDefault: true }, { id: "grok-4.5" }]);
 });
 
+
+test("grok models keep entries that carry both default and current markers", () => {
+  const stdout = ["Available models:", "  * grok-4.6 (default) (current)", "  - grok-4.5", "  • grok-4.4 (current)"].join("\n");
+  assert.deepEqual(parseModelList("grok", stdout), [
+    { id: "grok-4.6", isDefault: true },
+    { id: "grok-4.5" },
+    { id: "grok-4.4" },
+  ]);
+});
+
+test("codex debug models tolerates trailing chatter after the JSON document", () => {
+  const stdout =
+    JSON.stringify({
+      models: [
+        { slug: "gpt-5.5", display_name: "GPT-5.5", visibility: "list" },
+        { slug: "hidden", display_name: "Hidden", visibility: "hide" },
+      ],
+    }) + "\nDone scanning models.";
+  assert.deepEqual(parseModelList("codex", `log: looking for {config}\n${stdout}`), [{ id: "gpt-5.5", label: "GPT-5.5" }]);
+});
+
 test("opencode models: provider/model lines, log noise ignored", () => {
   const stdout = ["INFO  2026-09-07 service=models loading", "opencode/big-pickle", "anthropic/claude-sonnet-5", "openai/gpt-5.5", "", "done"].join("\r\n");
   assert.deepEqual(parseModelList("opencode", stdout), [{ id: "opencode/big-pickle" }, { id: "anthropic/claude-sonnet-5" }, { id: "openai/gpt-5.5" }]);
