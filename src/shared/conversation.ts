@@ -5,11 +5,16 @@ import type { AgentRun } from "./protocol";
 
 /** Follow `resumedFromRunId` links from `runId` back to the newest run that recorded a session id. */
 export function sessionIdAlongChain(runs: readonly AgentRun[], runId: string | undefined): string | undefined {
+  if (!runId) {
+    return undefined;
+  }
+  // Map once: composer/plan call this on every tick while chains stay short.
+  const byId = new Map(runs.map((run) => [run.id, run] as const));
   const seen = new Set<string>();
-  let current = runId;
+  let current: string | undefined = runId;
   while (current && !seen.has(current)) {
     seen.add(current);
-    const run = runs.find((item) => item.id === current);
+    const run = byId.get(current);
     if (!run) {
       return undefined;
     }

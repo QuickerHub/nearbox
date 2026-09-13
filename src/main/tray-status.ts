@@ -49,3 +49,9 @@ export function trayStatusSignature(
 ): string {
   return `${selectedHost ?? ""}|${port ?? ""}|${phones}|${running}|${queued}`;
 }
+
+/** Hover tooltip: compact Chinese status next to the app name. */
+export function trayTooltip(running: number, queued: number, phones: number): string {
+  return `Nearbox · ${trayAgentLabel(running, queued)} · ${phonesOnlineLabel(phones)}`;
+}
+
