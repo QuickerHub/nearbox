@@ -692,20 +692,52 @@ function ModelMenu({
   const families = groupModelFamilies(models);
   const foldable = familiesAreFoldable(families);
   const effectiveId = model || settingsDefault || cliDefault?.id || "";
-  const label = foldable && effectiveId
-    ? compactModelLabel(models, effectiveId) || modelLabel(models, effectiveId)
-    : model
-      ? modelLabel(models, model)
-      : settingsDefault
-        ? modelLabel(models, settingsDefault)
-        : cliDefault?.label ?? cliDefault?.id ?? "默认模型";
-  const title = unlisted
-    ? `${model} 不在 ${AGENT_LABELS[agent]} 当前的模型列表里，可能已下线或拼写有误`
-    : model
-      ? `这次用 ${model}`
-      : settingsDefault
-        ? `设置里的默认模型：${settingsDefault}`
-        : `模型由 ${AGENT_LABELS[agent]} 自己决定`;
+  const [chipRefreshing, setChipRefreshing] = useState(false);
+  const chipFlight = useRef<Promise<unknown> | null>(null);
+  // Agent-chip changes in App also kick a refresh; mirror that on the model chip so "正在更新" is visible before the menu opens.
+  useEffect(() => {
+    if (!info || !modelsNeedRefresh(info) || !canListModels(agent) || !info.available) {
+      return;
+    }
+    if (chipFlight.current) {
+      setChipRefreshing(true);
+      void chipFlight.current.finally(() => {
+        if (!chipFlight.current) {
+          setChipRefreshing(false);
+        }
+      });
+      return;
+    }
+    setChipRefreshing(true);
+    const job = client
+      .refreshModels(agent)
+      .catch(() => undefined)
+      .finally(() => {
+        if (chipFlight.current === job) {
+          chipFlight.current = null;
+          setChipRefreshing(false);
+        }
+      });
+    chipFlight.current = job;
+  }, [client, agent, info?.modelsCheckedAt, info?.available, info?.modelsError]);
+  const label = chipRefreshing && !models.length
+    ? "正在更新…"
+    : foldable && effectiveId
+      ? compactModelLabel(models, effectiveId) || modelLabel(models, effectiveId)
+      : model
+        ? modelLabel(models, model)
+        : settingsDefault
+          ? modelLabel(models, settingsDefault)
+          : cliDefault?.label ?? cliDefault?.id ?? "默认模型";
+  const title = chipRefreshing
+    ? `正在更新 ${AGENT_LABELS[agent]} 的模型列表…`
+    : unlisted
+      ? `${model} 不在 ${AGENT_LABELS[agent]} 当前的模型列表里，可能已下线或拼写有误`
+      : model
+        ? `这次用 ${model}`
+        : settingsDefault
+          ? `设置里的默认模型：${settingsDefault}`
+          : `模型由 ${AGENT_LABELS[agent]} 自己决定`;
   return (
     <Menu icon="sparkles" label={label} title={title} tone={unlisted ? "warn" : model ? "default" : "muted"} panelClassName={foldable ? "menu__panel--picker" : "menu__panel--split"}>
       {(close) => (
@@ -793,14 +825,33 @@ interface CatalogState {
 
 function useModelCatalog(agent: AgentKind, info: AgentInfo | undefined, client: ClientHandle): CatalogState {
   const [refreshing, setRefreshing] = useState(false);
+  const inFlight = useRef<Promise<unknown> | null>(null);
   const listable = canListModels(agent) && Boolean(info?.available);
 
   const refresh = (force: boolean) => {
+    // Share one in-flight promise so opening the menu and tapping refresh do not stack CLI calls.
+    if (inFlight.current) {
+      setRefreshing(true);
+      void inFlight.current.finally(() => {
+        if (!inFlight.current) {
+          setRefreshing(false);
+        }
+      });
+      if (!force) {
+        return;
+      }
+    }
     setRefreshing(true);
-    void client
+    const job = client
       .refreshModels(agent, force)
       .catch(() => undefined)
-      .finally(() => setRefreshing(false));
+      .finally(() => {
+        if (inFlight.current === job) {
+          inFlight.current = null;
+          setRefreshing(false);
+        }
+      });
+    inFlight.current = job;
   };
 
   // Opening the picker on a stale or missing catalog re-asks the CLI; the host ignores repeats within a minute.
@@ -817,7 +868,9 @@ function useModelCatalog(agent: AgentKind, info: AgentInfo | undefined, client: 
         ? `刷新失败，沿用 ${formatRelative(info.modelsCheckedAt) || "之前"}的列表：${info.modelsError}`
         : `获取失败：${info.modelsError}`
       : info?.models?.length
-        ? `列表来自 ${AGENT_LABELS[agent]} 命令行，${formatRelative(info.modelsCheckedAt) || "刚刚"}更新`
+        ? refreshing
+          ? `正在更新模型列表…`
+          : `列表来自 ${AGENT_LABELS[agent]} 命令行，${formatRelative(info.modelsCheckedAt) || "刚刚"}更新`
         : refreshing
           ? `正在向 ${AGENT_LABELS[agent]} 询问可用的模型…`
           : null
