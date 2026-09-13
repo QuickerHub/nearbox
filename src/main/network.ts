@@ -90,3 +90,29 @@ export function isTransientSocketError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : "";
   return /^(read |write |connect )?(ECONNRESET|EPIPE|ECONNABORTED)\b/.test(message);
 }
+
+/** True when both lists have the same strings in the same order. */
+export function sameStringList(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Re-read private LAN addresses, reusing `previous` when the list is unchanged
+ * so snapshot ticks do not allocate a fresh hostAddresses array every time.
+ */
+export function refreshPrivateLanAddresses(previous: readonly string[] | null | undefined): string[] {
+  const next = listPrivateLanAddresses();
+  if (previous && sameStringList(previous, next)) {
+    return previous as string[];
+  }
+  return next;
+}
+

@@ -37,9 +37,10 @@ import {
   type TaskPatch,
 } from "@shared/protocol";
 import { receiveToInbox } from "./files";
-import { recentRuns } from "./snapshot-runs.ts";
+import { countOnlinePhones, reuseMapValues } from "./snapshot-devices";
+import { recentRuns } from "./snapshot-runs";
 import type { TaskHub } from "./hub";
-import { isLoopbackOrPrivate, listPrivateLanAddresses, normalizeRemoteIp } from "./network";
+import { isLoopbackOrPrivate, normalizeRemoteIp, refreshPrivateLanAddresses } from "./network";
 import type { RemoteControlHub } from "./remote";
 import type { PairedSession, StoredFile } from "./store";
 import { emptyUpdateStatus, type AppUpdater } from "./updater";
@@ -58,6 +59,9 @@ const MIME: Record<string, string> = {
   ".json": "application/json; charset=utf-8",
   ".webmanifest": "application/manifest+json; charset=utf-8",
 };
+
+/** How often snapshot re-reads LAN adapters (wifi hop / sleep). */
+const HOST_ADDR_TTL_MS = 5_000;
 
 interface SocketBinding {
   socket: WebSocket;
@@ -81,6 +85,12 @@ export class LanServer extends EventEmitter {
   private readonly sessions = new Map<string, PairedSession>();
   private readonly sockets = new Set<SocketBinding>();
   private readonly devices = new Map<string, DeviceInfo>();
+  /** Bumped on Map set/delete so snapshot can reuse the values array. */
+  private devicesRevision = 0;
+  private devicesCache: { revision: number; values: DeviceInfo[] } | null = null;
+  /** Coalesce os.networkInterfaces across busy snapshot ticks; content-stable reuse. */
+  private cachedHostAddresses: string[] = [];
+  private hostAddressesAt = 0;
   private readonly remote: RemoteControlHub | null;
   private readonly updater: AppUpdater | null;
   private server: http.Server | null = null;
@@ -117,7 +127,7 @@ export class LanServer extends EventEmitter {
     this.apkPath = options.apkPath && existsSync(options.apkPath) ? options.apkPath : null;
     this.inboxDir = join(options.userData, "inbox");
     this.stagingDir = join(options.userData, "staging");
-    this.devices.set("desktop", {
+    this.setDevice("desktop", {
       id: "desktop",
       name: this.hostName,
       role: "desktop",
@@ -125,7 +135,7 @@ export class LanServer extends EventEmitter {
     });
     for (const session of this.hub.store.state.sessions) {
       this.sessions.set(session.token, session);
-      this.devices.set(session.device.id, { ...session.device, online: false });
+      this.setDevice(session.device.id, { ...session.device, online: false });
     }
     this.hub.on("changed", () => this.scheduleSnapshot());
     this.hub.on("run-event", (runId: string, event: RunEvent) => this.broadcastRunEvent(runId, event));
@@ -134,7 +144,7 @@ export class LanServer extends EventEmitter {
   async start(): Promise<void> {
     await mkdir(this.inboxDir, { recursive: true });
     await mkdir(this.stagingDir, { recursive: true });
-    const addresses = listPrivateLanAddresses();
+    const addresses = this.hostAddressesForSnapshot(true);
     const preferred = this.hub.settings.preferredHost;
     this.selectedHost = (preferred && addresses.includes(preferred) ? preferred : addresses[0]) ?? "";
     if (!this.selectedHost) {
@@ -255,11 +265,11 @@ export class LanServer extends EventEmitter {
     return {
       running: this.server !== null,
       hostName: this.hostName,
-      hostAddresses: listPrivateLanAddresses(),
+      hostAddresses: this.hostAddressesForSnapshot(),
       selectedHost: this.selectedHost,
       port: this.port,
       invite: this.invite,
-      devices: [...this.devices.values()],
+      devices: this.devicesForSnapshot(),
       remoteDevices: this.hub.remoteDevices,
       tasks: this.hub.tasks,
       projects: this.hub.projects,
@@ -283,11 +293,11 @@ export class LanServer extends EventEmitter {
   }
 
   onlinePhones(): number {
-    return [...this.devices.values()].filter((device) => device.role === "phone" && device.online).length;
+    return countOnlinePhones(this.devices.values());
   }
 
   async setSelectedHost(host: string): Promise<HostSnapshot> {
-    if (!listPrivateLanAddresses().includes(host)) {
+    if (!this.hostAddressesForSnapshot(true).includes(host)) {
       throw new Error("只能选择当前电脑上的局域网地址。");
     }
     this.selectedHost = host;
@@ -398,7 +408,7 @@ export class LanServer extends EventEmitter {
         binding.socket.close();
       }
     }
-    this.devices.delete(deviceId);
+    this.deleteDevice(deviceId);
     this.persistSessions();
     this.scheduleSnapshot();
   }
@@ -882,7 +892,7 @@ export class LanServer extends EventEmitter {
     const device = this.devices.get(session.device.id) ?? session.device;
     device.online = true;
     device.lastSeenAt = new Date().toISOString();
-    this.devices.set(device.id, device);
+    this.setDevice(device.id, device);
     const binding: SocketBinding = { socket, deviceId: device.id, runs: new Set() };
     this.sockets.add(binding);
     sendSocket(socket, { type: "ready", self: device, snapshot: this.snapshot() });
@@ -925,6 +935,36 @@ export class LanServer extends EventEmitter {
         sendRaw(binding.socket, payload);
       }
     }
+  }
+
+  private touchDevices(): void {
+    this.devicesRevision += 1;
+    this.devicesCache = null;
+  }
+
+  private setDevice(id: string, device: DeviceInfo): void {
+    this.devices.set(id, device);
+    this.touchDevices();
+  }
+
+  private deleteDevice(id: string): void {
+    this.devices.delete(id);
+    this.touchDevices();
+  }
+
+  private devicesForSnapshot(): DeviceInfo[] {
+    this.devicesCache = reuseMapValues(this.devicesRevision, this.devicesCache, () => [...this.devices.values()]);
+    return this.devicesCache.values;
+  }
+
+  private hostAddressesForSnapshot(force = false): string[] {
+    const now = Date.now();
+    if (!force && now - this.hostAddressesAt < HOST_ADDR_TTL_MS) {
+      return this.cachedHostAddresses;
+    }
+    this.cachedHostAddresses = refreshPrivateLanAddresses(this.cachedHostAddresses);
+    this.hostAddressesAt = now;
+    return this.cachedHostAddresses;
   }
 
   /** Snapshots are coalesced so a burst of changes produces one broadcast. */
@@ -989,7 +1029,7 @@ export class LanServer extends EventEmitter {
       };
       const session: PairedSession = { token: randomBytes(18).toString("base64url"), device };
       this.sessions.set(session.token, session);
-      this.devices.set(device.id, device);
+      this.setDevice(device.id, device);
       this.persistSessions();
       return session;
     }
