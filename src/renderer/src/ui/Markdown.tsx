@@ -3,8 +3,8 @@ import { splitInline } from "../lib/autolink";
 import { parseBlocks, splitStreamingMarkdown, type MdAlign, type MdBlock } from "../lib/markdown";
 
 /**
- * Tiny markdown renderer for agent summaries: headings, lists, tables, fenced
- * code, quotes, inline code, bold and links. The stored text is never rewritten;
+ * Tiny markdown renderer for agent summaries: headings, lists, task checkboxes,
+ * tables, fenced code, quotes, inline code, bold, italic and links. The stored text is never rewritten;
  * React escapes everything, so nothing here can inject markup.
  *
  * When `streaming` is set, completed block boundaries stay in a sealed Markdown
@@ -56,13 +56,13 @@ function renderBlock(block: MdBlock): ReactNode {
       return block.ordered ? (
         <ol>
           {block.items.map((item, index) => (
-            <li key={index}>{renderInline(item)}</li>
+            <Fragment key={index}>{renderListItem(item)}</Fragment>
           ))}
         </ol>
       ) : (
         <ul>
           {block.items.map((item, index) => (
-            <li key={index}>{renderInline(item)}</li>
+            <Fragment key={index}>{renderListItem(item)}</Fragment>
           ))}
         </ul>
       );
@@ -112,6 +112,24 @@ function alignClass(align: MdAlign | undefined): string | undefined {
   return align && align !== "left" ? `md__cell--${align}` : undefined;
 }
 
+const TASK_ITEM = /^\[([ xX])\]\s+(.*)$/;
+
+function renderListItem(item: string): ReactNode {
+  const task = TASK_ITEM.exec(item);
+  if (task) {
+    const done = task[1] !== " ";
+    return (
+      <li className={done ? "md__task md__task--done" : "md__task"}>
+        <span className="md__check" aria-hidden>
+          {done ? "☑" : "☐"}
+        </span>
+        {renderInline(task[2] ?? "")}
+      </li>
+    );
+  }
+  return <li>{renderInline(item)}</li>;
+}
+
 function renderInline(text: string): ReactNode[] {
   return splitInline(text).map((piece, key) => {
     switch (piece.type) {
@@ -119,6 +137,8 @@ function renderInline(text: string): ReactNode[] {
         return <code key={key}>{piece.text}</code>;
       case "bold":
         return <strong key={key}>{renderInline(piece.text)}</strong>;
+      case "italic":
+        return <em key={key}>{renderInline(piece.text)}</em>;
       case "link":
         return (
           <a key={key} className="md__link" href={piece.href} target="_blank" rel="noreferrer noopener" onClick={(event) => openHref(event, piece.href)}>

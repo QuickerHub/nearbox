@@ -46,3 +46,25 @@ test("angle-bracket autolinks work and javascript hrefs stay text", () => {
   ]);
   assert.ok(splitInline("[x](javascript:alert(1))").every((piece) => piece.type !== "link"));
 });
+
+test("underscore bold and italic paint; snake_case stays plain", () => {
+  assert.deepEqual(splitInline("say __bold__ and _italic_"), [
+    { type: "text", text: "say " },
+    { type: "bold", text: "bold" },
+    { type: "text", text: " and " },
+    { type: "italic", text: "italic" },
+  ]);
+  assert.deepEqual(splitInline("use snake_case_names"), [{ type: "text", text: "use snake_case_names" }]);
+});
+
+test("matched backtick fences keep inner ticks", () => {
+  assert.deepEqual(splitInline("use ``code`with`tick`` here"), [
+    { type: "text", text: "use " },
+    { type: "code", text: "code`with`tick" },
+    { type: "text", text: " here" },
+  ]);
+  assert.deepEqual(splitInline("still `simple`"), [
+    { type: "text", text: "still " },
+    { type: "code", text: "simple" },
+  ]);
+});

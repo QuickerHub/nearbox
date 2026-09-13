@@ -281,7 +281,19 @@ export function pairWithPin(pin: string): void {
   window.location.replace(url.toString());
 }
 
-const IMAGE_EXTENSIONS: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+const IMAGE_EXTENSIONS: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  bmp: "image/bmp",
+  heic: "image/heic",
+  heif: "image/heif",
+  avif: "image/avif",
+  svg: "image/svg+xml",
+  ico: "image/x-icon",
+};
 
 /** A pasted screenshot arrives as a File named "image.png" or "" with a possibly empty type; give it a real name. */
 function uploadName(file: File): string {

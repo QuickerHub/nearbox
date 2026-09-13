@@ -105,3 +105,21 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+test("four-space indented lines become a code block", () => {
+  const blocks = parseBlocks("intro\n\n    const x = 1;\n    const y = 2;\n\nafter");
+  assert.deepEqual(
+    blocks.map((block) => block.type),
+    ["para", "code", "para"],
+  );
+  assert.equal(blocks[1]?.type === "code" ? blocks[1].body : "", "const x = 1;\nconst y = 2;");
+  assert.equal(blocks[1]?.type === "code" ? blocks[1].lang : "x", "");
+});
+
+test("GFM task markers stay on list item text for the renderer", () => {
+  const blocks = parseBlocks("- [ ] todo\n- [x] done\n- plain");
+  assert.equal(blocks[0]?.type, "list");
+  if (blocks[0]?.type === "list") {
+    assert.deepEqual(blocks[0].items, ["[ ] todo", "[x] done", "plain"]);
+  }
+});
