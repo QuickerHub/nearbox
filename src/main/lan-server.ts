@@ -36,7 +36,7 @@ import {
   type TaskInput,
   type TaskPatch,
 } from "@shared/protocol";
-import { receiveToInbox } from "./files";
+import { inboxFolderSegment, isInboxPath, receiveToInbox } from "./files";
 import { countOnlinePhones, reuseMapValues } from "./snapshot-devices";
 import { recentRuns } from "./snapshot-runs";
 import type { TaskHub } from "./hub";
@@ -625,7 +625,7 @@ export class LanServer extends EventEmitter {
     }
     if (segments[1] === "files" && segments[2] && method === "GET") {
       const file = this.hub.fileById(decodeURIComponent(segments[2]));
-      if (!file || !existsSync(file.path)) {
+      if (!file || !isInboxPath(this.inboxDir, file.path) || !existsSync(file.path)) {
         res.writeHead(404).end("文件不存在");
         return;
       }
@@ -778,7 +778,7 @@ export class LanServer extends EventEmitter {
     const fileName = decodeURIComponent(url.searchParams.get("name") ?? "file");
     const mediaType = req.headers["content-type"] || "application/octet-stream";
     const maxBytes = isImageMediaType(mediaType) ? this.limits.maxImageBytes : this.limits.maxFileBytes;
-    const deviceDir = join(this.inboxDir, safeSegment(session.device.name));
+    const deviceDir = join(this.inboxDir, inboxFolderSegment(session.device.name));
     const saved = await receiveToInbox({
       request: req,
       inboxDir: deviceDir,
@@ -1148,11 +1148,6 @@ function stringList(value: unknown): string[] | undefined {
     return undefined;
   }
   return value.filter((item): item is string => typeof item === "string" && item.length > 0);
-}
-
-function safeSegment(name: string): string {
-  const cleaned = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "phone";
-  return cleaned.slice(0, 60);
 }
 
 async function readJson<T>(req: http.IncomingMessage): Promise<T> {

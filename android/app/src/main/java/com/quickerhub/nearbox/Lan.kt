@@ -32,6 +32,34 @@ object Lan {
     /** This phone's private IPv4 addresses on interfaces that can carry a LAN. Mobile data and VPN tunnels are skipped. */
     fun localAddresses(context: Context): List<Inet4Address> = localAddresses(Networks.of(context))
 
+
+    /**
+     * Hosts the shell may open from a QR / paste / typed IP. Public IPv4 would
+     * send the pairing token off the LAN. RFC1918, CGNAT (100.64/10), loopback,
+     * `.local` / `.lan` and single-label names stay allowed.
+     */
+    fun isPairableHost(host: String): Boolean {
+        val value = host.trim().lowercase()
+        if (value.isEmpty() || value.length > 253) {
+            return false
+        }
+        val parts = value.split(".")
+        if (parts.size == 4 && parts.all { part -> part.toIntOrNull()?.let { n -> n in 0..255 } == true }) {
+            val a = parts[0].toInt()
+            val b = parts[1].toInt()
+            return a == 10 ||
+                a == 127 ||
+                (a == 192 && b == 168) ||
+                (a == 172 && b in 16..31) ||
+                (a == 100 && b in 64..127)
+        }
+        if (value.contains(':')) {
+            return value == "::1"
+        }
+        return !value.contains('.') || value.endsWith(".local") || value.endsWith(".lan")
+    }
+
+
     private fun localAddresses(networks: Networks): List<Inet4Address> {
         val result = ArrayList<Inet4Address>()
         val interfaces = try {

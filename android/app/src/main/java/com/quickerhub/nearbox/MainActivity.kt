@@ -100,17 +100,24 @@ class MainActivity : AppCompatActivity() {
 
         binding.webView.settings.javaScriptEnabled = true
         binding.webView.settings.domStorageEnabled = true
-        binding.webView.settings.allowFileAccess = true
+        binding.webView.settings.allowFileAccess = false
         binding.webView.settings.userAgentString =
             "${binding.webView.settings.userAgentString} NearboxShell/${packageManager.getPackageInfo(packageName, 0).versionName}"
         binding.webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                val url = request.url.toString()
+                val uri = request.url
+                val url = uri.toString()
                 if (isApkUrl(url)) {
                     ApkInstaller.start(this@MainActivity, url)
                     return true
                 }
-                return false
+                val host = uri.host.orEmpty()
+                // Stay inside the pairing session for LAN http; everything else leaves the WebView.
+                if (uri.scheme == "http" && Lan.isPairableHost(host)) {
+                    return false
+                }
+                runCatching { startActivity(Intent(Intent.ACTION_VIEW, uri)) }
+                return true
             }
 
             override fun onPageFinished(view: WebView, url: String) {
@@ -219,7 +226,7 @@ class MainActivity : AppCompatActivity() {
     private fun connectFromForm() {
         val host = binding.hostInput.text.toString().trim()
         val pin = binding.pinInput.text.toString().trim()
-        if (host.isEmpty() || pin.length != 6) {
+        if (host.isEmpty() || pin.length != 6 || !Lan.isPairableHost(host)) {
             Toast.makeText(this, "请填写电脑 IP 和 6 位验证码", Toast.LENGTH_SHORT).show()
             return
         }
@@ -262,7 +269,7 @@ class MainActivity : AppCompatActivity() {
     private fun openSession(host: String?, portText: String?, token: String?) {
         val safeHost = host?.trim().orEmpty()
         val tokenValue = token?.trim().orEmpty()
-        if (safeHost.isEmpty() || tokenValue.isEmpty()) {
+        if (safeHost.isEmpty() || tokenValue.isEmpty() || !Lan.isPairableHost(safeHost)) {
             Toast.makeText(this, "邀请不完整", Toast.LENGTH_SHORT).show()
             return
         }

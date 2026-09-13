@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildDiscoverInfo, isInviteExpired, liveInvite, parseDiscover, parseInviteText } from "./discover.ts";
+import { buildDiscoverInfo, isInviteExpired, isPairableHost, liveInvite, parseDiscover, parseInviteText } from "./discover.ts";
 
 test("discover payload round-trips", () => {
   const info = buildDiscoverInfo({
@@ -45,4 +45,26 @@ test("liveInvite hides expired credentials", () => {
   assert.equal(liveInvite(invite, now)?.pin, "123456");
   assert.equal(liveInvite({ ...invite, expiresAt: "2026-09-13T11:00:00.000Z" }, now), null);
   assert.equal(liveInvite(null, now), null);
+});
+
+test("isPairableHost allows LAN and refuses public internet hosts", () => {
+  assert.equal(isPairableHost("192.168.1.8"), true);
+  assert.equal(isPairableHost("10.0.2.2"), true);
+  assert.equal(isPairableHost("100.64.1.2"), true);
+  assert.equal(isPairableHost("office.local"), true);
+  assert.equal(isPairableHost("my-pc"), true);
+  assert.equal(isPairableHost("8.8.8.8"), false);
+  assert.equal(isPairableHost("example.com"), false);
+});
+
+test("invite and discover parsers drop public hosts", () => {
+  assert.equal(parseInviteText("http://8.8.8.8:17831/?t=tok"), null);
+  assert.equal(parseInviteText("http://example.com:17831/?t=tok"), null);
+  assert.equal(parseInviteText("nearbox://connect?host=1.1.1.1&port=17831&t=pin6"), null);
+  assert.deepEqual(parseInviteText("http://100.64.1.2:17831/?t=tok"), {
+    host: "100.64.1.2",
+    port: 17831,
+    token: "tok",
+  });
+  assert.equal(parseDiscover({ service: "nearbox", name: "PC", host: "8.8.8.8", port: 17831, version: "0.7.0" }), null);
 });
