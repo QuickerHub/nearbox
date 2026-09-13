@@ -31,3 +31,23 @@ test("preferHttp1InCliConfig only writes when the flag is missing or false", () 
     changed: true,
   });
 });
+
+test("preferHttp1InCliConfig coerces arrays and non-objects to a fresh config", () => {
+  assert.deepEqual(preferHttp1InCliConfig(undefined), {
+    next: { network: { useHttp1ForAgent: true } },
+    changed: true,
+  });
+  assert.deepEqual(preferHttp1InCliConfig([]), {
+    next: { network: { useHttp1ForAgent: true } },
+    changed: true,
+  });
+  assert.deepEqual(preferHttp1InCliConfig("nope"), {
+    next: { network: { useHttp1ForAgent: true } },
+    changed: true,
+  });
+  // network itself may be a non-object; replace it rather than spreading.
+  assert.deepEqual(preferHttp1InCliConfig({ network: "legacy", model: "x" }), {
+    next: { network: { useHttp1ForAgent: true }, model: "x" },
+    changed: true,
+  });
+});

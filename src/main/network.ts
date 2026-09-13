@@ -49,6 +49,32 @@ export function isPrivateLanAddress(ipText: string | undefined): boolean {
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
+/** Tailscale and friends hand out 100.64.0.0/10; those are reachable like a LAN. */
+export function isCgnatAddress(address: string): boolean {
+  const parts = address.split(".").map(Number);
+  return parts.length === 4 && parts[0] === 100 && parts[1]! >= 64 && parts[1]! <= 127;
+}
+
+function isIpv4Literal(value: string): boolean {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(value);
+}
+
+/**
+ * Pure predicate for ~/.ssh/config rows that plausibly sit on the local network:
+ * keep concrete LAN/CGNAT IPs and short / .local / .lan names; drop ProxyJump
+ * hosts and public DNS names.
+ */
+export function isNearbySshConfigHost(host: { hostName: string; proxied?: boolean }): boolean {
+  if (host.proxied) {
+    return false;
+  }
+  const name = host.hostName;
+  if (isIpv4Literal(name)) {
+    return isPrivateLanAddress(name) || isCgnatAddress(name);
+  }
+  return !name.includes(".") || name.endsWith(".local") || name.endsWith(".lan");
+}
+
 export function isLoopbackOrPrivate(ipText: string | undefined): boolean {
   const value = ipText ?? "";
   return (
