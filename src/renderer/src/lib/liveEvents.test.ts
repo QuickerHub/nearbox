@@ -77,3 +77,16 @@ test("mergeCatchUpHistory with empty history is the HTTP-failure promote path", 
   );
   assert.equal(caught.lastSeq, 3);
 });
+
+test("mergeCatchUpHistory fills seq holes from the WS buffer", () => {
+  // HTTP history tip can sit past a gap when a mid-stream frame was missing;
+  // WS events buffered during catch-up must still land in order.
+  const history = [{ seq: 1 }, { seq: 2 }, { seq: 5 }];
+  const buffered = [{ seq: 5 }, { seq: 3 }, { seq: 4 }, { seq: 6 }];
+  const caught = mergeCatchUpHistory(history, buffered);
+  assert.deepEqual(
+    caught.events.map((event) => event.seq),
+    [1, 2, 3, 4, 5, 6],
+  );
+  assert.equal(caught.lastSeq, 6);
+});

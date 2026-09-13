@@ -318,6 +318,8 @@ export function hasDetail(tool: ToolCall): boolean {
 /** Marker `clipHead` leaves when output was cut short, as a trailing line. */
 const CLIP_NOTE = /\n?… 已省略 \d+ 个字符$/;
 const CLIP_NOTE_LINE = /^… 已省略 \d+ 个字符$/;
+/** Unified-diff trailer; not a source line and must not steal line numbers. */
+const NO_NEWLINE = /^\\ No newline at end of file$/;
 
 /**
  * A call as it should be shown. Logs written before the parser knew
@@ -423,7 +425,7 @@ export function diffLines(diff: string): DiffLine[] {
       out.push({ tag: "meta", text: line });
       continue;
     }
-    if (CLIP_NOTE_LINE.test(line)) {
+    if (CLIP_NOTE_LINE.test(line) || NO_NEWLINE.test(line)) {
       out.push({ tag: "note", text: line });
       continue;
     }

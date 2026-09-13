@@ -10,7 +10,7 @@
       | { type: "link"; href: string; text: string };
 
     const TOKEN =
-      /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)\s]+\)|<https?:\/\/[^>\s]+>|https?:\/\/[^\s<>"'`]+)/g;
+      /(`[^`]+`|\*\*(.+?)\*\*|\[[^\]]+\]\([^)\s]+\)|<https?:\/\/[^>\s]+>|https?:\/\/[^\s<>"'`]+)/g;
 
     const MARKDOWN_LINK = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
     const ANGLE_LINK = /^<(https?:\/\/[^>\s]+)>$/;

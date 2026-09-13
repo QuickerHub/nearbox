@@ -235,3 +235,18 @@ test("advanceTranscript rebuilds when history is replaced", () => {
   assert.equal(cursor.count, 1);
   assert.equal(cursor.items[0]?.type === "text" ? cursor.items[0].text : "", "new");
 });
+
+test("diffLines treats git no-newline trailer as a note, not a source line", () => {
+  // Include a context line so refineRewriteDiff keeps the original trailer.
+  const lines = diffLines("@@ -1,2 +1,2 @@\n a\n-b\n+c\n\\ No newline at end of file");
+  assert.deepEqual(
+    lines.map((line) => [line.tag, line.text, line.oldNo, line.newNo]),
+    [
+      ["hunk", "@@ -1,2 +1,2 @@", undefined, undefined],
+      ["ctx", "a", 1, 1],
+      ["del", "b", 2, undefined],
+      ["add", "c", undefined, 2],
+      ["note", "\\ No newline at end of file", undefined, undefined],
+    ],
+  );
+});
