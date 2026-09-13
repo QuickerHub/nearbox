@@ -21,7 +21,7 @@ const HEADING = /^(#{1,6})\s+(.*)$/;
 const QUOTE = /^ {0,3}>\s?/;
 const HR = /^\s{0,3}(?:(?:-[\t ]*){3,}|(?:\*[\t ]*){3,}|(?:_[\t ]*){3,})$/;
 const FENCE = /^(\s*)(`{3,}|~{3,})(.*)$/;
-const SEPARATOR_CELL = /^:?-+:?$/;
+const SEPARATOR_CELL = /^:?-{3,}:?$/;
 
 export function parseBlocks(text: string): MdBlock[] {
   const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");

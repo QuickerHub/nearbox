@@ -105,3 +105,11 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+test("short hyphen separators are not GFM tables", () => {
+  // GFM requires at least three hyphens per delimiter cell; a single "-" must not open a table.
+  const blocks = parseBlocks("a | b\n- | -\nstill a paragraph");
+  assert.equal(blocks.some((block) => block.type === "table"), false);
+  const ok = parseBlocks("a | b\n--- | ---\n1 | 2");
+  assert.equal(ok[0]?.type, "table");
+});

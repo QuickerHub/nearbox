@@ -68,6 +68,8 @@ export function PermissionAsk({
   onResolve(optionId: string): void | Promise<void>;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
+  const askIdRef = useRef(pending.askId);
+  askIdRef.current = pending.askId;
   // FIFO head swap reuses this component; clear busy so the next ask is clickable.
   useEffect(() => {
     setBusy(false);
@@ -88,7 +90,9 @@ export function PermissionAsk({
             disabled={busy}
             onClick={() => {
               // Failed resolve (stale askId, gone, network) must unlock; success stays busy until askId changes.
-              trackPermissionResolve(setBusy, () => onResolve(option.optionId));
+              // Ignore a late failure after askId moved on so it cannot unlock the next ask mid-flight.
+              const askId = pending.askId;
+              trackPermissionResolve(setBusy, () => onResolve(option.optionId), () => askIdRef.current === askId);
             }}
           >
             {option.label}
