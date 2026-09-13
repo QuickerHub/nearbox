@@ -31,9 +31,25 @@ export function trayPhonesLabel(phones: number): string {
   return phonesOnlineLabel(phones);
 }
 
+/**
+ * LAN picker is host/IP only. `@` would look like `user@host:port` in the tray
+ * row and must not be rendered.
+ */
+export function sanitizeTrayHostLabel(host: string | undefined): string | undefined {
+  if (typeof host !== "string") {
+    return undefined;
+  }
+  const trimmed = host.trim();
+  if (!trimmed || trimmed.includes("@")) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 /** Host:port row, or the empty-LAN placeholder. */
 export function trayHostLabel(selectedHost: string | undefined, port: number | undefined): string {
-  return selectedHost ? `${selectedHost}:${port}` : "未发现局域网地址";
+  const host = sanitizeTrayHostLabel(selectedHost);
+  return host ? `${host}:${port}` : "未发现局域网地址";
 }
 
 /**
@@ -47,7 +63,7 @@ export function trayStatusSignature(
   running: number,
   queued: number,
 ): string {
-  return `${selectedHost ?? ""}|${port ?? ""}|${phones}|${running}|${queued}`;
+  return `${sanitizeTrayHostLabel(selectedHost) ?? ""}|${port ?? ""}|${phones}|${running}|${queued}`;
 }
 
 /** Hover tooltip: compact Chinese status next to the app name. */

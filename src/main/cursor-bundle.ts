@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /** Same shape as ResolvedCommand, kept local so this file stays free of `@shared`. */
@@ -7,6 +7,20 @@ export interface CursorBundle {
   prefixArgs: string[];
   display: string;
   viaCmd: false;
+}
+
+/**
+ * Bundled node.exe / index.js must be plain files. `existsSync` follows
+ * symlinks; a versions/* symlink (or symlink binary) could otherwise point
+ * the resolver at an attacker-controlled tree outside the shim dir.
+ */
+export function isPlainRegularFile(path: string): boolean {
+  try {
+    const st = lstatSync(path);
+    return st.isFile();
+  } catch {
+    return false;
+  }
 }
 
 function versionKey(name: string): number {
@@ -22,7 +36,7 @@ function versionKey(name: string): number {
 export function resolveCursorAgentBundle(shimDir: string): CursorBundle | null {
   const inPlace = join(shimDir, "index.js");
   const inPlaceNode = join(shimDir, "node.exe");
-  if (existsSync(inPlace) && existsSync(inPlaceNode)) {
+  if (isPlainRegularFile(inPlace) && isPlainRegularFile(inPlaceNode)) {
     return { file: inPlaceNode, prefixArgs: [inPlace], display: `${inPlaceNode} ${inPlace}`, viaCmd: false };
   }
   const versionsDir = join(shimDir, "versions");
@@ -30,9 +44,16 @@ export function resolveCursorAgentBundle(shimDir: string): CursorBundle | null {
     return null;
   }
   const versions = readdirSync(versionsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && /^\d{4}\.\d{1,2}\.\d{1,2}/.test(entry.name))
+    .filter(
+      (entry) =>
+        !entry.isSymbolicLink() && entry.isDirectory() && /^\d{4}\.\d{1,2}\.\d{1,2}/.test(entry.name),
+    )
     .map((entry) => entry.name)
-    .filter((name) => existsSync(join(versionsDir, name, "node.exe")) && existsSync(join(versionsDir, name, "index.js")))
+    .filter(
+      (name) =>
+        isPlainRegularFile(join(versionsDir, name, "node.exe")) &&
+        isPlainRegularFile(join(versionsDir, name, "index.js")),
+    )
     .sort((a, b) => versionKey(b) - versionKey(a));
   const latest = versions[0];
   if (!latest) {

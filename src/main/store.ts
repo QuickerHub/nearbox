@@ -16,7 +16,8 @@ import {
   type Task,
   type TaskNote,
 } from "@shared/protocol";
-import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { stripEmptyParentRunId, stripEmptyResumedFromRunId, stripTransientPermissionState } from "./run-normalize";
+import { capNotesTail } from "./store-notes";
 import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
@@ -160,7 +161,7 @@ function normalizeTask(task: Task): Task {
     ...task,
     details: task.details ?? "",
     priority: task.priority ?? "normal",
-    notes: Array.isArray(task.notes) ? task.notes.map(normalizeNote) : [],
+    notes: Array.isArray(task.notes) ? capNotesTail(task.notes).map(normalizeNote) : [],
   };
 }
 
@@ -235,7 +236,7 @@ function normalizeDevice(device: RemoteDevice): RemoteDevice {
 }
 
 function normalizeRun(run: AgentRun): AgentRun {
-  const rest = stripEmptyParentRunId(stripTransientPermissionState(run));
+  const rest = stripEmptyResumedFromRunId(stripEmptyParentRunId(stripTransientPermissionState(run)));
   // Anything that was still in flight when the host died can never finish.
   if (rest.status === "running" || rest.status === "queued") {
     return {
