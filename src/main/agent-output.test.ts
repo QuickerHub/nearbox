@@ -458,6 +458,25 @@ test("a call the client rejected stays rejected when the agent later marks it co
   assert.equal(tools[1]?.error, "安全模式下不执行终端命令");
 });
 
+test("rejected stays rejected even when a later completed update carries output", () => {
+  const parser = createOutputParser("acp");
+  const events: ParsedEvent[] = [];
+  events.push(...parser.push({ sessionUpdate: "tool_call", toolCallId: "t2", title: "`rm -rf /`", kind: "execute", status: "pending", rawInput: { command: "rm -rf /" } }).events);
+  events.push(...parser.push({ sessionUpdate: "tool_call_update", toolCallId: "t2", status: "rejected", error: "安全模式下不执行终端命令" }).events);
+  // Agent still reports completion with stdout — must not flip to ok.
+  events.push(
+    ...parser.push({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t2",
+      status: "completed",
+      rawOutput: { output: "would have deleted everything", exitCode: 0 },
+    }).events,
+  );
+  const tools = events.filter((event) => event.tool).map((event) => event.tool!);
+  assert.equal(tools.at(-1)?.status, "rejected");
+  assert.equal(tools.at(-1)?.error, "安全模式下不执行终端命令");
+});
+
 test("partial flushes stream text as deltas without losing the whole answer", () => {
   const parser = createOutputParser("acp");
   const events: ParsedEvent[] = [];
