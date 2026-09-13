@@ -67,6 +67,10 @@ export function PermissionAsk({
   onResolve(optionId: string): void;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
+  // FIFO head swap reuses this component; clear busy so the next ask is clickable.
+  useEffect(() => {
+    setBusy(false);
+  }, [pending.askId]);
   return (
     <div className="perm-ask">
       <div className="perm-ask__text">
@@ -187,7 +191,7 @@ function ShellCard({ tool, pending, queued, onResolve }: { tool: ToolCall } & As
         {awaiting ? <span className="trow__status trow__status--ask">等待确认</span> : <StatusTag tool={tool} />}
         {expandable ? <Chevron open={open} /> : null}
       </button>
-      {awaiting && pending && onResolve ? <PermissionAsk pending={pending} queued={queued} onResolve={onResolve} /> : null}
+      {awaiting && pending && onResolve ? <PermissionAsk key={pending.askId} pending={pending} queued={queued} onResolve={onResolve} /> : null}
       {open && body ? (
         <div className="shell__body">
           {output ? (

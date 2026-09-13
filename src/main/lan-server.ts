@@ -709,8 +709,8 @@ export class LanServer extends EventEmitter {
         return;
       }
       if (tail === "permission" && method === "POST") {
-        const body = await readJson<{ optionId?: string }>(req);
-        this.hub.resolvePermission(runId, String(body.optionId ?? ""));
+        const body = await readJson<{ optionId?: string; askId?: string }>(req);
+        this.hub.resolvePermission(runId, String(body.optionId ?? ""), String(body.askId ?? ""));
         this.writeJson(res, { ok: true });
         return;
       }

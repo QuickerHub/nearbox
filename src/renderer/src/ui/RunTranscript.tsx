@@ -44,7 +44,7 @@ export function RunTranscript({ events, active, durationLabel, usageLabel, faile
     <div className="turn">
       {work.length || (pending && !attached) ? (
         <WorkFold live={active} waiting={waiting} toolCount={toolCount} durationLabel={durationLabel} usageLabel={usageLabel} failed={failed} defaultOpen={Boolean(defaultOpen)}>
-          {pending && !attached && onResolve ? <PermissionAsk pending={pending} queued={queued} onResolve={onResolve} /> : null}
+          {pending && !attached && onResolve ? <PermissionAsk key={pending.askId} pending={pending} queued={queued} onResolve={onResolve} /> : null}
           {work.map((row) => (
             <WorkItem key={`${row.type}-${row.seq}`} row={row} failed={failed} pending={pending} queued={queued} onResolve={onResolve} />
           ))}

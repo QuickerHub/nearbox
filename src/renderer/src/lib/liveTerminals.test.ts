@@ -20,6 +20,7 @@ function shell(id: string, patch: Partial<ToolCall> = {}): ToolCall {
 
 const pending: PendingPermission = {
   toolCallId: "s2",
+  askId: "ask-s2",
   title: "dir",
   command: "dir",
   options: [{ optionId: "allow", kind: "allow", label: "允许" }],

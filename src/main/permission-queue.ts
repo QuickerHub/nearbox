@@ -31,6 +31,24 @@ export function settlePermissionHead<TPending>(
   return queue;
 }
 
+/**
+ * Settle the head only when `askId` matches. Stale clicks that still carry an
+ * earlier ask's optionId must not resolve the next FIFO head.
+ */
+export function settlePermissionHeadIfAsk<TPending extends { askId: string }>(
+  queue: PermissionWaiter<TPending>[],
+  askId: string,
+  optionId: string | null,
+): boolean {
+  const head = queue[0];
+  if (!head || head.pending.askId !== askId) {
+    return false;
+  }
+  queue.shift();
+  head.resolve(optionId);
+  return true;
+}
+
 /** Take every waiter off the queue without resolving (runner syncs UI first). */
 export function drainPermissionQueue<TPending>(queue: PermissionWaiter<TPending>[]): PermissionWaiter<TPending>[] {
   return queue.splice(0);

@@ -13,7 +13,7 @@ test("stripTransientPermissionState drops pending ask and queued count", () => {
   assert.deepEqual(
     stripTransientPermissionState({
       id: "a",
-      pendingPermission: { toolCallId: "t", title: "x", options: [] },
+      pendingPermission: { toolCallId: "t", askId: "ask-t", title: "x", options: [] },
       pendingPermissionQueued: 2,
       status: "running",
     }),

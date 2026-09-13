@@ -73,7 +73,7 @@ test("a turn waiting for permission needs the user, even on a delegated sub-run"
       agent: "codex",
       status: "running",
       finishedAt: undefined,
-      pendingPermission: { toolCallId: "c1", title: "npm test", options: [] },
+      pendingPermission: { toolCallId: "c1", askId: "ask", title: "npm test", options: [] },
     }),
   ];
   const items = attentionFor(tasks, runs, {});
@@ -90,14 +90,14 @@ test("attention permission uses the first waiting run of the task", () => {
       taskId: "t1",
       status: "running",
       finishedAt: undefined,
-      pendingPermission: { toolCallId: "a", title: "a", options: [] },
+      pendingPermission: { toolCallId: "a", askId: "ask", title: "a", options: [] },
     }),
     run({
       id: "second",
       taskId: "t1",
       status: "running",
       finishedAt: undefined,
-      pendingPermission: { toolCallId: "b", title: "b", options: [] },
+      pendingPermission: { toolCallId: "b", askId: "ask", title: "b", options: [] },
     }),
   ];
   assert.equal(attentionFor(tasks, runs, {})[0]?.run.id, "first");
@@ -133,7 +133,7 @@ test("attention is ordered permission, failed, finished, newest first within eac
     run({ id: "ra", taskId: "a", finishedAt: "2026-09-06T00:01:00.000Z" }),
     run({ id: "rb", taskId: "b", finishedAt: "2026-09-06T00:05:00.000Z" }),
     run({ id: "rc", taskId: "c", status: "failed" }),
-    run({ id: "rd", taskId: "d", status: "running", finishedAt: undefined, pendingPermission: { toolCallId: "x", title: "rm", options: [] } }),
+    run({ id: "rd", taskId: "d", status: "running", finishedAt: undefined, pendingPermission: { toolCallId: "x", askId: "ask", title: "rm", options: [] } }),
   ];
   assert.deepEqual(
     attentionFor(tasks, runs, {}).map((item) => item.task.id),

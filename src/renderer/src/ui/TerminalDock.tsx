@@ -92,7 +92,7 @@ export function TerminalDock({ client, run, onStop }: TerminalDockProps): JSX.El
               pending={run.pendingPermission?.toolCallId === terminal.id ? run.pendingPermission : undefined}
               queued={run.pendingPermission?.toolCallId === terminal.id ? run.pendingPermissionQueued : undefined}
               onToggle={() => setOpenId((current) => (current === terminal.id ? null : terminal.id))}
-              onResolve={(optionId) => void client.resolvePermission(run.id, optionId)}
+              onResolve={(optionId) => void client.resolvePermission(run.id, optionId, run.pendingPermission!.askId)}
             />
           ))}
         </ul>
@@ -142,7 +142,7 @@ function TerminalRow({
           </span>
         </button>
       </div>
-      {pending ? <PermissionAsk pending={pending} queued={queued} onResolve={onResolve} /> : null}
+      {pending ? <PermissionAsk key={pending.askId} pending={pending} queued={queued} onResolve={onResolve} /> : null}
       {open && body ? (
         <div className="term-dock__body">
           {output ? (
