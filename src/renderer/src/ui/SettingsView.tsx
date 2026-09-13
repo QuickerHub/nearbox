@@ -71,7 +71,9 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
                 {invite?.qrDataUrl ? (
                   <img className="qr" src={invite.qrDataUrl} alt="手机连接二维码" />
                 ) : (
-                  <div className="qr qr--empty">没有可用的局域网地址</div>
+                  <div className="qr qr--empty">
+                    {snapshot.selectedHost ? "验证码已过期，正在换新…" : "没有可用的局域网地址"}
+                  </div>
                 )}
                 <div className="pin-row" aria-label={`验证码 ${invite?.pin ?? ""}`}>
                   {(invite?.pin ?? "------").split("").map((digit, index) => (

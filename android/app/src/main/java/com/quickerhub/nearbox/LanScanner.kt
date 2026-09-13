@@ -182,8 +182,17 @@ class LanScanner(
             if (info.optString("service") != "nearbox") {
                 return null
             }
+            // Matches shared parseDiscover: { service, error } is not a pairable host.
+            if (info.optString("error").isNotBlank()) {
+                return null
+            }
+            val name = info.optString("name").trim()
+            val host = info.optString("host").trim()
+            if (name.isEmpty() || host.isEmpty()) {
+                return null
+            }
             return FoundHost(
-                name = info.optString("name").ifBlank { connectHost },
+                name = name,
                 connectHost = connectHost,
                 port = info.optInt("port", fallbackPort),
                 version = info.optString("version", ""),
