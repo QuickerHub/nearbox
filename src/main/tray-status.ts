@@ -7,6 +7,14 @@ import { phonesOnlineLabel } from "../shared/devices.ts";
 
 export type RunStatusLike = { status: string };
 
+/** Non-finite / negative counts must not reach Chinese tray copy (`-1 台手机在线`). */
+export function sanitizeCount(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  return Math.floor(value);
+}
+
 /** Count running/queued in one pass (no filter alloc). */
 export function countRunStatuses(runs: readonly RunStatusLike[]): { running: number; queued: number } {
   let running = 0;
@@ -23,12 +31,14 @@ export function countRunStatuses(runs: readonly RunStatusLike[]): { running: num
 
 /** "Agent 空闲" / "Agent：N 运行中 · M 排队" */
 export function trayAgentLabel(running: number, queued: number): string {
-  return running || queued ? `Agent：${running} 运行中 · ${queued} 排队` : "Agent 空闲";
+  const live = sanitizeCount(running);
+  const waiting = sanitizeCount(queued);
+  return live || waiting ? `Agent：${live} 运行中 · ${waiting} 排队` : "Agent 空闲";
 }
 
 /** "没有手机在线" / "N 台手机在线" */
 export function trayPhonesLabel(phones: number): string {
-  return phonesOnlineLabel(phones);
+  return phonesOnlineLabel(sanitizeCount(phones));
 }
 
 /** Host:port row, or the empty-LAN placeholder. */
@@ -52,6 +62,6 @@ export function trayStatusSignature(
 
 /** Hover tooltip: compact Chinese status next to the app name. */
 export function trayTooltip(running: number, queued: number, phones: number): string {
-  return `Nearbox · ${trayAgentLabel(running, queued)} · ${phonesOnlineLabel(phones)}`;
+  return `Nearbox · ${trayAgentLabel(running, queued)} · ${trayPhonesLabel(phones)}`;
 }
 

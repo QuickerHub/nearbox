@@ -9,14 +9,23 @@ const APPLICATION_USER_KEY =
   "src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser";
 
 /** Cursor IDE's global state DB (VS Code-style). Missing when Cursor is not installed. */
+/**
+ * Empty APPDATA / XDG_CONFIG_HOME must not win over the fallback — `??` only
+ * treats null/undefined, so `join("", "Cursor", ...)` would resolve relative.
+ */
+export function resolveConfigHome(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : fallback;
+}
+
 export function cursorStateDbPath(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
   if (process.platform === "win32") {
-    return join(env.APPDATA ?? join(home, "AppData", "Roaming"), "Cursor", "User", "globalStorage", "state.vscdb");
+    return join(resolveConfigHome(env.APPDATA, join(home, "AppData", "Roaming")), "Cursor", "User", "globalStorage", "state.vscdb");
   }
   if (process.platform === "darwin") {
     return join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb");
   }
-  return join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "Cursor", "User", "globalStorage", "state.vscdb");
+  return join(resolveConfigHome(env.XDG_CONFIG_HOME, join(home, ".config")), "Cursor", "User", "globalStorage", "state.vscdb");
 }
 
 /**

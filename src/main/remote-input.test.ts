@@ -7,6 +7,8 @@ import {
   moveCommand,
   parseControlMessage,
   shouldSendFrame,
+  MAX_COMBO_CODES,
+  MAX_TEXT_CHARS,
   textCommands,
   toAbsolute,
   translateInput,
@@ -118,4 +120,18 @@ test("control messages are validated before they reach the injector", () => {
     maxWidth: 1920,
     crop: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
   });
+});
+
+test("text and combo payloads are capped so a buggy client cannot flood the injector", () => {
+  const huge = "a".repeat(MAX_TEXT_CHARS + 50);
+  assert.equal(textCommands(huge).length, MAX_TEXT_CHARS);
+  const parsed = parseControlMessage(JSON.stringify({ t: "text", value: huge }));
+  assert.equal(parsed && parsed.t === "text" ? parsed.value.length : -1, MAX_TEXT_CHARS);
+  const codes = Array.from({ length: MAX_COMBO_CODES + 8 }, () => "KeyA");
+  assert.equal(translateInput({ t: "combo", codes }).length, MAX_COMBO_CODES * 2);
+});
+
+test("absurd wheel notches are clamped before they become SendInput deltas", () => {
+  assert.equal(wheelCommand(10_000), "W 6000");
+  assert.equal(wheelCommand(-10_000), "W -6000");
 });
