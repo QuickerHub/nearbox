@@ -51,7 +51,7 @@ export interface PersistedState {
   agentModels: Partial<Record<AgentKind, ModelCatalog>>;
 }
 
-const MAX_RUNS_KEPT = 300;
+export const MAX_RUNS_KEPT = 300;
 
 function emptyState(): PersistedState {
   return {
