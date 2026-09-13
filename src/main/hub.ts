@@ -44,6 +44,7 @@ import { detectAgents, listAgentModels } from "./agents";
 import { ensureCursorAgentHttp1 } from "./cursor-http.ts";
 import { readCursorIdeModels } from "./cursor-ide-state.ts";
 import type { DelegationConfig } from "./delegation";
+import { deviceCheckStillCurrent, deviceConnectionKey } from "./device-check";
 import { discoverDevices } from "./lan-discover";
 import { buildDelegatedPrompt, buildTurnPrompt, delegationSection, imagePaths, type PromptAttachment } from "./prompt";
 import { type RunAttachment, RunManager } from "./runner";
@@ -73,6 +74,10 @@ export class TaskHub extends EventEmitter {
   readonly runner: RunManager;
   readonly dataDir: string;
   private readonly deviceChecks = new Map<string, Promise<RemoteDevice>>();
+  /** Bumped when a device's SSH endpoint changes or the row is removed; stale probes must not apply. */
+  private readonly deviceCheckEpochs = new Map<string, number>();
+  /** Coalesce concurrent LAN/ssh-config sweeps from the Settings discover button. */
+  private deviceDiscover: Promise<Awaited<ReturnType<typeof discoverDevices>>> | null = null;
   private readonly modelFetches = new Map<AgentKind, Promise<void>>();
   /** When each CLI was last asked for its catalog, successful or not; keeps a broken CLI from being hammered. */
   private readonly modelAttempts = new Map<AgentKind, number>();
@@ -568,6 +573,13 @@ export class TaskHub extends EventEmitter {
       reconnect = reconnect || identityFile !== device.identityFile;
       device.identityFile = identityFile;
     }
+    if (reconnect) {
+      this.invalidateDeviceCheck(id);
+      device.status = "checking";
+      device.error = undefined;
+      device.platform = "unknown";
+      device.agents = [];
+    }
     this.store.save();
     this.changed();
     if (reconnect) {
@@ -584,6 +596,7 @@ export class TaskHub extends EventEmitter {
     if (this.runs.some((run) => run.deviceId === id && isRunActive(run))) {
       fail("这台电脑上还有正在运行的 Agent，先停止再移除。");
     }
+    this.invalidateDeviceCheck(id);
     this.remoteDevices.splice(index, 1);
     // Its projects cannot be reached anymore; tasks keep everything else.
     const orphaned = new Set(this.projects.filter((project) => project.deviceId === id).map((project) => project.id));
@@ -604,34 +617,73 @@ export class TaskHub extends EventEmitter {
     if (pending) {
       return pending;
     }
+    const epoch = this.deviceCheckEpochs.get(id) ?? 0;
+    const probeTarget = {
+      host: device.host,
+      user: device.user,
+      port: device.port,
+      identityFile: device.identityFile,
+    };
+    const expectedKey = deviceConnectionKey(probeTarget);
     device.status = "checking";
     device.error = undefined;
     this.changed();
     const check = (async () => {
       try {
-        const probe = await probeDevice(device);
-        device.platform = probe.platform;
-        device.hostName = probe.hostName || undefined;
-        device.home = probe.home || device.home;
-        device.agents = probe.agents;
-        device.status = "online";
-        device.error = undefined;
-        if (!device.user && probe.user) {
-          device.user = probe.user;
+        // Snapshot the endpoint so a mid-flight host edit cannot redirect this SSH.
+        const probe = await probeDevice(probeTarget);
+        if (!this.deviceCheckIsCurrent(id, epoch, expectedKey)) {
+          return this.remoteDevices.find((item) => item.id === id) ?? device;
         }
-      } catch (error) {
-        device.status = "offline";
-        device.error = error instanceof Error ? error.message : String(error);
-      } finally {
-        device.lastCheckedAt = new Date().toISOString();
-        this.deviceChecks.delete(id);
+        const current = this.requireDevice(id);
+        current.platform = probe.platform;
+        current.hostName = probe.hostName || undefined;
+        current.home = probe.home || current.home;
+        current.agents = probe.agents;
+        current.status = "online";
+        current.error = undefined;
+        if (!current.user && probe.user) {
+          current.user = probe.user;
+        }
+        current.lastCheckedAt = new Date().toISOString();
         this.store.save();
         this.changed();
+        return current;
+      } catch (error) {
+        if (!this.deviceCheckIsCurrent(id, epoch, expectedKey)) {
+          return this.remoteDevices.find((item) => item.id === id) ?? device;
+        }
+        const current = this.requireDevice(id);
+        current.status = "offline";
+        current.error = error instanceof Error ? error.message : String(error);
+        current.lastCheckedAt = new Date().toISOString();
+        this.store.save();
+        this.changed();
+        return current;
+      } finally {
+        if ((this.deviceCheckEpochs.get(id) ?? 0) === epoch) {
+          this.deviceChecks.delete(id);
+        }
       }
-      return device;
     })();
     this.deviceChecks.set(id, check);
     return check;
+  }
+
+  /** Drop coalesced in-flight probe so the next checkDevice starts fresh against the new endpoint. */
+  private invalidateDeviceCheck(id: string): void {
+    this.deviceCheckEpochs.set(id, (this.deviceCheckEpochs.get(id) ?? 0) + 1);
+    this.deviceChecks.delete(id);
+  }
+
+  private deviceCheckIsCurrent(id: string, epoch: number, expectedKey: string): boolean {
+    const device = this.remoteDevices.find((item) => item.id === id);
+    return deviceCheckStillCurrent({
+      epoch,
+      currentEpoch: this.deviceCheckEpochs.get(id) ?? 0,
+      device,
+      expectedKey,
+    });
   }
 
   /** A device ready to run on; checks it first when it has never been reached or last looked offline. */
@@ -654,7 +706,12 @@ export class TaskHub extends EventEmitter {
 
   /** ssh config aliases and LAN hosts with sshd, flagged when already added. */
   async discoverDevices(): Promise<DeviceCandidate[]> {
-    const candidates = await discoverDevices();
+    if (!this.deviceDiscover) {
+      this.deviceDiscover = discoverDevices().finally(() => {
+        this.deviceDiscover = null;
+      });
+    }
+    const candidates = await this.deviceDiscover;
     return candidates.map((candidate) => {
       const match = this.remoteDevices.find((device) => {
         const target = device.host.toLowerCase();

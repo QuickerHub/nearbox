@@ -36,7 +36,7 @@ import {
   type TaskInput,
   type TaskPatch,
 } from "@shared/protocol";
-import { receiveToInbox } from "./files";
+import { deviceInboxSegment, receiveToInbox } from "./files";
 import { countOnlinePhones, reuseMapValues } from "./snapshot-devices";
 import { recentRuns } from "./snapshot-runs";
 import type { TaskHub } from "./hub";
@@ -100,6 +100,8 @@ export class LanServer extends EventEmitter {
   private invite: InviteInfo | null = null;
   /** In-flight auto-refresh when the advertised invite has expired. */
   private inviteRefresh: Promise<void> | null = null;
+  /** False before start / after stop so a late invite mint cannot schedule snapshots. */
+  private active = false;
   private listenError: string | undefined;
   private snapshotTimer: NodeJS.Timeout | null = null;
   private beacon: dgram.Socket | null = null;
@@ -204,6 +206,7 @@ export class LanServer extends EventEmitter {
     this.server = server;
     this.wss = wss;
     this.rcWss = rcWss;
+    this.active = true;
     if (this.selectedHost) {
       await this.refreshInvite();
     }
@@ -211,6 +214,7 @@ export class LanServer extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    this.active = false;
     this.stopBeacon();
     this.remote?.stop();
     for (const binding of this.sockets) {
@@ -320,7 +324,7 @@ export class LanServer extends EventEmitter {
     const qrDataUrl = await QRCode.toDataURL(url, qrOptions);
     const apkUrl = this.apkPath ? `http://${this.selectedHost}:${this.port}/app/nearbox.apk` : undefined;
     const apkQrDataUrl = apkUrl ? await QRCode.toDataURL(apkUrl, qrOptions) : undefined;
-    this.invite = {
+    const invite: InviteInfo = {
       url,
       token,
       pin,
@@ -331,8 +335,13 @@ export class LanServer extends EventEmitter {
       apkUrl,
       apkQrDataUrl,
     };
+    // QR encode awaits; quit mid-refresh must not publish or schedule after stop().
+    if (!this.active) {
+      return invite;
+    }
+    this.invite = invite;
     this.scheduleSnapshot();
-    return this.invite;
+    return invite;
   }
 
   discoverInfo(): DiscoverInfo | { service: "nearbox"; error: string } {
@@ -366,7 +375,7 @@ export class LanServer extends EventEmitter {
    * Snapshot omits dead credentials via `liveInvite` until this finishes.
    */
   private ensureInviteFresh(): Promise<void> {
-    if (!this.selectedHost) {
+    if (!this.active || !this.selectedHost) {
       return Promise.resolve();
     }
     if (liveInvite(this.invite)) {
@@ -778,7 +787,7 @@ export class LanServer extends EventEmitter {
     const fileName = decodeURIComponent(url.searchParams.get("name") ?? "file");
     const mediaType = req.headers["content-type"] || "application/octet-stream";
     const maxBytes = isImageMediaType(mediaType) ? this.limits.maxImageBytes : this.limits.maxFileBytes;
-    const deviceDir = join(this.inboxDir, safeSegment(session.device.name));
+    const deviceDir = join(this.inboxDir, deviceInboxSegment(session.device));
     const saved = await receiveToInbox({
       request: req,
       inboxDir: deviceDir,
@@ -994,11 +1003,14 @@ export class LanServer extends EventEmitter {
 
   /** Snapshots are coalesced so a burst of changes produces one broadcast. */
   private scheduleSnapshot(): void {
-    if (this.snapshotTimer) {
+    if (!this.active || this.snapshotTimer) {
       return;
     }
     this.snapshotTimer = setTimeout(() => {
       this.snapshotTimer = null;
+      if (!this.active) {
+        return;
+      }
       void this.ensureInviteFresh();
       const snapshot = this.snapshot();
       const payload = JSON.stringify({ type: "snapshot", snapshot } satisfies HostToClient);
@@ -1148,11 +1160,6 @@ function stringList(value: unknown): string[] | undefined {
     return undefined;
   }
   return value.filter((item): item is string => typeof item === "string" && item.length > 0);
-}
-
-function safeSegment(name: string): string {
-  const cleaned = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "phone";
-  return cleaned.slice(0, 60);
 }
 
 async function readJson<T>(req: http.IncomingMessage): Promise<T> {
