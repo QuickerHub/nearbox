@@ -105,3 +105,15 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+test("an open fence in the streaming tail still parses as a code block", () => {
+  const { sealed, tail } = splitStreamingMarkdown("前言\n\n```js\nconst x = 1\n");
+  assert.equal(sealed, "前言\n\n");
+  const blocks = parseBlocks(tail);
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.type, "code");
+  if (blocks[0]?.type === "code") {
+    assert.equal(blocks[0].lang, "js");
+    assert.equal(blocks[0].body, "const x = 1\n");
+  }
+});

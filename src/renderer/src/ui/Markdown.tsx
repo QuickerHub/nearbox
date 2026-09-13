@@ -8,8 +8,9 @@ import { parseBlocks, splitStreamingMarkdown, type MdAlign, type MdBlock } from 
  * React escapes everything, so nothing here can inject markup.
  *
  * When `streaming` is set, completed block boundaries stay in a sealed Markdown
- * tree and only the open tail remounts on each delta. The sealed tree is
- * `memo`ised on the sealed string so unchanged prefixes skip React work.
+ * tree and only the open tail remounts on each delta. Both halves are parsed as
+ * markdown (an open fence in the tail still paints as a code block); the sealed
+ * tree is `memo`ised on the sealed string so unchanged prefixes skip React work.
  */
 export function Markdown({ text, className, streaming }: { text: string; className?: string; streaming?: boolean }): JSX.Element {
   const parts = useMemo(() => (streaming ? splitStreamingMarkdown(text) : null), [streaming, text]);
@@ -17,7 +18,12 @@ export function Markdown({ text, className, streaming }: { text: string; classNa
     return (
       <div className={["md", className].filter(Boolean).join(" ")}>
         {parts.sealed ? <SealedMarkdown text={parts.sealed} /> : null}
-        {parts.tail ? <p className="md__stream-tail">{parts.tail}</p> : null}
+        {/* Parse the open tail too: a raw <p> showed ``` / lists as literal text until the turn ended. */}
+        {parts.tail ? (
+          <div className="md__stream-tail">
+            <SealedMarkdown text={parts.tail} />
+          </div>
+        ) : null}
       </div>
     );
   }

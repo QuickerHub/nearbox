@@ -8,6 +8,7 @@ import {
   formatTerminalDuration,
   isLiveTerminal,
   lastOutputLine,
+  pickDockLead,
   terminalTitle,
 } from "../lib/liveTerminals";
 import { useRunEvents } from "../lib/useRunEvents";
@@ -57,7 +58,7 @@ export function TerminalDock({ client, run, onStop }: TerminalDockProps): JSX.El
     return null;
   }
 
-  const lead = live[0] ?? visible[0]!;
+  const lead = pickDockLead(live) ?? pickDockLead(visible) ?? visible[0]!;
   const countLabel = live.length ? `${live.length} 个终端` : `${visible.length} 个终端`;
   const leadStatus = dockStatusLabel(lead);
   const leadDuration = durationOf(lead);
