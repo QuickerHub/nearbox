@@ -140,6 +140,23 @@ export class AcpConnection extends EventEmitter {
     this.notify("$/cancel_request", { id });
   }
 
+  /**
+   * Fail one outstanding request locally without waiting for the agent.
+   * Used when `$/cancel_request` is ignored so the caller can finish the turn.
+   */
+  rejectPending(id: number, error: Error): boolean {
+    const entry = this.pending.get(id);
+    if (!entry) {
+      return false;
+    }
+    this.pending.delete(id);
+    if (entry.timer) {
+      clearTimeout(entry.timer);
+    }
+    entry.reject(error);
+    return true;
+  }
+
   respond(id: number | string, result: unknown): void {
     this.write({ jsonrpc: "2.0", id, result });
   }
@@ -294,6 +311,22 @@ interface ActivePrompt {
   requestId: number;
 }
 
+/** True when initialize advertised `sessionCapabilities.close` (`{}` or truthy). */
+export function sessionCloseAdvertised(agentCapabilities: unknown): boolean {
+  if (!agentCapabilities || typeof agentCapabilities !== "object") {
+    return false;
+  }
+  const session = (agentCapabilities as { sessionCapabilities?: unknown }).sessionCapabilities;
+  if (session == null) {
+    return false;
+  }
+  if (typeof session !== "object") {
+    return Boolean(session);
+  }
+  const close = (session as { close?: unknown }).close;
+  return close != null && close !== false;
+}
+
 /**
  * One agent process. `ready` resolves once the ACP handshake is done; after
  * that sessions can be created or loaded and prompted, several at a time.
@@ -304,6 +337,8 @@ export class AgentHost extends EventEmitter {
   readonly ready: Promise<void>;
   /** Models the agent offered, learned from the first session; undefined until then. */
   models: AcpModel[] | undefined;
+  /** Agent advertised `session/close` during initialize. */
+  supportsSessionClose = false;
   readonly startedAt = Date.now();
   lastUsedAt = Date.now();
 
@@ -362,7 +397,7 @@ export class AgentHost extends EventEmitter {
     });
     this.ready = Promise.race([
       spawnFailure,
-      this.connection.request(
+      this.connection.request<Record<string, unknown>>(
         "initialize",
         {
           protocolVersion: 1,
@@ -371,7 +406,8 @@ export class AgentHost extends EventEmitter {
         },
         INITIALIZE_TIMEOUT_MS,
       ),
-    ]).then(() => {
+    ]).then((result) => {
+      this.supportsSessionClose = sessionCloseAdvertised(result?.agentCapabilities);
       this.touch();
     });
     // Callers that never look at `ready` must not turn a start failure into an unhandled rejection.
@@ -516,6 +552,42 @@ export class AgentHost extends EventEmitter {
       return;
     }
     this.connection.cancelRequest(prompt.requestId);
+  }
+
+  /**
+   * Reject the in-flight `session/prompt` locally so the turn can finish even when
+   * the agent ignores soft cancel and `$/cancel_request`.
+   */
+  abandonPrompt(sessionId: string, reason = "本轮已取消"): boolean {
+    const prompt = this.prompts.get(sessionId);
+    if (!prompt?.requestId) {
+      return false;
+    }
+    const rejected = this.connection.rejectPending(prompt.requestId, new Error(reason));
+    this.prompts.delete(sessionId);
+    this.touch();
+    return rejected;
+  }
+
+  /**
+   * Release a session the agent no longer needs in this process. No-ops when the
+   * agent did not advertise `sessionCapabilities.close`.
+   */
+  async closeSession(sessionId: string): Promise<void> {
+    if (!sessionId) {
+      return;
+    }
+    this.sessions.delete(sessionId);
+    this.listedSessions = null;
+    if (!this.supportsSessionClose || !this.alive) {
+      return;
+    }
+    try {
+      await this.connection.request("session/close", { sessionId }, SET_MODEL_TIMEOUT_MS);
+    } catch (error) {
+      this.log(`[${this.kind}] session/close failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    this.touch();
   }
 
   kill(): void {
