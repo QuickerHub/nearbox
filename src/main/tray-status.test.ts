@@ -32,6 +32,9 @@ test("tray labels stay Chinese and idle when empty", () => {
   assert.equal(trayPhonesLabel(3), "3 台手机在线");
   assert.equal(trayHostLabel(undefined, 7788), "未发现局域网地址");
   assert.equal(trayHostLabel("192.168.1.8", 7788), "192.168.1.8:7788");
+  assert.equal(trayHostLabel("192.168.1.8", 0), "未发现局域网地址");
+  assert.equal(trayHostLabel("192.168.1.8", -1), "未发现局域网地址");
+  assert.equal(trayHostLabel("192.168.1.8", Number.NaN), "未发现局域网地址");
 });
 
 test("trayStatusSignature changes only when a status row would change", () => {

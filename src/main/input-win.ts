@@ -76,11 +76,16 @@ class WindowsInputInjector implements InputSink {
   readonly supported = true;
   private child: ChildProcessWithoutNullStreams | null = null;
   private readyPromise: Promise<boolean> | null = null;
+  /** Settles an in-flight ready() when dispose() wins the race against NB_READY. */
+  private readyResolve: ((ok: boolean) => void) | null = null;
   private isReady = false;
   private pending: string[] = [];
   private disposed = false;
 
   ready(): Promise<boolean> {
+    if (this.disposed) {
+      return Promise.resolve(false);
+    }
     return this.start();
   }
 
@@ -97,10 +102,26 @@ class WindowsInputInjector implements InputSink {
   }
 
   private start(): Promise<boolean> {
+    if (this.disposed) {
+      return Promise.resolve(false);
+    }
     if (this.readyPromise) {
       return this.readyPromise;
     }
     this.readyPromise = new Promise<boolean>((resolve) => {
+      let settled = false;
+      const settle = (ok: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this.readyResolve = null;
+        if (!ok) {
+          this.pending = [];
+        }
+        resolve(ok);
+      };
+      this.readyResolve = settle;
       let child: ChildProcessWithoutNullStreams;
       try {
         const encoded = Buffer.from(BOOTSTRAP, "utf16le").toString("base64");
@@ -109,7 +130,8 @@ class WindowsInputInjector implements InputSink {
           stdio: ["pipe", "pipe", "pipe"],
         });
       } catch {
-        resolve(false);
+        this.readyPromise = null;
+        settle(false);
         return;
       }
       this.child = child;
@@ -118,19 +140,23 @@ class WindowsInputInjector implements InputSink {
         banner += chunk.toString("utf8");
         if (banner.includes("NB_READY")) {
           child.stdout.off("data", onData);
+          if (this.disposed) {
+            settle(false);
+            return;
+          }
           this.isReady = true;
           if (this.pending.length) {
             this.writeNow(this.pending);
             this.pending = [];
           }
-          resolve(true);
+          settle(true);
         }
       };
       child.stdout.on("data", onData);
       child.stderr.on("data", () => undefined);
       child.on("error", () => {
         this.teardown();
-        resolve(false);
+        settle(false);
       });
       child.on("exit", () => {
         this.teardown();
@@ -152,7 +178,9 @@ class WindowsInputInjector implements InputSink {
     this.readyPromise = null;
     const child = this.child;
     this.child = null;
-    if (child) {
+    // kill() with pid still undefined (spawn ENOENT before the error event)
+    // aborts the whole Node process on some platforms — only signal a live child.
+    if (child?.pid) {
       try {
         child.kill();
       } catch {
@@ -164,9 +192,16 @@ class WindowsInputInjector implements InputSink {
   dispose(): void {
     this.disposed = true;
     this.pending = [];
+    const settle = this.readyResolve;
+    this.readyResolve = null;
     this.teardown();
+    // Dispose can beat NB_READY; settle ready() so callers do not hang until process exit.
+    settle?.(false);
   }
 }
+
+/** Exported for unit tests that drive the Windows path without win32. */
+export { WindowsInputInjector };
 
 class NoopInjector implements InputSink {
   readonly supported = false;
