@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   AGENT_LABELS,
   type AgentAccess,
@@ -18,7 +18,7 @@ import {
   idePrefForFamily,
   type HostSnapshot,
   type IdeModelPref,
-  isRunActive,
+  isTopLevelActiveRun,
   MAX_FILES_PER_MESSAGE,
   type ModelFamily,
   modelLabel,
@@ -122,7 +122,7 @@ export function ChatComposer({
 
   const project = snapshot.projects.find((item) => item.id === chips.projectId);
   const agentInfo = snapshot.agents.find((item) => item.kind === chips.agent);
-  const activeRun = task ? snapshot.runs.find((run) => run.taskId === task.id && isRunActive(run)) : undefined;
+  const activeRun = task ? snapshot.runs.find((run) => run.taskId === task.id && isTopLevelActiveRun(run)) : undefined;
   const [lingerRunId, setLingerRunId] = useState<string | null>(null);
   useEffect(() => {
     setLingerRunId(null);
@@ -228,7 +228,7 @@ export function ChatComposer({
     textRef.current?.focus();
   };
 
-  const removeAttachment = (key: string) => {
+  const removeAttachment = useCallback((key: string) => {
     setAttachments((current) => {
       const item = current.find((candidate) => candidate.key === key);
       if (item) {
@@ -237,7 +237,7 @@ export function ChatComposer({
       return current.filter((candidate) => candidate.key !== key);
     });
     setPreview((current) => (current?.key === key ? null : current));
-  };
+  }, []);
 
   const placeholder = task
     ? !chips.agent
@@ -294,23 +294,9 @@ export function ChatComposer({
           <div className="composer__files" role="list" aria-label="待发送的附件">
             {attachments.map((item) =>
               item.kind === "image" && item.previewUrl ? (
-                <div key={item.key} className="composer__thumb" role="listitem" title={item.file.name}>
-                  <button type="button" className="composer__thumb-open" onClick={() => setPreview(item)} aria-label={`预览 ${item.file.name}`}>
-                    <img src={item.previewUrl} alt="" />
-                  </button>
-                  <button type="button" className="composer__remove" onClick={() => removeAttachment(item.key)} disabled={busy} aria-label={`移除 ${item.file.name}`}>
-                    <Icon name="close" size={11} />
-                  </button>
-                </div>
+                <DraftImageChip key={item.key} item={item} busy={busy} onPreview={setPreview} onRemove={removeAttachment} />
               ) : (
-                <div key={item.key} className="composer__filechip" role="listitem" title={item.file.name}>
-                  <Icon name="file" size={15} />
-                  <span className="composer__filechip-name">{item.file.name || "文件"}</span>
-                  <span className="composer__filechip-size">{formatBytes(item.file.size)}</span>
-                  <button type="button" className="composer__remove composer__remove--inline" onClick={() => removeAttachment(item.key)} disabled={busy} aria-label={`移除 ${item.file.name}`}>
-                    <Icon name="close" size={11} />
-                  </button>
-                </div>
+                <DraftFileChip key={item.key} item={item} busy={busy} onRemove={removeAttachment} />
               ),
             )}
           </div>
@@ -407,6 +393,50 @@ export function ChatComposer({
     </div>
   );
 }
+
+const DraftImageChip = memo(function DraftImageChip({
+  item,
+  busy,
+  onPreview,
+  onRemove,
+}: {
+  item: DraftAttachment;
+  busy: boolean;
+  onPreview(item: DraftAttachment): void;
+  onRemove(key: string): void;
+}): JSX.Element {
+  return (
+    <div className="composer__thumb" role="listitem" title={item.file.name}>
+      <button type="button" className="composer__thumb-open" onClick={() => onPreview(item)} aria-label={`预览 ${item.file.name}`}>
+        <img src={item.previewUrl!} alt="" />
+      </button>
+      <button type="button" className="composer__remove" onClick={() => onRemove(item.key)} disabled={busy} aria-label={`移除 ${item.file.name}`}>
+        <Icon name="close" size={11} />
+      </button>
+    </div>
+  );
+});
+
+const DraftFileChip = memo(function DraftFileChip({
+  item,
+  busy,
+  onRemove,
+}: {
+  item: DraftAttachment;
+  busy: boolean;
+  onRemove(key: string): void;
+}): JSX.Element {
+  return (
+    <div className="composer__filechip" role="listitem" title={item.file.name}>
+      <Icon name="file" size={15} />
+      <span className="composer__filechip-name">{item.file.name || "文件"}</span>
+      <span className="composer__filechip-size">{formatBytes(item.file.size)}</span>
+      <button type="button" className="composer__remove composer__remove--inline" onClick={() => onRemove(item.key)} disabled={busy} aria-label={`移除 ${item.file.name}`}>
+        <Icon name="close" size={11} />
+      </button>
+    </div>
+  );
+});
 
 function revokePreview(item: DraftAttachment): void {
   if (item.previewUrl) {

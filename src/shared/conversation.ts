@@ -30,3 +30,9 @@ export function canContinueRun(runs: readonly AgentRun[], run: AgentRun): boolea
   const active = run.status === "queued" || run.status === "running";
   return active || Boolean(sessionIdAlongChain(runs, run.id));
 }
+
+/** Queued/running turn that blocks the composer; delegated children do not. */
+export function isTopLevelActiveRun(run: Pick<AgentRun, "status" | "parentRunId">): boolean {
+  return (run.status === "queued" || run.status === "running") && run.parentRunId === undefined;
+}
+

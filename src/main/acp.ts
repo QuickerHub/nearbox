@@ -411,6 +411,10 @@ export class AgentHost extends EventEmitter {
       ),
     ]).then((result) => {
       this.supportsSessionClose = sessionCloseAdvertised(result?.agentCapabilities);
+      // One line per host start so we can see whether Cursor (and peers) advertise close.
+      this.log(
+        `[${this.kind}] sessionCapabilities.close ${this.supportsSessionClose ? "advertised" : "absent"}`,
+      );
       this.touch();
     });
     // Callers that never look at `ready` must not turn a start failure into an unhandled rejection.

@@ -46,7 +46,7 @@ import {
 import { remoteCwdPreflight, remoteDevicePreflight } from "./remote-preflight";
 import { localPreflightFailure, shouldAttemptWarm, warmFallbackStatus } from "./run-start";
 import { CANCEL_GRACE_MS, FORCE_CANCEL_GRACE_MS, warmCancelAfterSoftGrace } from "./cancel-escalation";
-import { pendingPermissionView, settlePermissionHead } from "./permission-queue";
+import { drainPermissionQueue, pendingPermissionView, settlePermissionHead } from "./permission-queue";
 import { type DelegationConfig, withDelegationPath } from "./delegation";
 import { activeDescendants, nextRunnable } from "./scheduler";
 import {
@@ -877,7 +877,8 @@ export class RunManager extends EventEmitter {
     if (!state.permissionQueue.length && !state.run.pendingPermission) {
       return;
     }
-    const waiters = state.permissionQueue.splice(0);
+    // Drain first so sync clears the UI before waiters resume the agent.
+    const waiters = drainPermissionQueue(state.permissionQueue);
     this.syncPendingPermission(state);
     for (const waiter of waiters) {
       waiter.resolve(null);

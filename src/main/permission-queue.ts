@@ -31,10 +31,14 @@ export function settlePermissionHead<TPending>(
   return queue;
 }
 
+/** Take every waiter off the queue without resolving (runner syncs UI first). */
+export function drainPermissionQueue<TPending>(queue: PermissionWaiter<TPending>[]): PermissionWaiter<TPending>[] {
+  return queue.splice(0);
+}
+
 /** Cancel every waiter (run finished or user stopped the turn). */
 export function settleAllPermissions<TPending>(queue: PermissionWaiter<TPending>[]): void {
-  const waiters = queue.splice(0);
-  for (const waiter of waiters) {
+  for (const waiter of drainPermissionQueue(queue)) {
     waiter.resolve(null);
   }
 }

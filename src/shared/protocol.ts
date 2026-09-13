@@ -658,7 +658,7 @@ export function isRunActive(run: Pick<AgentRun, "status">): boolean {
   return run.status === "queued" || run.status === "running";
 }
 
-export { canContinueRun, sessionIdAlongChain } from "./conversation";
+export { canContinueRun, isTopLevelActiveRun, sessionIdAlongChain } from "./conversation";
 export { parseCursorIdeModels } from "./cursor-ide-models";
 export { BUILTIN_MODELS, canListModels, filterModels, modelLabel, modelsForAgent, modelsNeedRefresh, normalizeModelId } from "./models";
 export {

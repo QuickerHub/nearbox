@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { type FileMeta, isImageFile } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatBytes } from "../lib/format";
@@ -54,7 +54,7 @@ interface FileStripProps {
  * The files of one message: pictures as a row of thumbnails (one picture gets
  * room to breathe), everything else as a card that opens the file.
  */
-export function FileStrip({ files, client }: FileStripProps): JSX.Element | null {
+export const FileStrip = memo(function FileStrip({ files, client }: FileStripProps): JSX.Element | null {
   const [preview, setPreview] = useState<FileMeta | null>(null);
   const images = files.filter(isImageFile);
   const others = files.filter((file) => !isImageFile(file));
@@ -86,4 +86,4 @@ export function FileStrip({ files, client }: FileStripProps): JSX.Element | null
       {preview ? <Lightbox src={client.fileUrl(preview.id)} name={preview.name} href={client.fileUrl(preview.id)} onClose={() => setPreview(null)} /> : null}
     </>
   );
-}
+});
