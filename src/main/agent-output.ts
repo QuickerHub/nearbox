@@ -348,7 +348,9 @@ export function createOutputParser(kind: OutputDialect): OutputParser {
     return lastUsage;
   };
 
-  const context: DialectContext = { sink, track, tools, rememberUsage, usage: () => lastUsage };
+  let anonSeq = 0;
+  const anonId = (): string => `tool-${anonSeq++}`;
+  const context: DialectContext = { sink, track, tools, anonId, rememberUsage, usage: () => lastUsage };
 
   const push = (data: Record<string, unknown>): ParseResult => {
     const out: ParseResult = { events: [] };
@@ -428,12 +430,14 @@ interface DialectContext {
   sink: Sink;
   track(id: string, patch: Partial<ToolCall> & Pick<ToolCall, "name" | "kind">): ToolCall;
   tools: Map<string, ToolCall>;
+  /** Stable id when the CLI omits toolCallId / call_id (never reuse events.length). */
+  anonId(): string;
   rememberUsage(raw: unknown, extra?: Partial<TokenUsage>): TokenUsage | undefined;
   usage(): TokenUsage | undefined;
 }
 
 /** cursor-agent and Claude Code share this dialect. */
-function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink, track, tools, rememberUsage, usage }: DialectContext): void {
+function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink, track, tools, anonId, rememberUsage, usage }: DialectContext): void {
   const type = String(data.type ?? "");
   const events = out.events;
   if (typeof data.session_id === "string" && data.session_id) {
@@ -499,7 +503,7 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
         } else if (block.type === "tool_use") {
           const name = String(block.name ?? "tool");
           const args = isRecord(block.input) ? block.input : {};
-          sink.tool(events, track(String(block.id ?? `tool-${events.length}`), describeArgs(name, args)));
+          sink.tool(events, track(toolIdOf(block.id, anonId), describeArgs(name, args)));
         }
       }
       return;
@@ -510,7 +514,7 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
       const rawName = Object.keys(call).find((key) => key.endsWith("ToolCall")) ?? Object.keys(call)[0] ?? "tool";
       const payload = isRecord(call[rawName]) ? (call[rawName] as Record<string, unknown>) : {};
       const args = isRecord(payload.args) ? payload.args : {};
-      const id = String(data.call_id ?? payload.toolCallId ?? args.toolCallId ?? `tool-${events.length}`);
+      const id = toolIdOf(data.call_id ?? payload.toolCallId ?? args.toolCallId, anonId);
       if (subtype === "started") {
         sink.tool(events, track(id, describeArgs(rawName, args, typeof payload.description === "string" ? payload.description : undefined)));
       } else if (subtype === "completed") {
@@ -521,7 +525,8 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
     }
     case "result": {
       sink.flush(events);
-      const isError = Boolean(data.is_error) || data.subtype === "error";
+      const subtype = String(data.subtype ?? "");
+      const isError = Boolean(data.is_error) || subtype === "error" || subtype.startsWith("error_");
       const reported = typeof data.result === "string" ? data.result : "";
       out.isError = isError;
       // cursor-agent's `result` glues every assistant message together; the last message is the actual answer.
@@ -540,7 +545,7 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
 }
 
 /** `codex exec --json` */
-function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, track, rememberUsage, usage }: DialectContext): void {
+function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, track, anonId, rememberUsage, usage }: DialectContext): void {
   const type = String(data.type ?? "");
   const events = out.events;
   if (type === "thread.started") {
@@ -573,7 +578,7 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
     const phase = type.slice("item.".length);
     const item = isRecord(data.item) ? data.item : {};
     const itemType = String(item.type ?? "");
-    const id = String(item.id ?? `item-${events.length}`);
+    const id = toolIdOf(item.id, anonId);
     const itemStatus = String(item.status ?? "");
     const status: ToolStatus = itemStatus === "failed" ? "error" : phase === "completed" || itemStatus === "completed" ? "ok" : "running";
     switch (itemType) {
@@ -668,7 +673,7 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
  * `update` objects with `sessionUpdate` and `content`. The runner adds a
  * synthetic `end` when a prompt returns.
  */
-function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track, tools, rememberUsage, usage }: DialectContext): void {
+function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track, tools, anonId, rememberUsage, usage }: DialectContext): void {
   const type = String(data.type ?? data.sessionUpdate ?? "");
   const events = out.events;
   const metaUsage = rememberUsage(isRecord(data._meta) ? data._meta : undefined);
@@ -715,22 +720,27 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
     }
     case "tool_call":
     case "tool_use": {
-      const id = String(data.toolCallId ?? data.id ?? `tool-${events.length}`);
+      const id = toolIdOf(data.toolCallId ?? data.id, anonId);
       const title = String(data.title ?? data.name ?? data.tool ?? "tool").replace(/^`(.*)`$/s, "$1");
       const rawInput = isRecord(data.rawInput) ? data.rawInput : isRecord(data.input) ? data.input : {};
       const described = describeArgs(title, rawInput, undefined, acpKind(String(data.kind ?? ""), title));
       const files = acpLocations(data);
-      sink.tool(
-        events,
-        track(id, {
-          ...described,
-          files: described.files ?? files,
-          subject: described.subject ?? (files?.length === 1 ? basenameOf(files[0]!) : undefined) ?? title,
-          status: acpStatus(String(data.status ?? "")),
-          ...describeAcpContent(asArray(data.content)),
-          ...describeRawOutput(described.kind, data.rawOutput),
-        }),
-      );
+      const status = acpStatus(String(data.status ?? ""));
+      const raw = describeRawOutput(described.kind, data.rawOutput);
+      const content = describeAcpContent(asArray(data.content));
+      const patch: Partial<ToolCall> & Pick<ToolCall, "name" | "kind"> = {
+        ...described,
+        files: described.files ?? files,
+        subject: described.subject ?? (files?.length === 1 ? basenameOf(files[0]!) : undefined) ?? title,
+        status,
+        ...raw,
+        ...content,
+      };
+      if ((data.status === "cancelled" || data.status === "canceled") && !patch.error) {
+        patch.error = "命令已取消";
+        patch.status = "error";
+      }
+      sink.tool(events, track(id, patch));
       return;
     }
     case "tool_call_update":
@@ -772,6 +782,12 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       }
       if (output.status === "error" && patch.status !== "rejected") {
         patch.status = "error";
+      }
+      if ((data.status === "cancelled" || data.status === "canceled") && patch.status !== "rejected") {
+        patch.status = "error";
+        if (!patch.error) {
+          patch.error = "命令已取消";
+        }
       }
       sink.tool(events, track(id, patch));
       return;
@@ -837,7 +853,7 @@ function acpStatus(status: string): ToolStatus {
   if (status === "completed") {
     return "ok";
   }
-  if (status === "failed" || status === "error") {
+  if (status === "failed" || status === "error" || status === "cancelled" || status === "canceled") {
     return "error";
   }
   if (status === "rejected") {
@@ -935,7 +951,7 @@ function describeAcpContent(content: unknown[]): Partial<ToolCall> {
 }
 
 /** opencode `run --format json`: shape is loose, so extract text where it exists. */
-function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, track }: DialectContext): void {
+function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, track, anonId }: DialectContext): void {
   const type = String(data.type ?? "");
   const events = out.events;
   const part = isRecord(data.part) ? data.part : isRecord(data.properties) ? data.properties : data;
@@ -958,9 +974,14 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, 
     const state = isRecord(part.state) ? part.state : {};
     const name = String(part.tool ?? part.name ?? "tool");
     const input = isRecord(state.input) ? state.input : isRecord(part.input) ? part.input : {};
-    const id = String(part.callID ?? part.callId ?? part.id ?? `tool-${events.length}`);
+    const id = toolIdOf(part.callID ?? part.callId ?? part.id, anonId);
     const stateStatus = String(state.status ?? "");
-    const status: ToolStatus = stateStatus === "completed" ? "ok" : stateStatus === "error" ? "error" : "running";
+    const status: ToolStatus =
+      stateStatus === "completed"
+        ? "ok"
+        : stateStatus === "error" || stateStatus === "cancelled" || stateStatus === "canceled"
+          ? "error"
+          : "running";
     const described = describeArgs(name, input);
     const metadata = isRecord(state.metadata) ? state.metadata : {};
     const output = typeof state.output === "string" ? state.output : undefined;
@@ -1045,6 +1066,18 @@ function textOf(block: unknown): string {
     return block.text;
   }
   return "";
+}
+
+
+/** Prefer a real tool id; fall back to a parser-local counter (not out.events.length). */
+function toolIdOf(raw: unknown, anonId: () => string): string {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return String(raw);
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.trim();
+  }
+  return anonId();
 }
 
 export function truncate(value: string, max: number): string {
