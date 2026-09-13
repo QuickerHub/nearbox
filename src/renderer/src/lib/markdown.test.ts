@@ -105,3 +105,16 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+test("loose lists keep same-marker items in one list across blank lines", () => {
+  const ordered = parseBlocks("1. a\n\n2. b");
+  assert.deepEqual(ordered, [{ type: "list", ordered: true, items: ["a", "b"] }]);
+  const bullets = parseBlocks("- a\n\n\n- b\n- c");
+  assert.deepEqual(bullets, [{ type: "list", ordered: false, items: ["a", "b", "c"] }]);
+  // A blank line then the other marker still starts a new list (not #35's adjacent case).
+  const mixed = parseBlocks("1. a\n\n- b");
+  assert.deepEqual(
+    mixed.map((block) => (block.type === "list" ? `${block.type}:${block.ordered}:${block.items.join(",")}` : block.type)),
+    ["list:true:a", "list:false:b"],
+  );
+});

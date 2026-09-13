@@ -10,9 +10,10 @@
       | { type: "link"; href: string; text: string };
 
     const TOKEN =
-      /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)\s]+\)|<https?:\/\/[^>\s]+>|https?:\/\/[^\s<>"'`]+)/g;
+      /(`[^`]+`|\*\*[^*]+\*\*|!?\[[^\]]*\]\([^)\s]+\)|<https?:\/\/[^>\s]+>|https?:\/\/[^\s<>"'`]+)/g;
 
-    const MARKDOWN_LINK = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
+    /** Markdown link or image (`![alt](url)`); images paint as ordinary http links. */
+    const MARKDOWN_LINK = /^!?\[([^\]]*)\]\(([^)\s]+)\)$/;
     const ANGLE_LINK = /^<(https?:\/\/[^>\s]+)>$/;
     const BARE_LINK = /^(https?:\/\/[^\s<>"'`]+)$/;
     const TRAILING = /[),.;:!?，。；：！？）」』>]+$/;
@@ -76,7 +77,11 @@
       const markdown = MARKDOWN_LINK.exec(token);
       if (markdown) {
         const href = safeHttpUrl(markdown[2]!);
-        return href ? [{ type: "link", href, text: markdown[1]! }] : [{ type: "text", text: token }];
+        if (!href) {
+          return [{ type: "text", text: token }];
+        }
+        const label = (markdown[1] ?? "").trim() || href;
+        return [{ type: "link", href, text: label }];
       }
       const angled = ANGLE_LINK.exec(token);
       if (angled) {

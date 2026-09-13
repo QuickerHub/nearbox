@@ -235,3 +235,37 @@ test("advanceTranscript rebuilds when history is replaced", () => {
   assert.equal(cursor.count, 1);
   assert.equal(cursor.items[0]?.type === "text" ? cursor.items[0].text : "", "new");
 });
+
+test("git file headers and binary markers stay out of the numbered body", () => {
+  const diff = [
+    "diff --git a/x.ts b/x.ts",
+    "index 123..456 100644",
+    "--- a/x.ts",
+    "+++ b/x.ts",
+    "@@ -1,2 +1,2 @@",
+    " line1",
+    "-old",
+    "+new",
+  ].join("\n");
+  assert.deepEqual(
+    diffLines(diff).map((line) => [line.tag, line.text, line.oldNo, line.newNo]),
+    [
+      ["meta", "diff --git a/x.ts b/x.ts", undefined, undefined],
+      ["meta", "index 123..456 100644", undefined, undefined],
+      ["meta", "--- a/x.ts", undefined, undefined],
+      ["meta", "+++ b/x.ts", undefined, undefined],
+      ["hunk", "@@ -1,2 +1,2 @@", undefined, undefined],
+      ["ctx", "line1", 1, 1],
+      ["del", "old", 2, undefined],
+      ["add", "new", undefined, 2],
+    ],
+  );
+  const binary = diffLines("diff --git a/a.png b/a.png\nBinary files a/a.png and b/a.png differ");
+  assert.deepEqual(
+    binary.map((line) => [line.tag, line.text]),
+    [
+      ["meta", "diff --git a/a.png b/a.png"],
+      ["note", "Binary files a/a.png and b/a.png differ"],
+    ],
+  );
+});

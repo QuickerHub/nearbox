@@ -318,6 +318,8 @@ export function hasDetail(tool: ToolCall): boolean {
 /** Marker `clipHead` leaves when output was cut short, as a trailing line. */
 const CLIP_NOTE = /\n?… 已省略 \d+ 个字符$/;
 const CLIP_NOTE_LINE = /^… 已省略 \d+ 个字符$/;
+/** Git / binary headers must not paint as context or steal `+`/`-` line numbers. */
+const BINARY_DIFF = /^Binary files .* differ$/i;
 
 /**
  * A call as it should be shown. Logs written before the parser knew
@@ -386,6 +388,24 @@ function clippedContent(output: string): string | null {
   return null;
 }
 
+
+/** `diff --git` / `index` / `---a` headers before the first body line. */
+function isDiffFileHeader(line: string): boolean {
+  return (
+    line.startsWith("---") ||
+    line.startsWith("+++") ||
+    line.startsWith("diff ") ||
+    line.startsWith("index ") ||
+    line.startsWith("old mode") ||
+    line.startsWith("new mode") ||
+    line.startsWith("new file") ||
+    line.startsWith("deleted file") ||
+    line.startsWith("similarity ") ||
+    line.startsWith("rename ") ||
+    line.startsWith("copy ")
+  );
+}
+
 export interface DiffLine {
   tag: "add" | "del" | "ctx" | "hunk" | "meta" | "note";
   /** Content without the leading `+`/`-`/space marker. */
@@ -413,7 +433,7 @@ export function diffLines(diff: string): DiffLine[] {
       out.push({ tag: "hunk", text: line });
       continue;
     }
-    if (!inBody && (line.startsWith("---") || line.startsWith("+++"))) {
+    if (!inBody && isDiffFileHeader(line)) {
       // A headed diff without hunks is a whole new (or deleted) file.
       if (line.startsWith("--- /dev/null")) {
         newNo = 1;
@@ -423,7 +443,7 @@ export function diffLines(diff: string): DiffLine[] {
       out.push({ tag: "meta", text: line });
       continue;
     }
-    if (CLIP_NOTE_LINE.test(line)) {
+    if (CLIP_NOTE_LINE.test(line) || BINARY_DIFF.test(line)) {
       out.push({ tag: "note", text: line });
       continue;
     }
