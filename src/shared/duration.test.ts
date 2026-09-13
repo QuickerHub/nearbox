@@ -17,3 +17,20 @@ test("formatMsDuration matches CLI result rows", () => {
   assert.equal(formatMsDuration(125_000), "2 分 5 秒");
   assert.equal(formatMsDuration(3_725_000), "1 小时 2 分");
 });
+
+test("formatSecondsDuration boundaries and rounding", () => {
+  assert.equal(formatSecondsDuration(59), "59 秒");
+  assert.equal(formatSecondsDuration(60), "1 分 0 秒");
+  assert.equal(formatSecondsDuration(61.4), "1 分 1 秒");
+  assert.equal(formatSecondsDuration(59.6), "1 分 0 秒");
+  assert.equal(formatSecondsDuration(3600), "1 小时 0 分");
+  assert.equal(formatSecondsDuration(3600 + 59), "1 小时 0 分");
+  assert.equal(formatSecondsDuration(3600 + 60), "1 小时 1 分");
+});
+
+test("formatMsDuration crosses the second boundary", () => {
+  assert.equal(formatMsDuration(0), "0 毫秒");
+  assert.equal(formatMsDuration(999), "999 毫秒");
+  assert.equal(formatMsDuration(1000), "1 秒");
+  assert.equal(formatMsDuration(59_500), "1 分 0 秒");
+});

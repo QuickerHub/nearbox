@@ -29,3 +29,19 @@ test("shouldCloseSessionsBeforeIdleKill requires capability and loaded sessions"
   assert.equal(shouldCloseSessionsBeforeIdleKill(true, 0), false);
   assert.equal(shouldCloseSessionsBeforeIdleKill(false, 3), false);
 });
+
+test("sessionsToPrune closes oldest overflow and respects custom max", () => {
+  const loaded = [
+    { sessionId: "a", lastUsedAt: 10 },
+    { sessionId: "b", lastUsedAt: 20 },
+    { sessionId: "c", lastUsedAt: 30 },
+    { sessionId: "d", lastUsedAt: 40 },
+    { sessionId: "e", lastUsedAt: 50 },
+    { sessionId: "f", lastUsedAt: 60 },
+  ];
+  assert.deepEqual(sessionsToPrune(loaded, { max: 3 }), ["a", "b", "c"]);
+  assert.deepEqual(sessionsToPrune(loaded, { max: 1, keepId: "f" }), ["a", "b", "c", "d", "e"]);
+  // Overflow is limited by closable count; protect newest and still close oldest first.
+  assert.deepEqual(sessionsToPrune(loaded, { max: 4, busyIds: new Set(["e", "f"]) }), ["a", "b"]);
+  assert.equal(MAX_LOADED_SESSIONS, 4);
+});

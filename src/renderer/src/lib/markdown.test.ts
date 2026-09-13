@@ -105,3 +105,30 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+test("headings and CR/LF normalize into stable blocks", () => {
+  const blocks = parseBlocks("# 标题\r\n\r\n一段文字\r\n## 小节\r");
+  assert.deepEqual(
+    blocks.map((block) => block.type),
+    ["heading", "para", "heading"],
+  );
+  assert.equal(blocks[0]?.type === "heading" ? blocks[0].level : 0, 1);
+  assert.equal(blocks[0]?.type === "heading" ? blocks[0].text : "", "标题");
+  assert.equal(blocks[2]?.type === "heading" ? blocks[2].level : 0, 2);
+});
+
+test("splitStreamingMarkdown keeps sealed prefix stable across token growth", () => {
+  assert.deepEqual(splitStreamingMarkdown(""), { sealed: "", tail: "" });
+  assert.deepEqual(splitStreamingMarkdown("\r\n第一段\r\n\r\n第二"), {
+    sealed: "\n第一段",
+    tail: "第二",
+  });
+  const open = splitStreamingMarkdown("done\n\n~~~~ts\nconst x = 1\n");
+  assert.equal(open.sealed, "done\n\n");
+  assert.match(open.tail, /^~~~~ts\n/);
+  // Closed fence then blank line seals the fence block.
+  assert.deepEqual(splitStreamingMarkdown("~~~~\nok\n~~~~\n\nmore"), {
+    sealed: "~~~~\nok\n~~~~",
+    tail: "more",
+  });
+});

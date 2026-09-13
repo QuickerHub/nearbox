@@ -55,3 +55,45 @@ test("warm fallback status strings stay stable", () => {
   assert.match(warmFallbackStatus("session-error", "boom"), /boom/);
   assert.match(warmFallbackStatus("session-error"), /未知错误/);
 });
+
+test("local preflight prefers cli-missing over cwd-missing", () => {
+  const both = localPreflightFailure({
+    agentLabel: "Claude Code",
+    hasCommand: false,
+    cwd: "/gone",
+    cwdExists: false,
+  });
+  assert.equal(both?.reason, "cli-missing");
+  assert.match(both?.stderr ?? "", /Claude Code/);
+});
+
+test("warmFallbackStatus pins every taxonomy string", () => {
+  assert.equal(
+    warmFallbackStatus("host-down"),
+    "常驻进程这次没起来，本轮用单独进程（结束就会退出）。",
+  );
+  assert.equal(
+    warmFallbackStatus("models-unknown"),
+    "常驻会话还没学到模型列表，本轮改用单独进程运行。",
+  );
+  assert.equal(
+    warmFallbackStatus("model-unsupported", "gpt-x"),
+    "常驻会话不支持模型 gpt-x，本轮改用单独进程运行。",
+  );
+  assert.equal(
+    warmFallbackStatus("model-unsupported"),
+    "常驻会话不支持模型 ，本轮改用单独进程运行。",
+  );
+  assert.equal(
+    warmFallbackStatus("legacy-session"),
+    "这段会话是在单独进程模式下开始的，常驻进程接不上，回复会慢一些；想要更快的回复可以「改为新会话」。",
+  );
+  assert.equal(
+    warmFallbackStatus("session-error", "boom"),
+    "常驻会话不可用（boom），本轮改用单独进程运行。",
+  );
+  assert.equal(
+    warmFallbackStatus("session-error"),
+    "常驻会话不可用（未知错误），本轮改用单独进程运行。",
+  );
+});

@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  cleanFamilyLabel,
+  compareDepths,
   compactModelLabel,
   depthLabel,
   depthOf,
+  isAutoFamily,
+  sameDepth,
   familiesAreFoldable,
   familyHint,
   filterFamilies,
@@ -223,4 +227,23 @@ test("search lists older matches instead of hiding them", () => {
     ["claude-opus-4-6"],
   );
   assert.deepEqual(older, []);
+});
+
+test("isAutoFamily and cleanFamilyLabel strip modifiers", () => {
+  assert.equal(isAutoFamily({ key: "auto", label: "Auto" }), true);
+  assert.equal(isAutoFamily({ key: "gpt-5", label: " Auto " }), true);
+  assert.equal(isAutoFamily({ key: "gpt-5", label: "GPT-5" }), false);
+  assert.equal(cleanFamilyLabel("Claude Opus 5 1M Max Thinking"), "Claude Opus 5");
+  assert.equal(cleanFamilyLabel("GPT-5.6 Sol High Fast"), "GPT-5.6 Sol");
+  assert.equal(cleanFamilyLabel("Composer 2.5 Fast"), "Composer 2.5");
+});
+
+test("sameDepth and compareDepths order default < thinking < effort", () => {
+  assert.equal(sameDepth({ kind: "default" }, { kind: "default" }), true);
+  assert.equal(sameDepth({ kind: "thinking" }, { kind: "default" }), false);
+  assert.equal(sameDepth({ kind: "effort", effort: "high" }, { kind: "effort", effort: "high" }), true);
+  assert.equal(sameDepth({ kind: "effort", effort: "high" }, { kind: "effort", effort: "low" }), false);
+  assert.ok(compareDepths({ kind: "default" }, { kind: "thinking" }) < 0);
+  assert.ok(compareDepths({ kind: "thinking" }, { kind: "effort", effort: "low" }) < 0);
+  assert.ok(compareDepths({ kind: "effort", effort: "low" }, { kind: "effort", effort: "high" }) < 0);
 });

@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatBytes, formatDuration, formatRelative } from "./format.ts";
+import {
+  dayKey,
+  formatBytes,
+  formatDay,
+  formatDuration,
+  formatRelative,
+  formatTime,
+  sameDay,
+} from "./format.ts";
 
 test("formatDuration uses Chinese units and rejects bad dates", () => {
   assert.equal(formatDuration(undefined, undefined), "");
@@ -22,4 +30,30 @@ test("formatRelative covers near and far", () => {
   assert.equal(formatRelative(new Date(now - 5 * 60_000).toISOString()), "5 分钟前");
   assert.equal(formatRelative(undefined), "");
   assert.equal(formatRelative("bogus"), "");
+});
+
+test("formatTime and dayKey reject empty or invalid values", () => {
+  assert.equal(formatTime(undefined), "");
+  assert.equal(formatTime("not-a-date"), "");
+  assert.equal(dayKey(undefined), "");
+  assert.equal(dayKey("bogus"), "");
+  const iso = "2026-09-13T12:34:00.000Z";
+  assert.match(formatTime(iso), /\d{2}:\d{2}/);
+  assert.match(dayKey(iso), /^2026-\d+-\d+$/);
+});
+
+test("formatDay labels today and yesterday in Chinese", () => {
+  const now = new Date();
+  assert.equal(formatDay(now.toISOString()), "今天");
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  assert.equal(formatDay(yesterday.toISOString()), "昨天");
+  assert.equal(formatDay(undefined), "");
+  assert.equal(sameDay(now, now), true);
+  assert.equal(sameDay(now, yesterday), false);
+});
+
+test("formatDuration without end uses wall clock and stays non-empty", () => {
+  const started = new Date(Date.now() - 2_000).toISOString();
+  assert.match(formatDuration(started, undefined), /\d+ 秒/);
 });

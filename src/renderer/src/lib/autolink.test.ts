@@ -46,3 +46,20 @@ test("angle-bracket autolinks work and javascript hrefs stay text", () => {
   ]);
   assert.ok(splitInline("[x](javascript:alert(1))").every((piece) => piece.type !== "link"));
 });
+
+test("Chinese trailing punctuation peels off bare urls", () => {
+  assert.deepEqual(peelAutolink("https://example.com，"), { href: "https://example.com", trail: "，" });
+  assert.deepEqual(peelAutolink("https://example.com。"), { href: "https://example.com", trail: "。" });
+  assert.deepEqual(peelAutolink("https://example.com！"), { href: "https://example.com", trail: "！" });
+});
+
+test("splitInline handles empty, bold, and mixed tokens", () => {
+  assert.deepEqual(splitInline(""), []);
+  assert.deepEqual(splitInline("只有文字"), [{ type: "text", text: "只有文字" }]);
+  assert.deepEqual(splitInline("看 **加粗** 和 `code`"), [
+    { type: "text", text: "看 " },
+    { type: "bold", text: "加粗" },
+    { type: "text", text: " 和 " },
+    { type: "code", text: "code" },
+  ]);
+});
