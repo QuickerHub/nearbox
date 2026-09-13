@@ -245,12 +245,16 @@ function notifyRemoteController(name: string): void {
 }
 
 async function startHost(): Promise<void> {
-  if (server) {
+  if (server || quitting) {
     return;
   }
   const userData = join(app.getPath("userData"), "nearbox");
   const nextHub = new TaskHub(join(userData, "data"), { delegation: await installDelegation(userData) });
   await nextHub.init();
+  if (quitting) {
+    await nextHub.shutdown();
+    return;
+  }
   const remote = new RemoteControlHub({
     source: new ScreenSource({ dir: userData }),
     input: createInputInjector(),
@@ -288,6 +292,11 @@ async function startHost(): Promise<void> {
     port: lanPort,
   });
   await next.start();
+  if (quitting) {
+    await next.stop();
+    await nextHub.shutdown();
+    return;
+  }
   setTimeout(() => {
     void updater.check().catch((error) => console.warn(`[update] ${error instanceof Error ? error.message : String(error)}`));
   }, 8000);

@@ -8,7 +8,7 @@ import { randomBytes, randomInt } from "node:crypto";
 import { EventEmitter } from "node:events";
 import QRCode from "qrcode";
 import { WebSocket, WebSocketServer } from "ws";
-import { buildDiscoverInfo, DISCOVERY_PORT, isInviteExpired, liveInvite, type DiscoverInfo } from "@shared/discover";
+import { buildDiscoverInfo, DISCOVERY_PORT, isInviteExpired, liveInvite, pickLanHost, type DiscoverInfo } from "@shared/discover";
 import {
   type Actor,
   AGENT_KINDS,
@@ -62,6 +62,7 @@ const MIME: Record<string, string> = {
 
 /** How often snapshot re-reads LAN adapters (wifi hop / sleep). */
 const HOST_ADDR_TTL_MS = 5_000;
+const NO_LAN_ADDRESS = "没有找到可用的局域网地址。请确认电脑已连上 Wi-Fi 或以太网。";
 
 interface SocketBinding {
   socket: WebSocket;
@@ -146,11 +147,9 @@ export class LanServer extends EventEmitter {
   async start(): Promise<void> {
     await mkdir(this.inboxDir, { recursive: true });
     await mkdir(this.stagingDir, { recursive: true });
-    const addresses = this.hostAddressesForSnapshot(true);
-    const preferred = this.hub.settings.preferredHost;
-    this.selectedHost = (preferred && addresses.includes(preferred) ? preferred : addresses[0]) ?? "";
+    this.hostAddressesForSnapshot(true);
     if (!this.selectedHost) {
-      this.listenError = "没有找到可用的局域网地址。请确认电脑已连上 Wi-Fi 或以太网。";
+      this.listenError = NO_LAN_ADDRESS;
     }
 
     const server = http.createServer((req, res) => {
@@ -211,6 +210,10 @@ export class LanServer extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    if (this.snapshotTimer) {
+      clearTimeout(this.snapshotTimer);
+      this.snapshotTimer = null;
+    }
     this.stopBeacon();
     this.remote?.stop();
     for (const binding of this.sockets) {
@@ -395,6 +398,7 @@ export class LanServer extends EventEmitter {
     });
     this.beacon = socket;
     const pulse = () => {
+      this.hostAddressesForSnapshot(true);
       const info = this.discoverInfo();
       if (!("host" in info) || !info.host) {
         return;
@@ -989,7 +993,27 @@ export class LanServer extends EventEmitter {
     }
     this.cachedHostAddresses = refreshPrivateLanAddresses(this.cachedHostAddresses);
     this.hostAddressesAt = now;
+    this.rebindSelectedHost();
     return this.cachedHostAddresses;
+  }
+
+  /**
+   * After a wifi hop / sleep the previously advertised address may be gone.
+   * Drop the dead QR/PIN URL and pick a live adapter; `ensureInviteFresh`
+   * mints credentials for the new host on the next snapshot / beacon / discover.
+   */
+  private rebindSelectedHost(): void {
+    const next = pickLanHost(this.cachedHostAddresses, this.selectedHost, this.hub.settings.preferredHost);
+    if (next === this.selectedHost) {
+      return;
+    }
+    const hadHost = Boolean(this.selectedHost);
+    this.selectedHost = next;
+    this.invite = null;
+    this.listenError = next ? (this.listenError === NO_LAN_ADDRESS ? undefined : this.listenError) : NO_LAN_ADDRESS;
+    if (hadHost) {
+      this.scheduleSnapshot();
+    }
   }
 
   /** Snapshots are coalesced so a burst of changes produces one broadcast. */

@@ -77,6 +77,7 @@ export class TaskHub extends EventEmitter {
   /** When each CLI was last asked for its catalog, successful or not; keeps a broken CLI from being hammered. */
   private readonly modelAttempts = new Map<AgentKind, number>();
   private modelTimer: NodeJS.Timeout | null = null;
+  private warmTimer: NodeJS.Timeout | null = null;
   /** Unset when the `nearbox` launcher could not be installed; runs then cannot delegate. */
   private readonly delegation: DelegationConfig | null;
   agents: AgentInfo[] = AGENT_KINDS.map((kind) => ({
@@ -141,7 +142,11 @@ export class TaskHub extends EventEmitter {
     // Once the app has settled, bring the agent up with the newest conversation loaded: its start-up
     // (mostly MCP servers) is then paid while nobody is waiting, and the first message of the day is
     // as quick as any follow-up.
-    setTimeout(() => this.warmRecentConversations(), WARM_AT_STARTUP_DELAY_MS).unref();
+    this.warmTimer = setTimeout(() => {
+      this.warmTimer = null;
+      this.warmRecentConversations();
+    }, WARM_AT_STARTUP_DELAY_MS);
+    this.warmTimer.unref();
   }
 
   private warmRecentConversations(): void {
@@ -155,6 +160,10 @@ export class TaskHub extends EventEmitter {
   }
 
   async shutdown(): Promise<void> {
+    if (this.warmTimer) {
+      clearTimeout(this.warmTimer);
+      this.warmTimer = null;
+    }
     if (this.modelTimer) {
       clearInterval(this.modelTimer);
       this.modelTimer = null;
