@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { AcpConnection, type AcpModel, choosePermission, mapCursorModel, RpcError, type RpcIncomingRequest } from "./acp.ts";
+import { AcpConnection, type AcpModel, choosePermission, mapCursorModel, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
 
 /** A fake agent on the other end of the pipes. */
 function pipes() {
@@ -80,6 +80,30 @@ test("$/cancel_request notifies with the pending request id", async () => {
   assert.deepEqual(sent[sent.length - 1], { jsonrpc: "2.0", method: "$/cancel_request", params: { id: 1 } });
 });
 
+
+test("rejectPending fails one outstanding request without closing the connection", async () => {
+  const { connection, flush } = pipes();
+  const pending = connection.request("session/prompt", { sessionId: "s" });
+  await flush();
+  assert.equal(connection.rejectPending(1, new Error("本轮已取消")), true);
+  await assert.rejects(pending, /本轮已取消/);
+  assert.equal(connection.rejectPending(1, new Error("again")), false);
+  const next = connection.request("session/new", {});
+  await flush();
+  // Connection still open for further requests.
+  assert.ok(next);
+  connection.close(new Error("done"));
+  await assert.rejects(next, /done|已退出|已关闭/);
+});
+
+test("sessionCloseAdvertised follows ACP empty-object capability shape", () => {
+  assert.equal(sessionCloseAdvertised(undefined), false);
+  assert.equal(sessionCloseAdvertised({}), false);
+  assert.equal(sessionCloseAdvertised({ sessionCapabilities: {} }), false);
+  assert.equal(sessionCloseAdvertised({ sessionCapabilities: { close: {} } }), true);
+  assert.equal(sessionCloseAdvertised({ sessionCapabilities: { close: true } }), true);
+  assert.equal(sessionCloseAdvertised({ sessionCapabilities: { close: null } }), false);
+});
 test("permission policy: full access allows, safe mode asks before commands", () => {
   const options = [
     { optionId: "allow-once", kind: "allow_once" },

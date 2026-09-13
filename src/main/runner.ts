@@ -215,6 +215,8 @@ export class RunManager extends EventEmitter {
         }
         const shared = [...this.active.values()].some((other) => other !== active && other.warm?.host === host);
         if (shared) {
+          // Drop the wedged prompt locally so the shared host is not stuck busy forever.
+          host.abandonPrompt(sessionId);
           this.append(run, "status", "Agent 未及时停止；常驻进程仍保留供其他会话使用。");
           this.finish(active, null, undefined);
           return;
@@ -226,6 +228,8 @@ export class RunManager extends EventEmitter {
           if (this.active.get(runId) !== active) {
             return;
           }
+          // Local reject finishes the turn even if the agent ignored $/cancel_request.
+          host.abandonPrompt(sessionId);
           host.kill();
         }, FORCE_CANCEL_GRACE_MS).unref();
       }, CANCEL_GRACE_MS).unref();
@@ -325,6 +329,21 @@ export class RunManager extends EventEmitter {
     this.active.set(run.id, state);
     this.eventCache.set(run.id, this.eventCache.get(run.id) ?? []);
 
+    try {
+      await this.runStart(state);
+    } catch (error) {
+      // An unexpected throw used to leave the run "running" forever and block its project.
+      if (!this.active.has(run.id)) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.append(run, "stderr", message);
+      this.finish(state, null, message);
+    }
+  }
+
+  private async runStart(state: ActiveRun): Promise<void> {
+    const run = state.run;
     if (run.deviceId) {
       await this.startRemote(state);
       return;
@@ -523,22 +542,9 @@ export class RunManager extends EventEmitter {
       this.finish(state, null, undefined);
       return true;
     }
-    // A picked model must exist as a preset in the host; before the first session we do not know them yet.
-    let modelId: string | undefined;
-    if (run.model) {
-      if (!host.models && !resumeSessionId) {
-        this.append(run, "status", warmFallbackStatus("models-unknown"));
-        return false;
-      }
-      if (host.models) {
-        modelId = mapCursorModel(run.model, host.models);
-        if (!modelId) {
-          this.append(run, "status", warmFallbackStatus("model-unsupported", run.model));
-          return false;
-        }
-      }
-    }
-
+    // Open the session first: session/new and session/load both teach host.models, so a
+    // first turn that picked a model no longer has to fall back to a one-shot process
+    // just because the catalog was still unknown.
     let session: AcpSession;
     try {
       session = resumeSessionId ? await host.loadSession(resumeSessionId, run.cwd) : await host.newSession(run.cwd);
@@ -562,11 +568,17 @@ export class RunManager extends EventEmitter {
       this.finish(state, null, undefined);
       return true;
     }
+    let modelId: string | undefined;
     if (run.model) {
-      // The model list only becomes known with the first session; a resumed turn may learn it just now.
-      modelId = modelId ?? (host.models ? mapCursorModel(run.model, host.models) : undefined);
+      if (!host.models) {
+        this.append(run, "status", warmFallbackStatus("models-unknown"));
+        void host.closeSession(session.sessionId);
+        return false;
+      }
+      modelId = mapCursorModel(run.model, host.models);
       if (!modelId) {
         this.append(run, "status", warmFallbackStatus("model-unsupported", run.model));
+        void host.closeSession(session.sessionId);
         return false;
       }
       if (session.currentModelId !== modelId) {
@@ -574,6 +586,7 @@ export class RunManager extends EventEmitter {
           await host.setModel(session.sessionId, modelId);
         } catch (error) {
           this.append(run, "status", `设置模型失败（${error instanceof Error ? error.message : String(error)}），本轮改用单独进程运行。`);
+          void host.closeSession(session.sessionId);
           return false;
         }
       }
@@ -666,6 +679,10 @@ export class RunManager extends EventEmitter {
       this.finish(state, 0, undefined);
     } catch (error) {
       this.stopStream(state);
+      if (state.cancelled) {
+        this.finish(state, 0, undefined);
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       if (!host.alive) {
         for (const line of host.recentStderr()) {
