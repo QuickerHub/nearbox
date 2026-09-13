@@ -90,9 +90,12 @@ export function describeArgs(
     case "write":
     case "edit":
     case "delete": {
-      const path = pickString(args, PATH_KEYS);
-      call.subject = path ? basenameOf(path) : undefined;
-      call.files = path ? [path] : undefined;
+      const files = pickPathList(args);
+      if (files.length) {
+        call.files = files.slice(0, MAX_TOOL_FILES);
+        call.subject =
+          files.length > 1 ? `${basenameOf(files[0]!)} 等 ${files.length} 个文件` : basenameOf(files[0]!);
+      }
       break;
     }
     case "ls": {
@@ -158,7 +161,7 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
       const stderr = pickString(body, ["stderr"]);
       const combined = stdout && stderr && !stdout.includes(stderr) ? `${stdout}\n${stderr}` : stdout || stderr;
       patch.output = combined.trim() ? clipTail(combined) : undefined;
-      patch.exitCode = typeof body.exitCode === "number" ? body.exitCode : undefined;
+      patch.exitCode = coerceExitCode(body.exitCode);
       if (status === "ok" && patch.exitCode !== undefined && patch.exitCode !== 0) {
         patch.status = "error";
       }
@@ -322,6 +325,55 @@ export function pickString(record: Record<string, unknown>, keys: string[]): str
     }
   }
   return "";
+}
+
+
+/** One path string or a list under path/paths/files — multi-file edits must not dump JSON as input. */
+export function pickPathList(record: Record<string, unknown>): string[] {
+  const keys = [...PATH_KEYS, "paths", "files", "file_paths", "filePaths", "target_files", "targetFiles"];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      const path = value.trim();
+      if (!seen.has(path)) {
+        seen.add(path);
+        out.push(path);
+      }
+      continue;
+    }
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    for (const item of value) {
+      const path =
+        typeof item === "string"
+          ? item.trim()
+          : isRecord(item)
+            ? pickString(item, PATH_KEYS)
+            : "";
+      if (path && !seen.has(path)) {
+        seen.add(path);
+        out.push(path);
+      }
+    }
+  }
+  return out;
+}
+
+/** Agents sometimes send exit codes as numeric strings ("1"). */
+export function coerceExitCode(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
 }
 
 export function basenameOf(path: string): string {
