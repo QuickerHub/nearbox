@@ -18,6 +18,8 @@ import type {
 
 const ABS_MAX = 65535;
 const WHEEL_STEP = 120;
+/** DOM `code` strings longer than this are malformed / hostile. */
+export const MAX_KEY_CODE_CHARS = 64;
 
 const BUTTON_CODE: Record<RemoteButton, number> = { left: 1, right: 2, middle: 3 };
 
@@ -147,6 +149,9 @@ const NAMED_VK: Record<string, number> = {
 
 /** Resolve a DOM `KeyboardEvent.code` to a Windows virtual-key code. */
 export function codeToVk(code: string): VkMapping | null {
+  if (typeof code !== "string" || !code || code.length > MAX_KEY_CODE_CHARS) {
+    return null;
+  }
   let vk: number | undefined;
   if (/^Key[A-Z]$/.test(code)) {
     vk = code.charCodeAt(3); // 'A'..'Z' == 0x41..0x5A
@@ -351,12 +356,16 @@ export function parseControlMessage(raw: string): RemoteControlToHost | null {
       return out as RemoteControlToHost;
     }
     case "key":
-      return typeof msg.code === "string" && typeof msg.down === "boolean"
+      return typeof msg.code === "string" &&
+        msg.code.length > 0 &&
+        msg.code.length <= MAX_KEY_CODE_CHARS &&
+        typeof msg.down === "boolean"
         ? { t: "key", code: msg.code, down: msg.down }
         : null;
     case "combo":
-      return Array.isArray(msg.codes) && msg.codes.every((c) => typeof c === "string")
-        ? { t: "combo", codes: msg.codes as string[] }
+      return Array.isArray(msg.codes) &&
+        msg.codes.every((c) => typeof c === "string" && c.length <= MAX_KEY_CODE_CHARS)
+        ? { t: "combo", codes: (msg.codes as string[]).slice(0, 32) }
         : null;
     case "text":
       return typeof msg.value === "string" ? { t: "text", value: msg.value } : null;

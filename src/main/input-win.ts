@@ -72,6 +72,29 @@ function powershellPath(): string {
   return join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }
 
+
+/**
+ * Injector grammar is one ASCII token line (`M 1 2`, `K 65 1 0`, …). Drop
+ * anything with CR/LF or an unknown verb so a bad translator cannot smuggle
+ * extra PowerShell-visible lines into stdin.
+ */
+export function sanitizeInjectorCommands(commands: string[]): string[] {
+  const out: string[] = [];
+  for (const line of commands) {
+    if (typeof line !== "string" || !line || line.length > 128) {
+      continue;
+    }
+    if (/[\r\n\u0000]/.test(line)) {
+      continue;
+    }
+    if (!/^[MBWHKU](?: -?\d+){1,3}$/.test(line)) {
+      continue;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
 class WindowsInputInjector implements InputSink {
   readonly supported = true;
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -88,11 +111,15 @@ class WindowsInputInjector implements InputSink {
     if (this.disposed || commands.length === 0) {
       return;
     }
-    if (this.isReady && this.child) {
-      this.writeNow(commands);
+    const clean = sanitizeInjectorCommands(commands);
+    if (!clean.length) {
       return;
     }
-    this.pending.push(...commands);
+    if (this.isReady && this.child) {
+      this.writeNow(clean);
+      return;
+    }
+    this.pending.push(...clean);
     void this.start();
   }
 

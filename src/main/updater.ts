@@ -3,6 +3,14 @@ import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AppUpdateStatus } from "@shared/protocol";
 import { isNewerVersion, stripTagPrefix } from "../shared/version.ts";
+import {
+  isInstallerTooLarge,
+  isTrustedInstallerUrl,
+  releaseHtmlUrl,
+  releaseNotes,
+  releaseTagName,
+  sanitizeReleaseAssets,
+} from "./updater-release.ts";
 
 export const DEFAULT_RELEASE_REPO = "QuickerHub/nearbox";
 const STALE_MS = 60 * 60 * 1000;
@@ -31,7 +39,7 @@ export interface AppUpdaterOptions {
 }
 
 export function pickReleaseAssets(assets: GithubReleaseAsset[] | undefined): { exeUrl: string | null; apkUrl: string | null } {
-  const list = assets ?? [];
+  const list = sanitizeReleaseAssets(assets);
   const exe = list.find((item) => /\.exe$/i.test(item.name) && /win/i.test(item.name)) ?? list.find((item) => /\.exe$/i.test(item.name));
   const apk = list.find((item) => /\.apk$/i.test(item.name));
   return { exeUrl: exe?.browser_download_url ?? null, apkUrl: apk?.browser_download_url ?? null };
@@ -41,14 +49,15 @@ export function statusFromRelease(release: GithubRelease, current: string, packa
   AppUpdateStatus,
   "current" | "latest" | "newer" | "notes" | "htmlUrl" | "exeUrl" | "apkUrl" | "packaged"
 > {
-  const latest = release.tag_name ? stripTagPrefix(release.tag_name) : null;
+  const tag = releaseTagName(release.tag_name);
+  const latest = tag ? stripTagPrefix(tag) : null;
   const assets = pickReleaseAssets(release.assets);
   return {
     current,
     latest,
     newer: latest ? isNewerVersion(latest, current) : false,
-    notes: (release.body ?? "").trim().slice(0, 400),
-    htmlUrl: release.html_url ?? RELEASES_PAGE,
+    notes: releaseNotes(release.body),
+    htmlUrl: releaseHtmlUrl(release.html_url, RELEASES_PAGE),
     exeUrl: assets.exeUrl,
     apkUrl: assets.apkUrl,
     packaged,
@@ -160,7 +169,7 @@ export class AppUpdater {
       ...statusFromRelease(release, this.options.currentVersion, this.options.packaged),
       checking: false,
       downloading: false,
-      progress: this.readyVersion && this.readyVersion === stripTagPrefix(release.tag_name ?? "") ? 1 : 0,
+      progress: this.readyVersion && tagMatchesReady(release.tag_name, this.readyVersion) ? 1 : 0,
       checkedAt: new Date((this.options.now ?? Date.now)()).toISOString(),
     };
     return this.status();
@@ -188,11 +197,21 @@ export class AppUpdater {
     await mkdir(this.options.cacheDir, { recursive: true });
     const dest = join(this.options.cacheDir, `Nearbox-${version}-win-x64.exe`);
     this.snapshot = { ...this.snapshot, downloading: true, progress: 0, error: undefined };
+    if (!isTrustedInstallerUrl(url)) {
+      throw new Error("安装包下载地址不可信。");
+    }
     const response = await this.fetchImpl(url, { headers: { "User-Agent": "Nearbox" }, redirect: "follow" });
     if (!response.ok || !response.body) {
       throw new Error(`下载失败（${response.status}）`);
     }
+    // redirect:follow can leave github.com — refuse a final hop off the trusted hosts.
+    if (response.url && !isTrustedInstallerUrl(response.url)) {
+      throw new Error("安装包下载地址不可信。");
+    }
     const total = Number(response.headers.get("content-length") ?? 0);
+    if (total > 0 && isInstallerTooLarge(total)) {
+      throw new Error("安装包过大，已取消下载。");
+    }
     const reader = response.body.getReader();
     const file = createWriteStream(dest);
     try {
@@ -203,10 +222,17 @@ export class AppUpdater {
           break;
         }
         received += value.byteLength;
+        if (isInstallerTooLarge(received)) {
+          throw new Error("安装包过大，已取消下载。");
+        }
         await new Promise<void>((resolve, reject) => {
           file.write(value, (error) => (error ? reject(error) : resolve()));
         });
-        this.snapshot = { ...this.snapshot, downloading: true, progress: total ? received / total : 0 };
+        this.snapshot = {
+          ...this.snapshot,
+          downloading: true,
+          progress: total > 0 ? Math.min(1, received / total) : 0,
+        };
       }
       await new Promise<void>((resolve, reject) => file.end((error: NodeJS.ErrnoException | null | undefined) => (error ? reject(error) : resolve())));
     } catch (error) {
@@ -220,3 +246,9 @@ export class AppUpdater {
     return dest;
   }
 }
+
+function tagMatchesReady(tagName: unknown, readyVersion: string): boolean {
+  const tag = releaseTagName(tagName);
+  return Boolean(tag && stripTagPrefix(tag) === readyVersion);
+}
+

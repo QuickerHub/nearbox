@@ -17,6 +17,16 @@ import {
   type TaskNote,
 } from "@shared/protocol";
 import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import {
+  MAX_FILES,
+  MAX_PROJECTS,
+  MAX_REMOTE_DEVICES,
+  MAX_SESSIONS,
+  MAX_TASKS,
+  capArrayTail,
+  capCatalogString,
+  capRecordKeys,
+} from "./store-collections";
 import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
@@ -90,14 +100,17 @@ export class Store {
     try {
       const raw = JSON.parse(readFileSync(this.file, "utf8")) as Partial<PersistedState>;
       const base = emptyState();
+      const filesRaw = raw.files && typeof raw.files === "object" && !Array.isArray(raw.files) ? (raw.files as Record<string, StoredFile>) : base.files;
       return {
         version: 1,
-        tasks: Array.isArray(raw.tasks) ? raw.tasks.map(normalizeTask) : base.tasks,
-        projects: Array.isArray(raw.projects) ? raw.projects : base.projects,
+        tasks: Array.isArray(raw.tasks) ? capArrayTail(raw.tasks.map(normalizeTask), MAX_TASKS) : base.tasks,
+        projects: Array.isArray(raw.projects) ? capArrayTail(raw.projects, MAX_PROJECTS) : base.projects,
         runs: Array.isArray(raw.runs) ? raw.runs.map(normalizeRun) : base.runs,
-        sessions: Array.isArray(raw.sessions) ? raw.sessions : base.sessions,
-        remoteDevices: Array.isArray(raw.remoteDevices) ? raw.remoteDevices.map(normalizeDevice) : base.remoteDevices,
-        files: raw.files && typeof raw.files === "object" ? raw.files : base.files,
+        sessions: Array.isArray(raw.sessions) ? capArrayTail(raw.sessions, MAX_SESSIONS) : base.sessions,
+        remoteDevices: Array.isArray(raw.remoteDevices)
+          ? capArrayTail(raw.remoteDevices.map(normalizeDevice), MAX_REMOTE_DEVICES)
+          : base.remoteDevices,
+        files: capRecordKeys(filesRaw, MAX_FILES),
         settings: {
           ...base.settings,
           ...(raw.settings ?? {}),
@@ -184,12 +197,14 @@ function normalizeIdeModels(value: unknown): IdeModelPref[] | undefined {
       continue;
     }
     const record = item as Record<string, unknown>;
-    if (typeof record.id !== "string" || !record.id.trim()) {
+    const id = capCatalogString(record.id);
+    if (!id) {
       continue;
     }
-    const pref: IdeModelPref = { id: record.id, visible: record.visible === true };
-    if (typeof record.label === "string" && record.label.trim()) {
-      pref.label = record.label.trim();
+    const pref: IdeModelPref = { id, visible: record.visible === true };
+    const label = capCatalogString(record.label);
+    if (label) {
+      pref.label = label;
     }
     out.push(pref);
   }
@@ -207,12 +222,33 @@ function normalizeCatalogs(value: unknown): Partial<Record<AgentKind, ModelCatal
       continue;
     }
     const { models, checkedAt, ideModels } = entry as { models?: unknown; checkedAt?: unknown; ideModels?: unknown };
-    if (!Array.isArray(models) || typeof checkedAt !== "string") {
+    const checked = capCatalogString(checkedAt);
+    if (!Array.isArray(models) || !checked) {
       continue;
     }
-    const clean = models.filter((model): model is AgentModel => Boolean(model) && typeof (model as AgentModel).id === "string" && (model as AgentModel).id.length > 0);
+    const clean: AgentModel[] = [];
+    for (const model of models) {
+      if (!model || typeof model !== "object") {
+        continue;
+      }
+      const row = model as AgentModel;
+      const id = capCatalogString(row.id);
+      if (!id) {
+        continue;
+      }
+      const next: AgentModel = { ...row, id };
+      if (typeof row.label === "string") {
+        const label = capCatalogString(row.label);
+        if (label) {
+          next.label = label;
+        } else {
+          delete (next as { label?: string }).label;
+        }
+      }
+      clean.push(next);
+    }
     if (clean.length) {
-      const catalog: ModelCatalog = { models: clean, checkedAt };
+      const catalog: ModelCatalog = { models: clean, checkedAt: checked };
       const prefs = normalizeIdeModels(ideModels);
       if (prefs) {
         catalog.ideModels = prefs;
