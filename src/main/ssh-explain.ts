@@ -46,3 +46,18 @@ export function assertSafeRemotePath(path: string): void {
     throw new Error("路径不合法。");
   }
 }
+
+/** Login name for `ssh -l`: no leading dash (option-like) and no whitespace / controls. */
+export function isSshUser(user: string): boolean {
+  return Boolean(user) && !user.startsWith("-") && !/[\r\n\u0000\s]/.test(user) && user.length <= 128;
+}
+
+/** Drop a hostile/broken probe user; reject a home path that would break later ssh helpers. */
+export function adoptProbeIdentity(user: unknown, home: unknown): { user: string; home: string } {
+  const homeText = String(home ?? "");
+  if (homeText && /[\r\n\u0000]/.test(homeText)) {
+    throw new Error("路径不合法。");
+  }
+  const userText = String(user ?? "");
+  return { user: isSshUser(userText) ? userText : "", home: homeText };
+}

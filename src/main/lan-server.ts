@@ -36,7 +36,7 @@ import {
   type TaskInput,
   type TaskPatch,
 } from "@shared/protocol";
-import { receiveToInbox } from "./files";
+import { isServableInboxFile, receiveToInbox } from "./files";
 import { countOnlinePhones, reuseMapValues } from "./snapshot-devices";
 import { recentRuns } from "./snapshot-runs";
 import type { TaskHub } from "./hub";
@@ -430,11 +430,21 @@ export class LanServer extends EventEmitter {
         this.sessions.delete(token);
       }
     }
-    for (const binding of this.sockets) {
-      if (binding.deviceId === deviceId) {
-        binding.socket.close();
+    // Drop the binding before close completes so a late `capture` / snapshot
+    // cannot land after the session token is already gone.
+    for (const binding of [...this.sockets]) {
+      if (binding.deviceId !== deviceId) {
+        continue;
+      }
+      this.sockets.delete(binding);
+      try {
+        binding.socket.removeAllListeners("message");
+        binding.socket.terminate();
+      } catch {
+        /* already closed */
       }
     }
+    this.remote?.dropDevice(deviceId);
     this.deleteDevice(deviceId);
     this.persistSessions();
     this.scheduleSnapshot();
@@ -625,7 +635,7 @@ export class LanServer extends EventEmitter {
     }
     if (segments[1] === "files" && segments[2] && method === "GET") {
       const file = this.hub.fileById(decodeURIComponent(segments[2]));
-      if (!file || !existsSync(file.path)) {
+      if (!file || !isServableInboxFile(this.inboxDir, file.path)) {
         res.writeHead(404).end("文件不存在");
         return;
       }

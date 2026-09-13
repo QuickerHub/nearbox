@@ -152,6 +152,7 @@ class LanScanner(
         fun probe(host: String, port: Int, timeoutMs: Int): FoundHost? {
             val conn = try {
                 (URL("http://$host:$port/api/discover").openConnection() as HttpURLConnection).apply {
+                    instanceFollowRedirects = false
                     connectTimeout = timeoutMs
                     readTimeout = timeoutMs
                     requestMethod = "GET"
@@ -191,10 +192,14 @@ class LanScanner(
             if (name.isEmpty() || host.isEmpty()) {
                 return null
             }
+            val port = info.optInt("port", fallbackPort)
+            if (port !in 1..65535) {
+                return null
+            }
             return FoundHost(
                 name = name,
                 connectHost = connectHost,
-                port = info.optInt("port", fallbackPort),
+                port = port,
                 version = info.optString("version", ""),
                 token = info.optString("token").ifBlank { info.optString("pin") }.ifBlank { null },
                 pin = info.optString("pin").ifBlank { null },
