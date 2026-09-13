@@ -7,6 +7,18 @@ import { phonesOnlineLabel } from "../shared/devices.ts";
 
 export type RunStatusLike = { status: string };
 
+/**
+ * Strip control characters and cap length so a corrupted preferredHost cannot
+ * break the tray menu (newlines / ANSI in the label).
+ */
+export function sanitizeTrayHost(host: string | undefined): string | undefined {
+  if (typeof host !== "string") {
+    return undefined;
+  }
+  const cleaned = host.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 64);
+  return cleaned || undefined;
+}
+
 /** Count running/queued in one pass (no filter alloc). */
 export function countRunStatuses(runs: readonly RunStatusLike[]): { running: number; queued: number } {
   let running = 0;
@@ -33,7 +45,8 @@ export function trayPhonesLabel(phones: number): string {
 
 /** Host:port row, or the empty-LAN placeholder. */
 export function trayHostLabel(selectedHost: string | undefined, port: number | undefined): string {
-  return selectedHost ? `${selectedHost}:${port}` : "未发现局域网地址";
+  const host = sanitizeTrayHost(selectedHost);
+  return host ? `${host}:${port}` : "未发现局域网地址";
 }
 
 /**
@@ -47,11 +60,10 @@ export function trayStatusSignature(
   running: number,
   queued: number,
 ): string {
-  return `${selectedHost ?? ""}|${port ?? ""}|${phones}|${running}|${queued}`;
+  return `${sanitizeTrayHost(selectedHost) ?? ""}|${port ?? ""}|${phones}|${running}|${queued}`;
 }
 
 /** Hover tooltip: compact Chinese status next to the app name. */
 export function trayTooltip(running: number, queued: number, phones: number): string {
   return `Nearbox · ${trayAgentLabel(running, queued)} · ${phonesOnlineLabel(phones)}`;
 }
-

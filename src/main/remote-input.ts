@@ -18,6 +18,8 @@ import type {
 
 const ABS_MAX = 65535;
 const WHEEL_STEP = 120;
+/** Cap control-channel JSON so one huge frame cannot allocate unbounded memory. */
+export const MAX_CONTROL_MESSAGE_CHARS = 16_384;
 
 const BUTTON_CODE: Record<RemoteButton, number> = { left: 1, right: 2, middle: 3 };
 
@@ -52,8 +54,21 @@ export function hWheelCommand(notches: number): string | null {
   return delta === 0 ? null : `H ${delta}`;
 }
 
-export function keyCommand(vk: number, down: boolean, extended: boolean): string {
-  return `K ${vk} ${down ? 1 : 0} ${extended ? 1 : 0}`;
+/** Virtual-key codes are a byte; NaN/out-of-range must not reach the injector line. */
+export function clampVirtualKey(vk: number): number | null {
+  if (!Number.isFinite(vk)) {
+    return null;
+  }
+  const code = Math.round(vk);
+  if (code < 1 || code > 254) {
+    return null;
+  }
+  return code;
+}
+
+export function keyCommand(vk: number, down: boolean, extended: boolean): string | null {
+  const code = clampVirtualKey(vk);
+  return code === null ? null : `K ${code} ${down ? 1 : 0} ${extended ? 1 : 0}`;
 }
 
 /** One Unicode keystroke per UTF-16 code unit; surrogate pairs pass through untouched. */
@@ -170,8 +185,11 @@ function comboCommands(codes: string[]): string[] {
   if (!resolved.length) {
     return [];
   }
-  const down = resolved.map((item) => keyCommand(item.vk, true, item.extended));
-  const up = [...resolved].reverse().map((item) => keyCommand(item.vk, false, item.extended));
+  const down = resolved.map((item) => keyCommand(item.vk, true, item.extended)).filter((line): line is string => line !== null);
+  const up = [...resolved]
+    .reverse()
+    .map((item) => keyCommand(item.vk, false, item.extended))
+    .filter((line): line is string => line !== null);
   return [...down, ...up];
 }
 
@@ -224,7 +242,11 @@ export function translateInput(msg: RemoteControlToHost): string[] {
     }
     case "key": {
       const mapping = codeToVk(msg.code);
-      return mapping ? [keyCommand(mapping.vk, msg.down, mapping.extended)] : [];
+      if (!mapping) {
+        return [];
+      }
+      const line = keyCommand(mapping.vk, msg.down, mapping.extended);
+      return line ? [line] : [];
     }
     case "combo":
       return comboCommands(msg.codes);
@@ -308,7 +330,14 @@ const KNOWN_TYPES = new Set([
 ]);
 
 /** Parse and sanity-check a control-channel message; returns null for anything malformed. */
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
 export function parseControlMessage(raw: string): RemoteControlToHost | null {
+  if (raw.length > MAX_CONTROL_MESSAGE_CHARS) {
+    return null;
+  }
   let value: unknown;
   try {
     value = JSON.parse(raw);
@@ -324,7 +353,7 @@ export function parseControlMessage(raw: string): RemoteControlToHost | null {
   }
   switch (msg.t) {
     case "move":
-      return typeof msg.x === "number" && typeof msg.y === "number" ? { t: "move", x: msg.x, y: msg.y } : null;
+      return isFiniteNumber(msg.x) && isFiniteNumber(msg.y) ? { t: "move", x: msg.x, y: msg.y } : null;
     case "down":
     case "up":
     case "click": {
@@ -341,10 +370,10 @@ export function parseControlMessage(raw: string): RemoteControlToHost | null {
     }
     case "scroll": {
       const out: Record<string, unknown> = { t: "scroll" };
-      if (typeof msg.dy === "number") {
+      if (isFiniteNumber(msg.dy)) {
         out.dy = msg.dy;
       }
-      if (typeof msg.dx === "number") {
+      if (isFiniteNumber(msg.dx)) {
         out.dx = msg.dx;
       }
       attachXy(out, msg);
@@ -363,9 +392,9 @@ export function parseControlMessage(raw: string): RemoteControlToHost | null {
     case "config": {
       const out: RemoteControlToHost = {
         t: "config",
-        quality: typeof msg.quality === "number" ? msg.quality : undefined,
-        fps: typeof msg.fps === "number" ? msg.fps : undefined,
-        maxWidth: typeof msg.maxWidth === "number" ? msg.maxWidth : undefined,
+        quality: isFiniteNumber(msg.quality) ? msg.quality : undefined,
+        fps: isFiniteNumber(msg.fps) ? msg.fps : undefined,
+        maxWidth: isFiniteNumber(msg.maxWidth) ? msg.maxWidth : undefined,
       };
       if ("crop" in msg) {
         out.crop = clampCrop(msg.crop) ?? { x: 0, y: 0, w: 1, h: 1 };
@@ -373,7 +402,7 @@ export function parseControlMessage(raw: string): RemoteControlToHost | null {
       return out;
     }
     case "ping":
-      return { t: "ping", ts: typeof msg.ts === "number" ? msg.ts : undefined };
+      return { t: "ping", ts: isFiniteNumber(msg.ts) ? msg.ts : undefined };
     default:
       return null;
   }
@@ -384,7 +413,7 @@ function asButton(value: unknown): RemoteButton | null {
 }
 
 function attachXy(target: Record<string, unknown>, msg: Record<string, unknown>): RemoteControlToHost {
-  if (typeof msg.x === "number" && typeof msg.y === "number") {
+  if (isFiniteNumber(msg.x) && isFiniteNumber(msg.y)) {
     target.x = msg.x;
     target.y = msg.y;
   }

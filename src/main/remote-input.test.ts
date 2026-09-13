@@ -3,7 +3,10 @@ import test from "node:test";
 import {
   clampCrop,
   clampQuality,
+  clampVirtualKey,
   codeToVk,
+  keyCommand,
+  MAX_CONTROL_MESSAGE_CHARS,
   moveCommand,
   parseControlMessage,
   shouldSendFrame,
@@ -118,4 +121,27 @@ test("control messages are validated before they reach the injector", () => {
     maxWidth: 1920,
     crop: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
   });
+});
+
+test("control messages over the size cap are dropped before JSON.parse", () => {
+  assert.equal(parseControlMessage("x".repeat(MAX_CONTROL_MESSAGE_CHARS + 1)), null);
+});
+
+test("non-finite pointer coordinates are rejected at parse time", () => {
+  assert.equal(parseControlMessage('{"t":"move","x":null,"y":0}'), null);
+  assert.equal(parseControlMessage('{"t":"move","x":1,"y":null}'), null);
+  assert.equal(parseControlMessage('{"t":"move","x":"1","y":0}'), null);
+  // JSON.parse turns 1e999 into Infinity; typeof is still "number".
+  assert.equal(parseControlMessage('{"t":"move","x":0,"y":1e999}'), null);
+  assert.equal(parseControlMessage('{"t":"move","x":-1e999,"y":0}'), null);
+  assert.deepEqual(parseControlMessage('{"t":"scroll","dy":1e999,"dx":1}'), { t: "scroll", dx: 1 });
+});
+
+test("virtual-key codes are clamped to the SendInput byte range", () => {
+  assert.equal(clampVirtualKey(65), 65);
+  assert.equal(clampVirtualKey(0), null);
+  assert.equal(clampVirtualKey(255), null);
+  assert.equal(clampVirtualKey(Number.NaN), null);
+  assert.equal(keyCommand(65, true, false), "K 65 1 0");
+  assert.equal(keyCommand(0, true, false), null);
 });

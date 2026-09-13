@@ -3,6 +3,7 @@ import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AppUpdateStatus } from "@shared/protocol";
 import { isNewerVersion, stripTagPrefix } from "../shared/version.ts";
+import { isGithubReleasePayload, isTrustedInstallerUrl } from "./updater-url.ts";
 
 export const DEFAULT_RELEASE_REPO = "QuickerHub/nearbox";
 const STALE_MS = 60 * 60 * 1000;
@@ -155,7 +156,11 @@ export class AppUpdater {
     if (!response.ok) {
       throw new Error(`无法检查更新（${response.status}）`);
     }
-    const release = (await response.json()) as GithubRelease;
+    const payload: unknown = await response.json();
+    if (!isGithubReleasePayload(payload)) {
+      throw new Error("无法检查更新（应答无效）");
+    }
+    const release = payload as GithubRelease;
     this.snapshot = {
       ...statusFromRelease(release, this.options.currentVersion, this.options.packaged),
       checking: false,
@@ -174,6 +179,9 @@ export class AppUpdater {
     if (!status.exeUrl) {
       throw new Error("这个版本没有 Windows 安装包。");
     }
+    if (!isTrustedInstallerUrl(status.exeUrl)) {
+      throw new Error("安装包下载地址不可信。");
+    }
     if (!this.options.packaged) {
       throw new Error("开发中的版本请先安装正式包，之后就可以在设置里更新。");
     }
@@ -182,6 +190,9 @@ export class AppUpdater {
   }
 
   private async download(version: string, url: string): Promise<string> {
+    if (!isTrustedInstallerUrl(url)) {
+      throw new Error("安装包下载地址不可信。");
+    }
     if (this.readyFile && this.readyVersion === version && existsSync(this.readyFile)) {
       return this.readyFile;
     }

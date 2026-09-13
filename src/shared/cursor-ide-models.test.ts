@@ -70,3 +70,9 @@ test("the picker follows Cursor IDE order and hides toggled-off families", () =>
     ["claude-opus-4-8", "gpt-5.5"],
   );
 });
+
+test("parseCursorIdeModels caps a bloated IDE catalog", () => {
+  const catalog = Array.from({ length: 300 }, (_, i) => ({ name: `model-${i}`, defaultOn: true }));
+  const prefs = parseCursorIdeModels({ availableDefaultModels2: catalog });
+  assert.equal(prefs?.length, 256);
+});
