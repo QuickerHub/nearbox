@@ -33,6 +33,7 @@ test("full access adds the agent-specific yolo flag", () => {
   assert.ok(buildInvocation("cursor", direct(), full).args.includes("--force"));
   assert.ok(buildInvocation("codex", direct(), full).args.includes("--dangerously-bypass-approvals-and-sandbox"));
   assert.ok(buildInvocation("claude", direct(), full).args.includes("--dangerously-skip-permissions"));
+  assert.ok(buildInvocation("opencode", direct(), full).args.includes("--dangerously-skip-permissions"));
   const grok = buildInvocation("grok", direct(), full).args;
   assert.equal(grok[grok.indexOf("--permission-mode") + 1], "bypassPermissions");
 });
@@ -56,6 +57,8 @@ test("resume reuses the previous session id", () => {
   assert.ok(!codex.includes("-C"));
   assert.ok(buildInvocation("cursor", direct(), resumed).args.includes("--resume"));
   assert.ok(buildInvocation("claude", direct(), resumed).args.includes("-r"));
+  const opencode = buildInvocation("opencode", direct(), resumed).args;
+  assert.equal(opencode[opencode.indexOf("-s") + 1], "sess-123");
 });
 
 test("codex gets each image as its own -i, before the flags and the stdin marker", () => {
@@ -533,6 +536,73 @@ function collect(parser: ReturnType<typeof createOutputParser>, steps: (() => Re
   usage = tail.usage ?? usage;
   return { events, sessionId, modelLabel, sessionTitle, result, isError, usage };
 }
+
+test("opencode run --format json maps text, thinking, tools and session id", () => {
+  const parser = createOutputParser("opencode");
+  const all = feedAll(parser, [
+    '{"type":"step-start","sessionID":"oc-42"}',
+    '{"type":"text","part":{"type":"text","text":"Hello "}}',
+    '{"type":"text","part":{"type":"text","text":"world"}}',
+    '{"type":"reasoning","part":{"type":"reasoning","text":"plan"}}',
+    JSON.stringify({
+      type: "tool",
+      part: {
+        type: "tool",
+        tool: "bash",
+        callID: "t1",
+        state: {
+          status: "completed",
+          title: "ls",
+          input: { command: "ls -la" },
+          output: "a.txt\nb.txt",
+          metadata: { exit: 0 },
+        },
+      },
+    }),
+    JSON.stringify({
+      type: "tool",
+      part: {
+        type: "tool",
+        name: "Read",
+        id: "t2",
+        state: { status: "error", input: { path: "missing.ts" }, error: "ENOENT: missing\nstack" },
+      },
+    }),
+    '{"type":"error","part":{"type":"error","message":"boom"}}',
+  ]);
+  assert.equal(all.sessionId, "oc-42");
+  assert.deepEqual(
+    all.events.map((event) => [event.kind, event.tool?.status ?? event.text]),
+    [
+      ["text", "Hello"],
+      ["text", "world"],
+      ["thinking", "plan"],
+      ["tool", "ok"],
+      ["tool", "error"],
+      ["stderr", '{"type":"error","message":"boom"}'],
+    ],
+  );
+  const shell = all.events.find((event) => event.tool?.id === "t1")?.tool;
+  assert.equal(shell?.kind, "shell");
+  assert.equal(shell?.command, "ls -la");
+  assert.equal(shell?.exitCode, 0);
+  assert.equal(shell?.output, "a.txt\nb.txt");
+  const read = all.events.find((event) => event.tool?.id === "t2")?.tool;
+  assert.equal(read?.kind, "read");
+  assert.equal(read?.error, "ENOENT: missing");
+  assert.equal(all.isError, true);
+  assert.equal(all.result, "world");
+});
+
+test("opencode puts the prompt on argv and points --dir at the workspace", () => {
+  const inv = buildInvocation("opencode", direct(), { ...request, model: "gpt-5.5" });
+  assert.deepEqual(inv.args.slice(0, 4), ["run", "--format", "json", "--dir"]);
+  assert.equal(inv.args[4], request.cwd);
+  assert.equal(inv.args[inv.args.indexOf("-m") + 1], "gpt-5.5");
+  assert.equal(inv.args.at(-1), request.prompt);
+  assert.equal(inv.stdin, undefined);
+  assert.ok(!inv.args.includes("--dangerously-skip-permissions"));
+});
 
 test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(400), "400 毫秒");

@@ -12,6 +12,20 @@ const APPLICATION_USER_KEY =
 test("Cursor state db path follows the platform config dir", () => {
   const windows = cursorStateDbPath({ APPDATA: "C:\\Users\\x\\AppData\\Roaming" }, "C:\\Users\\x");
   assert.match(windows.replaceAll("\\", "/"), /Cursor\/User\/globalStorage\/state\.vscdb$/);
+
+  const previous = process.platform;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  try {
+    const mac = cursorStateDbPath({}, "/Users/cea");
+    assert.equal(mac, "/Users/cea/Library/Application Support/Cursor/User/globalStorage/state.vscdb");
+    Object.defineProperty(process, "platform", { value: "linux" });
+    const linux = cursorStateDbPath({ XDG_CONFIG_HOME: "/cfg" }, "/home/cea");
+    assert.equal(linux, "/cfg/Cursor/User/globalStorage/state.vscdb");
+    const linuxHome = cursorStateDbPath({}, "/home/cea");
+    assert.equal(linuxHome, "/home/cea/.config/Cursor/User/globalStorage/state.vscdb");
+  } finally {
+    Object.defineProperty(process, "platform", { value: previous });
+  }
 });
 
 test("readCursorIdeModels pulls the toggle list from applicationUser", () => {
