@@ -216,6 +216,17 @@ test("cursor-agent shell, edit and rejected calls carry command, diff and reason
   assert.ok(glob[0]?.error?.includes("Path does not exist"));
 });
 
+
+test("cursor-agent aborted shell under success is an error, not ok", () => {
+  const parser = createOutputParser("cursor");
+  const all = feedAll(parser, [
+    '{"type":"tool_call","subtype":"completed","call_id":"ab1","tool_call":{"shellToolCall":{"args":{"command":"sleep 99"},"result":{"success":{"command":"sleep 99","exitCode":0,"aborted":true,"stdout":"","stderr":"","interleavedOutput":""}}}}}',
+  ]);
+  const tool = all.events.find((event) => event.tool?.id === "ab1")?.tool;
+  assert.equal(tool?.status, "error");
+  assert.equal(tool?.error, "命令被中止");
+});
+
 test("cursor-agent's whole-file diffString is stored as the real hunk, not old+new", () => {
   const dump = ["--- a/x.ts", "+++ b/x.ts", "@@ -1,3 +1,3 @@", "-const a = 1;", "-const b = 8;", "-const c = 3;", "+const a = 1;", "+const b = 5;", "+const c = 3;"].join("\\n");
   const parser = createOutputParser("cursor");
@@ -456,6 +467,34 @@ test("a call the client rejected stays rejected when the agent later marks it co
   assert.equal(tools.length, 2);
   assert.equal(tools[1]?.status, "rejected");
   assert.equal(tools[1]?.error, "安全模式下不执行终端命令");
+});
+
+
+test("ACP rawOutput keeps the output field alongside exitCode", () => {
+  const parser = createOutputParser("acp");
+  const events: ParsedEvent[] = [];
+  events.push(
+    ...parser.push({
+      sessionUpdate: "tool_call",
+      toolCallId: "t-out",
+      title: "`echo hi`",
+      kind: "execute",
+      status: "pending",
+      rawInput: { command: "echo hi" },
+    }).events,
+  );
+  events.push(
+    ...parser.push({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t-out",
+      status: "completed",
+      rawOutput: { output: "hi from agent", exitCode: 0 },
+    }).events,
+  );
+  const tool = events.filter((event) => event.tool?.id === "t-out").map((event) => event.tool!).at(-1);
+  assert.equal(tool?.status, "ok");
+  assert.equal(tool?.exitCode, 0);
+  assert.equal(tool?.output, "hi from agent");
 });
 
 test("partial flushes stream text as deltas without losing the whole answer", () => {

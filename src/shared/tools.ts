@@ -164,6 +164,7 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
       }
       if (body.aborted === true) {
         patch.error = "命令被中止";
+        patch.status = "error";
       }
       break;
     }
