@@ -1,3 +1,4 @@
+import { hasParentRunId } from "../shared/conversation.ts";
 import type { AgentRun } from "@shared/protocol";
 
 // Pure: which queued run may start next. Kept free of Node imports so it can
@@ -11,8 +12,8 @@ function isActive(run: Pick<AgentRun, "status">): boolean {
 function waitingParents(runs: readonly AgentRun[]): Set<string> {
   const waiting = new Set<string>();
   for (const run of runs) {
-    if (run.parentRunId && isActive(run)) {
-      waiting.add(run.parentRunId);
+    if (hasParentRunId(run) && isActive(run)) {
+      waiting.add(run.parentRunId!);
     }
   }
   return waiting;
@@ -56,5 +57,5 @@ export function nextRunnable(runs: readonly AgentRun[], limit: number): AgentRun
 /** Active runs started (directly or through further delegation) by `runId`. */
 export function activeDescendants(runs: readonly AgentRun[], runId: string): AgentRun[] {
   const byId = new Map(runs.map((run) => [run.id, run] as const));
-  return runs.filter((run) => isActive(run) && run.parentRunId && isAncestor(byId, runId, run));
+  return runs.filter((run) => isActive(run) && hasParentRunId(run) && isAncestor(byId, runId, run));
 }
