@@ -541,3 +541,60 @@ test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(125_000), "2 分 5 秒");
   assert.equal(formatMsDuration(3_725_000), "1 小时 2 分");
 });
+
+test("ACP chunkText accepts string content and top-level text", () => {
+  const parser = createOutputParser("acp");
+  const a = parser.push({ sessionUpdate: "agent_message_chunk", content: "hello" });
+  const b = parser.push({ type: "agent_message_chunk", text: " world" });
+  const tail = parser.end();
+  assert.equal([...a.events, ...b.events, ...tail.events].map((e) => e.text).join(""), "hello world");
+});
+
+test("ACP kind write/create and CreatePlan title map correctly", () => {
+  const parser = createOutputParser("acp");
+  const write = parser.push({
+    sessionUpdate: "tool_call",
+    toolCallId: "w1",
+    title: "out.ts",
+    kind: "write",
+    status: "pending",
+    rawInput: { path: "src/out.ts" },
+  }).events[0]?.tool;
+  assert.equal(write?.kind, "write");
+  assert.equal(write?.subject, "out.ts");
+  const plan = parser.push({
+    sessionUpdate: "tool_call",
+    toolCallId: "p1",
+    title: "CreatePlan",
+    kind: "other",
+    status: "pending",
+    rawInput: { name: "ship it" },
+  }).events[0]?.tool;
+  assert.equal(plan?.kind, "todo");
+  assert.equal(plan?.subject, "ship it");
+});
+
+test("ACP max_tokens / max_turn_requests are soft stops, not failures", () => {
+  const tokens = createOutputParser("acp").push({ type: "end", stopReason: "max_tokens" });
+  assert.equal(tokens.isError, false);
+  assert.match(tokens.events.at(-1)?.text ?? "", /已达长度上限/);
+  const turns = createOutputParser("acp").push({ type: "end", stopReason: "max_turn_requests" });
+  assert.equal(turns.isError, false);
+  assert.match(turns.events.at(-1)?.text ?? "", /已达轮次上限/);
+});
+
+test("opencode toolName / tool_name populate the tool row", () => {
+  const parser = createOutputParser("opencode");
+  const tool = parser.push({
+    type: "tool",
+    part: {
+      type: "tool",
+      toolName: "bash",
+      callID: "c1",
+      state: { status: "running", input: { command: "ls" } },
+    },
+  }).events[0]?.tool;
+  assert.equal(tool?.name, "bash");
+  assert.equal(tool?.kind, "shell");
+  assert.equal(tool?.command, "ls");
+});
