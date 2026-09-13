@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   countRunStatuses,
+  sanitizeTrayHost,
   trayAgentLabel,
   trayHostLabel,
   trayPhonesLabel,
@@ -46,3 +47,10 @@ test("trayTooltip joins Chinese status rows", () => {
   assert.equal(trayTooltip(1, 2, 3), "Nearbox · Agent：1 运行中 · 2 排队 · 3 台手机在线");
 });
 
+
+test("tray host labels strip control characters and empty after sanitize", () => {
+  assert.equal(sanitizeTrayHost("  192.168.1.8\n "), "192.168.1.8");
+  assert.equal(sanitizeTrayHost("\u0001\u0002"), undefined);
+  assert.equal(trayHostLabel("192.168.1.8\n", 7788), "192.168.1.8:7788");
+  assert.equal(trayHostLabel("\t", 7788), "未发现局域网地址");
+});

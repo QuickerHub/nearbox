@@ -22,7 +22,10 @@ export function parseCursorIdeModels(applicationUser: unknown): IdeModelPref[] |
   const disabled = new Set(stringList(ai.modelOverrideDisabled).map(normalizeIdeModelId));
   const out: IdeModelPref[] = [];
   const seen = new Set<string>();
-  for (const item of catalog) {
+  // A bloated IDE blob must not push thousands of rows into the Nearbox picker.
+  const limit = Math.min(catalog.length, 256);
+  for (let index = 0; index < limit; index += 1) {
+    const item = catalog[index];
     if (!item || typeof item !== "object") {
       continue;
     }

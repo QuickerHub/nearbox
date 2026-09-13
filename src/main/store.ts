@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
@@ -17,6 +17,7 @@ import {
   type TaskNote,
 } from "@shared/protocol";
 import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { capCatalogModels, isStateJsonTooLarge } from "./store-limits";
 import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
@@ -88,6 +89,11 @@ export class Store {
       return emptyState();
     }
     try {
+      // A multi-hundred-MB state.json would JSON.parse straight into an OOM kill.
+      const size = statSync(this.file).size;
+      if (isStateJsonTooLarge(size)) {
+        throw new Error(`state.json too large (${size} bytes)`);
+      }
       const raw = JSON.parse(readFileSync(this.file, "utf8")) as Partial<PersistedState>;
       const base = emptyState();
       return {
@@ -210,7 +216,9 @@ function normalizeCatalogs(value: unknown): Partial<Record<AgentKind, ModelCatal
     if (!Array.isArray(models) || typeof checkedAt !== "string") {
       continue;
     }
-    const clean = models.filter((model): model is AgentModel => Boolean(model) && typeof (model as AgentModel).id === "string" && (model as AgentModel).id.length > 0);
+    const clean = capCatalogModels(
+      models.filter((model): model is AgentModel => Boolean(model) && typeof (model as AgentModel).id === "string" && (model as AgentModel).id.length > 0),
+    );
     if (clean.length) {
       const catalog: ModelCatalog = { models: clean, checkedAt };
       const prefs = normalizeIdeModels(ideModels);

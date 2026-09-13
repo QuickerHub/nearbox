@@ -113,6 +113,11 @@ class WindowsInputInjector implements InputSink {
         return;
       }
       this.child = child;
+      // EPIPE / premature close after a kill races write(); without a listener Node
+      // can abort the whole process on an unhandled stdin 'error'.
+      child.stdin.on("error", () => {
+        this.teardown();
+      });
       let banner = "";
       const onData = (chunk: Buffer) => {
         banner += chunk.toString("utf8");
