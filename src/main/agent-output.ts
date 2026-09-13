@@ -13,6 +13,7 @@ import {
   basenameOf,
   clipHead,
   clipTail,
+  coerceExitCode,
   compact,
   describeArgs,
   describeCursorResult,
@@ -457,7 +458,11 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
         if (!isRecord(block) || block.type !== "tool_result") {
           continue;
         }
-        const id = String(block.tool_use_id ?? "");
+        const id = String(block.tool_use_id ?? "").trim();
+        // Results without a tool_use_id cannot be matched; tracking under "" merges unrelated calls.
+        if (!id) {
+          continue;
+        }
         const text = typeof block.content === "string" ? block.content : asArray(block.content).map(textOf).join("\n");
         const previous = tools.get(id);
         const isError = Boolean(block.is_error);
@@ -590,7 +595,7 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
         return;
       case "command_execution": {
         const command = String(item.command ?? "");
-        const exitCode = typeof item.exit_code === "number" ? item.exit_code : undefined;
+        const exitCode = coerceExitCode(item.exit_code ?? item.exitCode);
         const output = typeof item.aggregated_output === "string" ? item.aggregated_output : "";
         sink.tool(
           events,
@@ -806,8 +811,15 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
 
 /** Grok puts a chunk's text in `data`; raw ACP wraps it as a content block. */
 function chunkText(data: Record<string, unknown>): string {
-  const content = isRecord(data.content) ? data.content : {};
-  const text = typeof data.data === "string" ? data.data : typeof content.text === "string" ? content.text : "";
+  const content = data.content;
+  const text =
+    typeof data.data === "string"
+      ? data.data
+      : typeof content === "string"
+        ? content
+        : isRecord(content) && typeof content.text === "string"
+          ? content.text
+          : "";
   // Some models let their end-of-sequence marker through as text; it is never part of the answer.
   return text.replace(/<\|(?:eos|endoftext|end_of_text|eot_id)\|>/g, "");
 }
@@ -848,10 +860,43 @@ function acpStatus(status: string): ToolStatus {
 
 function acpLocations(data: Record<string, unknown>): string[] | undefined {
   const files = asArray(data.locations)
-    .filter(isRecord)
-    .map((location) => String(location.path ?? ""))
+    .map((location) => locationPath(location))
     .filter(Boolean);
   return files.length ? files : undefined;
+}
+
+/** ACP Location.path, file:// uri, or a bare path string. */
+function locationPath(location: unknown): string {
+  if (typeof location === "string") {
+    return stripFileUri(location.trim());
+  }
+  if (!isRecord(location)) {
+    return "";
+  }
+  if (typeof location.path === "string" && location.path.trim()) {
+    return location.path.trim();
+  }
+  if (typeof location.uri === "string" && location.uri.trim()) {
+    return stripFileUri(location.uri.trim());
+  }
+  return "";
+}
+
+function stripFileUri(value: string): string {
+  if (!/^file:/i.test(value)) {
+    return value;
+  }
+  try {
+    // file:///C:/x → C:/x ; file:///home/a → /home/a
+    const parsed = new URL(value);
+    let path = decodeURIComponent(parsed.pathname || "");
+    if (/^\/[A-Za-z]:\//.test(path)) {
+      path = path.slice(1);
+    }
+    return path || value;
+  } catch {
+    return value.replace(/^file:\/\/\/?/i, "");
+  }
 }
 
 /**
@@ -872,8 +917,9 @@ function describeRawOutput(kind: ToolKind, rawOutput: unknown): Partial<ToolCall
       if (combined.trim()) {
         patch.output = clipTail(combined);
       }
-      if (typeof rawOutput.exitCode === "number") {
-        patch.exitCode = rawOutput.exitCode;
+      const exitCode = coerceExitCode(rawOutput.exitCode ?? rawOutput.exit_code);
+      if (exitCode !== undefined) {
+        patch.exitCode = exitCode;
       }
       return patch;
     }
@@ -922,6 +968,9 @@ function describeAcpContent(content: unknown[]): Partial<ToolCall> {
       if (typeof inner.text === "string" && inner.text.trim()) {
         outputs.push(inner.text);
       }
+    } else if (item.type === "text" && typeof item.text === "string" && item.text.trim()) {
+      // Some agents flatten ContentBlock into the tool content array.
+      outputs.push(item.text);
     }
   }
   if (files.length) {
@@ -963,15 +1012,21 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, 
     const status: ToolStatus = stateStatus === "completed" ? "ok" : stateStatus === "error" ? "error" : "running";
     const described = describeArgs(name, input);
     const metadata = isRecord(state.metadata) ? state.metadata : {};
-    const output = typeof state.output === "string" ? state.output : undefined;
+    const outputText =
+      typeof state.output === "string"
+        ? state.output
+        : state.output !== undefined && state.output !== null
+          ? compact(state.output)
+          : undefined;
+    const exitCode = coerceExitCode(metadata.exit ?? metadata.exitCode ?? metadata.exit_code);
     sink.tool(
       events,
       track(id, {
         ...described,
         subject: described.subject ?? (typeof state.title === "string" ? state.title : undefined),
         status,
-        output: output ? (described.kind === "shell" ? clipTail(output) : clipHead(output)) : undefined,
-        exitCode: typeof metadata.exit === "number" ? metadata.exit : undefined,
+        output: outputText ? (described.kind === "shell" ? clipTail(outputText) : clipHead(outputText)) : undefined,
+        exitCode,
         error: typeof state.error === "string" ? firstLine(state.error) : undefined,
       }),
     );

@@ -458,6 +458,85 @@ test("a call the client rejected stays rejected when the agent later marks it co
   assert.equal(tools[1]?.error, "安全模式下不执行终端命令");
 });
 
+test("claude tool_result without tool_use_id is ignored", () => {
+  const parser = createOutputParser("claude");
+  const all = feedAll(parser, [
+    '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"echo ok"}}]}}',
+    '{"type":"user","message":{"content":[{"type":"tool_result","content":"orphan","is_error":false}]}}',
+    '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"","content":"also orphan","is_error":false}]}}',
+    '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok","is_error":false}]}}',
+  ]);
+  const tools = all.events.map((event) => event.tool).filter(Boolean);
+  assert.equal(tools.length, 2);
+  assert.equal(tools[0]?.id, "toolu_1");
+  assert.equal(tools[1]?.id, "toolu_1");
+  assert.equal(tools[1]?.status, "ok");
+  assert.equal(tools[1]?.output, "ok");
+  assert.ok(!tools.some((tool) => tool?.id === ""));
+});
+
+test("ACP locations accept uri and bare strings; content type text is kept", () => {
+  const parser = createOutputParser("acp");
+  const events = [
+    ...parser.push({
+      sessionUpdate: "tool_call",
+      toolCallId: "r1",
+      title: "Read",
+      kind: "read",
+      status: "completed",
+      locations: [{ uri: "file:///tmp/demo.ts" }, "D:\\work\\b.ts"],
+      content: [{ type: "text", text: "export const n = 1" }],
+    }).events,
+  ];
+  const tool = events.find((event) => event.tool)?.tool;
+  assert.equal(tool?.status, "ok");
+  assert.deepEqual(tool?.files, ["/tmp/demo.ts", "D:\\work\\b.ts"]);
+  assert.equal(tool?.output, "export const n = 1");
+});
+
+test("ACP string exitCode is coerced; chunkText accepts string content", () => {
+  const parser = createOutputParser("acp");
+  parser.push({ sessionUpdate: "agent_message_chunk", content: "Hello" });
+  const flushed = parser.flushPartial();
+  assert.equal(flushed.events[0]?.kind, "text");
+  assert.equal(flushed.events[0]?.text, "Hello");
+  assert.equal(flushed.events[0]?.delta, true);
+  const events = parser.push({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "s1",
+    status: "completed",
+    rawOutput: { exitCode: "3", stdout: "boom\n", stderr: "" },
+  }).events;
+  const tool = events.find((event) => event.tool)?.tool;
+  assert.equal(tool?.exitCode, 3);
+  assert.equal(tool?.status, "error");
+  assert.ok(tool?.output?.includes("boom"));
+});
+
+test("codex and opencode coerce string exit codes; opencode keeps object output", () => {
+  const codex = createOutputParser("codex");
+  const codexAll = feedAll(codex, [
+    '{"type":"item.completed","item":{"id":"c1","type":"command_execution","command":"false","aggregated_output":"","exit_code":"1","status":"completed"}}',
+  ]);
+  assert.equal(codexAll.events[0]?.tool?.exitCode, 1);
+  assert.equal(codexAll.events[0]?.tool?.status, "error");
+
+  const oc = createOutputParser("opencode");
+  const ocAll = feedAll(oc, [
+    JSON.stringify({
+      type: "tool",
+      part: {
+        type: "tool",
+        callID: "o1",
+        tool: "bash",
+        state: { status: "completed", output: { stdout: "hi" }, metadata: { exitCode: "0" }, input: { command: "echo hi" } },
+      },
+    }),
+  ]);
+  assert.equal(ocAll.events[0]?.tool?.exitCode, 0);
+  assert.ok(ocAll.events[0]?.tool?.output?.includes("stdout"));
+});
+
 test("partial flushes stream text as deltas without losing the whole answer", () => {
   const parser = createOutputParser("acp");
   const events: ParsedEvent[] = [];
