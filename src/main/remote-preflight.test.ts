@@ -50,6 +50,8 @@ test("explainSshFailure taxonomy covers auth, DNS, connect, and host-key", () =>
   assert.match(explainSshFailure({ host: "missing.lan" }, "ssh: Could not resolve hostname missing.lan"), /找不到主机/);
   assert.match(explainSshFailure(target, "ssh: connect to host pc-2 port 22: Connection refused"), /连不上/);
   assert.match(explainSshFailure(target, "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!"), /主机密钥/);
+  assert.match(explainSshFailure(target, "Connection reset by peer"), /连接被中断/);
+  assert.match(explainSshFailure(target, "kex_exchange_identification: Connection closed by remote host"), /握手失败/);
   assert.match(explainSshFailure(target, "Something else failed"), /连接 cea@pc-2:22 失败/);
 });
 

@@ -31,6 +31,12 @@ export function explainSshFailure(target: SshExplainTarget, stderr: string): str
   if (/Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(text)) {
     return `${where} 的主机密钥和以前不一样，ssh 拒绝连接。确认是同一台电脑后，删除 ~/.ssh/known_hosts 里的旧记录再试。`;
   }
+  if (/kex_exchange_identification|banner exchange|protocol mismatch/i.test(text)) {
+    return `${where} 的 SSH 握手失败（${line}）。请确认对端开的是 OpenSSH 服务，且端口没有被其他程序占用。`;
+  }
+  if (/Connection reset by peer|Connection closed by|Broken pipe|ECONNRESET/i.test(text)) {
+    return `和 ${where} 的连接被中断（${line}）。请确认那台电脑没有休眠或重启，再试一次。`;
+  }
   return line ? `连接 ${where} 失败：${line}` : `连接 ${where} 失败。`;
 }
 
