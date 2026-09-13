@@ -36,7 +36,7 @@ import {
   type TaskInput,
   type TaskPatch,
 } from "@shared/protocol";
-import { receiveToInbox } from "./files";
+import { normalizeMediaType, receiveToInbox } from "./files";
 import { countOnlinePhones, reuseMapValues } from "./snapshot-devices";
 import { recentRuns } from "./snapshot-runs";
 import type { TaskHub } from "./hub";
@@ -62,6 +62,10 @@ const MIME: Record<string, string> = {
 
 /** How often snapshot re-reads LAN adapters (wifi hop / sleep). */
 const HOST_ADDR_TTL_MS = 5_000;
+/** `/ws` capture text is 20k chars; match the JSON body cap so a phone cannot buffer 100MB. */
+const WS_MAX_PAYLOAD = 1024 * 1024;
+/** `/rc` messages are pointer/key events, not frames (those go server → phone). */
+const RC_WS_MAX_PAYLOAD = 64 * 1024;
 
 interface SocketBinding {
   socket: WebSocket;
@@ -158,8 +162,8 @@ export class LanServer extends EventEmitter {
       ignoreStreamError(res);
       void this.handleHttp(req, res);
     });
-    const wss = new WebSocketServer({ noServer: true });
-    const rcWss = new WebSocketServer({ noServer: true });
+    const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD });
+    const rcWss = new WebSocketServer({ noServer: true, maxPayload: RC_WS_MAX_PAYLOAD });
     server.on("connection", (socket) => ignoreStreamError(socket));
     server.on("clientError", (_error, socket) => {
       socket.destroy();
@@ -630,10 +634,11 @@ export class LanServer extends EventEmitter {
         return;
       }
       const info = await stat(file.path);
+      const mediaType = normalizeMediaType(file.mediaType);
       res.writeHead(200, {
-        "Content-Type": file.mediaType,
+        "Content-Type": mediaType,
         "Content-Length": info.size,
-        "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+        "Content-Disposition": `${isImageMediaType(mediaType) ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
         "Cache-Control": "private, max-age=3600",
       });
       pipeToResponse(file.path, res);
@@ -776,7 +781,7 @@ export class LanServer extends EventEmitter {
   /** Stream the request body into the sender's inbox folder. */
   private async receiveFile(req: http.IncomingMessage, url: URL, session: PairedSession): Promise<{ file: FileMeta; stored: StoredFile }> {
     const fileName = decodeURIComponent(url.searchParams.get("name") ?? "file");
-    const mediaType = req.headers["content-type"] || "application/octet-stream";
+    const mediaType = normalizeMediaType(req.headers["content-type"]);
     const maxBytes = isImageMediaType(mediaType) ? this.limits.maxImageBytes : this.limits.maxFileBytes;
     const deviceDir = join(this.inboxDir, safeSegment(session.device.name));
     const saved = await receiveToInbox({

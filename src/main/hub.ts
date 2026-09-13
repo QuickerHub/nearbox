@@ -47,6 +47,7 @@ import type { DelegationConfig } from "./delegation";
 import { discoverDevices } from "./lan-discover";
 import { buildDelegatedPrompt, buildTurnPrompt, delegationSection, imagePaths, type PromptAttachment } from "./prompt";
 import { type RunAttachment, RunManager } from "./runner";
+import { isSshDestination, isSshIdentityFile } from "./ssh-args";
 import { assertSafeRemotePath, directoryExists, listDirectory, probeDevice, remoteAttachmentPath } from "./ssh";
 import { Store, type StoredFile } from "./store";
 
@@ -508,12 +509,15 @@ export class TaskHub extends EventEmitter {
 
   async addDevice(input: RemoteDeviceInput): Promise<RemoteDevice> {
     const host = String(input.host ?? "").trim();
-    if (!host || !/^[A-Za-z0-9._:%-]+$/.test(host)) {
+    if (!isSshDestination(host)) {
       fail("请填写主机名、IP 地址，或 ~/.ssh/config 里的别名。");
     }
     const user = String(input.user ?? "").trim() || undefined;
     const port = normalizePort(input.port);
     const identityFile = String(input.identityFile ?? "").trim() || undefined;
+    if (identityFile && !isSshIdentityFile(identityFile)) {
+      fail("密钥文件路径不合法。");
+    }
     const existing = this.remoteDevices.find(
       (device) => device.host.toLowerCase() === host.toLowerCase() && (device.user ?? "") === (user ?? "") && (device.port ?? 22) === (port ?? 22),
     );
@@ -547,7 +551,7 @@ export class TaskHub extends EventEmitter {
     }
     if (patch.host !== undefined) {
       const host = String(patch.host).trim();
-      if (!host || !/^[A-Za-z0-9._:%-]+$/.test(host)) {
+      if (!isSshDestination(host)) {
         fail("主机地址不合法。");
       }
       reconnect = reconnect || host !== device.host;
@@ -565,6 +569,9 @@ export class TaskHub extends EventEmitter {
     }
     if (patch.identityFile !== undefined) {
       const identityFile = String(patch.identityFile ?? "").trim() || undefined;
+      if (identityFile && !isSshIdentityFile(identityFile)) {
+        fail("密钥文件路径不合法。");
+      }
       reconnect = reconnect || identityFile !== device.identityFile;
       device.identityFile = identityFile;
     }

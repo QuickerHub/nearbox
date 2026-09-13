@@ -4,9 +4,9 @@ import { basename, extname, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { IncomingMessage } from "node:http";
 import { isImageMediaType } from "@shared/protocol";
-import { assertAllowedFile, sanitizeFileName } from "./file-guard";
+import { assertAllowedFile, normalizeMediaType, sanitizeFileName } from "./file-guard";
 
-export { assertAllowedFile, sanitizeFileName } from "./file-guard";
+export { assertAllowedFile, normalizeMediaType, sanitizeFileName } from "./file-guard";
 
 export async function uniquePath(directory: string, fileName: string): Promise<string> {
   const ext = extname(fileName);
@@ -67,7 +67,7 @@ export async function receiveToInbox(options: {
     return {
       storedName: basename(target),
       byteLength: received,
-      mediaType: options.mediaType.split(";")[0]?.trim() || "application/octet-stream",
+      mediaType: normalizeMediaType(options.mediaType),
     };
   } catch (error) {
     await unlink(tempPath).catch(() => undefined);

@@ -49,20 +49,21 @@ export function isPrivateLanAddress(ipText: string | undefined): boolean {
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
+export function isIpv4Loopback(ipText: string | undefined): boolean {
+  const parts = (ipText ?? "").split(".").map((part) => Number(part));
+  return parts.length === 4 && parts[0] === 127 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
+}
+
 export function isLoopbackOrPrivate(ipText: string | undefined): boolean {
-  const value = ipText ?? "";
-  return (
-    value === "127.0.0.1" ||
-    value === "::1" ||
-    value === "::ffff:127.0.0.1" ||
-    isPrivateLanAddress(normalizeRemoteIp(value))
-  );
+  const value = normalizeRemoteIp(ipText);
+  return value === "::1" || isIpv4Loopback(value) || isPrivateLanAddress(value);
 }
 
 export function normalizeRemoteIp(ipText: string | undefined): string {
   const value = (ipText ?? "").trim();
-  if (value.startsWith("::ffff:")) {
-    return value.slice("::ffff:".length);
+  const mapped = /^::ffff:/i.exec(value);
+  if (mapped) {
+    return value.slice(mapped[0].length);
   }
   return value;
 }

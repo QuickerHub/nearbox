@@ -2,8 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type DevicePlatform, type RemoteDevice, type RemoteDirListing } from "@shared/protocol";
 import { COMMAND_NAMES } from "./agents";
 import { killTree as killLocal } from "./kill";
+import { sshArgs } from "./ssh-args";
 import { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
 
+export { sshArgs } from "./ssh-args";
 export { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
 
 /**
@@ -37,41 +39,11 @@ export interface RemoteRunPaths {
   pidFile: string;
 }
 
-const CONNECT_TIMEOUT_S = 12;
 const PROBE_TIMEOUT_MS = 40_000;
 const HELPER_TIMEOUT_MS = 30_000;
 
 /** ssh exits 255 for its own failures (connect, auth); anything else came from the remote command. */
 export const SSH_FAILURE_EXIT = 255;
-
-export function sshArgs(target: SshTarget, command: string): string[] {
-  const args = [
-    "-T",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    `ConnectTimeout=${CONNECT_TIMEOUT_S}`,
-    "-o",
-    "StrictHostKeyChecking=accept-new",
-    "-o",
-    "ServerAliveInterval=15",
-    "-o",
-    "ServerAliveCountMax=4",
-    "-o",
-    "LogLevel=ERROR",
-  ];
-  if (target.port) {
-    args.push("-p", String(target.port));
-  }
-  if (target.identityFile) {
-    args.push("-i", target.identityFile);
-  }
-  if (target.user) {
-    args.push("-l", target.user);
-  }
-  args.push(target.host, command);
-  return args;
-}
 
 export function sshSpawn(target: SshTarget, command: string): ChildProcess {
   return spawn("ssh", sshArgs(target, command), {
