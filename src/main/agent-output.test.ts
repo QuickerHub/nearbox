@@ -534,6 +534,60 @@ function collect(parser: ReturnType<typeof createOutputParser>, steps: (() => Re
   return { events, sessionId, modelLabel, sessionTitle, result, isError, usage };
 }
 
+
+test("stream-json and ACP accept camelCase / snake_case session ids", () => {
+  const cursor = feedAll(createOutputParser("cursor"), [
+    '{"type":"system","subtype":"init","sessionId":"sess-camel","model":"test"}',
+  ]);
+  assert.equal(cursor.sessionId, "sess-camel");
+
+  const codex = feedAll(createOutputParser("codex"), [
+    '{"type":"thread.started","threadId":"thread-camel"}',
+  ]);
+  assert.equal(codex.sessionId, "thread-camel");
+
+  const acp = pushAll(createOutputParser("acp"), [
+    { type: "end", stopReason: "end_turn", session_id: "acp-snake" },
+  ]);
+  assert.equal(acp.sessionId, "acp-snake");
+});
+
+test("ACP JSON-string rawInput populates shell subject", () => {
+  const all = pushAll(createOutputParser("acp"), [
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "t-json",
+      title: "Shell",
+      kind: "execute",
+      status: "pending",
+      rawInput: '{"command":"npm test"}',
+    },
+  ]);
+  const tool = all.events.find((event) => event.kind === "tool")?.tool;
+  assert.equal(tool?.kind, "shell");
+  assert.equal(tool?.command, "npm test");
+  assert.equal(tool?.subject, "npm test");
+});
+
+test("codex keeps aggregatedOutput camelCase shell text", () => {
+  const all = feedAll(createOutputParser("codex"), [
+    '{"type":"item.completed","item":{"id":"item_9","type":"command_execution","command":"echo hi","aggregatedOutput":"hi\\n","exit_code":0,"status":"completed"}}'
+  ]);
+  const tool = all.events.find((event) => event.kind === "tool")?.tool;
+  assert.equal(tool?.output, "hi\n");
+  assert.equal(tool?.exitCode, 0);
+});
+
+test("opencode pairs tools by snake_case call_id", () => {
+  const all = feedAll(createOutputParser("opencode"), [
+    '{"type":"tool","part":{"type":"tool","call_id":"call_snake","tool":"bash","state":{"status":"completed","input":{"command":"pwd"},"output":"/tmp"}}}',
+  ]);
+  const tool = all.events.find((event) => event.kind === "tool")?.tool;
+  assert.equal(tool?.id, "call_snake");
+  assert.equal(tool?.command, "pwd");
+  assert.equal(tool?.output, "/tmp");
+});
+
 test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(400), "400 毫秒");
   assert.equal(formatMsDuration(1200), "1 秒");
