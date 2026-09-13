@@ -76,6 +76,10 @@ export function zoomBetween(
   fit: Size,
   viewport: Size,
 ): ViewTransform {
+  // A non-positive scale (corrupt state / first frame) cannot anchor a zoom ratio.
+  if (!Number.isFinite(t.scale) || t.scale <= 0) {
+    return zoomAt(fitTransform(fit, viewport), Number.isFinite(factor) && factor > 0 ? factor : 1, target, fit, viewport);
+  }
   const scale = clampScale(t.scale * (Number.isFinite(factor) && factor > 0 ? factor : 1));
   const k = scale / t.scale;
   return clampTransform(

@@ -200,3 +200,12 @@ test("wheelZoomFactor zooms in on wheel-up and is symmetric", () => {
   assert.equal(wheelZoomFactor(Number.NaN), 1);
   close(wheelZoomFactor(-100_000), Math.exp(1), "huge deltas are capped");
 });
+
+test("zoomBetween recovers from a zero or non-finite scale", () => {
+  const broken = { scale: 0, x: 0, y: 0 };
+  const next = zoomBetween(broken, 2, { x: 180, y: 320 }, { x: 180, y: 320 }, phoneFit, phone);
+  assert.equal(next.scale, 2);
+  assert.ok(Number.isFinite(next.x) && Number.isFinite(next.y));
+  const nan = zoomBetween({ scale: Number.NaN, x: 0, y: 0 }, 1.5, { x: 10, y: 10 }, { x: 10, y: 10 }, phoneFit, phone);
+  assert.equal(nan.scale, 1.5);
+});

@@ -33,9 +33,11 @@ export function ContextMeter({ usage, busy }: { usage?: TokenUsage; busy?: boole
   const root = useRef<HTMLDivElement>(null);
   const label = usage ? formatContextUsage(usage) : "";
   const hasData = Boolean(label);
-  const ratio = usage ? usageRatio(usage) : undefined;
+  const rawRatio = usage ? usageRatio(usage) : undefined;
+  // Shared usageRatio can yield a non-finite / negative value when contextWindow is junk.
+  const ratio = rawRatio !== undefined && Number.isFinite(rawRatio) && rawRatio >= 0 ? Math.min(1, rawRatio) : undefined;
   const pct = ratio === undefined ? 0 : ratio * 100;
-  const dashOffset = CIRCUMFERENCE - (hasData ? (pct / 100) * CIRCUMFERENCE : 0);
+  const dashOffset = CIRCUMFERENCE - (ratio !== undefined ? (pct / 100) * CIRCUMFERENCE : 0);
   const tone = ratio === undefined ? "" : ratio >= 0.9 ? " ctx-ring--high" : ratio >= 0.7 ? " ctx-ring--warn" : "";
   const title = hasData
     ? `上下文 ${label}`
@@ -54,6 +56,7 @@ export function ContextMeter({ usage, busy }: { usage?: TokenUsage; busy?: boole
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.stopPropagation();
         setOpen(false);
       }
     };
@@ -97,7 +100,7 @@ export function ContextMeter({ usage, busy }: { usage?: TokenUsage; busy?: boole
             <span className="ctx-ring__title">上下文</span>
           </div>
           <div className="ctx-ring__overview">
-            <span className="ctx-ring__pct">{hasData && ratio !== undefined ? `${pct >= 10 ? pct.toFixed(0) : pct.toFixed(1)}%` : busy ? "…" : "0%"}</span>
+            <span className="ctx-ring__pct">{ratio !== undefined ? `${pct >= 10 ? pct.toFixed(0) : pct.toFixed(1)}%` : busy ? "…" : hasData ? "—" : "0%"}</span>
             <div className="ctx-ring__overview-copy">
               <span className="ctx-ring__kicker">已使用</span>
               <span className={`ctx-ring__summary${hasData ? "" : " ctx-ring__summary--empty"}`}>

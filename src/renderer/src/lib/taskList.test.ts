@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentRun, Project, Task } from "../../../shared/protocol.ts";
-import { activeRuns, activityLabel, attentionFor, buildSections, latestTurns, rowAgent, rowState, seenMarker, updateSeen } from "./taskList.ts";
+import { activeRuns, activityLabel, attentionFor, buildSections, latestTurns, rowAgent, rowState, sectionIsVisible, seenMarker, updateSeen } from "./taskList.ts";
 
 const actor = { id: "desktop", name: "PC", role: "desktop" as const };
 
@@ -228,4 +228,18 @@ test("the row agent: working now, else last turn, else the chip", () => {
   assert.equal(rowAgent(t, run({ id: "a", taskId: "t1", agent: "grok", status: "running" }), run({ id: "b", taskId: "t1", agent: "codex" })), "grok");
   assert.equal(rowAgent(t, undefined, run({ id: "b", taskId: "t1", agent: "codex" })), "codex");
   assert.equal(rowAgent(t, undefined, undefined), "claude");
+});
+
+test("sectionIsVisible hides done-only sections until revealed", () => {
+  const projects = [project("p1"), project("p2")];
+  const tasks = [
+    task({ id: "done", projectId: "p1", status: "done", completedAt: "2026-09-05T00:00:00.000Z" }),
+    task({ id: "open", projectId: "p2" }),
+  ];
+  const sections = buildSections({ tasks, runs: [], projects, grouped: true });
+  const doneOnly = sections.find((item) => item.key === "p1")!;
+  const openOne = sections.find((item) => item.key === "p2")!;
+  assert.equal(sectionIsVisible(doneOnly, false), false);
+  assert.equal(sectionIsVisible(doneOnly, true), true);
+  assert.equal(sectionIsVisible(openOne, false), true);
 });

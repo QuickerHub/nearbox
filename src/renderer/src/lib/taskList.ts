@@ -279,6 +279,11 @@ export function activityLabel(section: Pick<TaskSection, "running" | "queued">):
   return parts.join(" · ");
 }
 
+/** True when the section would paint at least one row for the current revealDone. */
+export function sectionIsVisible(section: Pick<TaskSection, "open" | "done">, revealDone: boolean): boolean {
+  return section.open.length > 0 || (revealDone && section.done.length > 0);
+}
+
 // --------------------------------------------------------------------- rows
 
 export type RowState = "running" | "queued" | "failed" | TaskStatus;

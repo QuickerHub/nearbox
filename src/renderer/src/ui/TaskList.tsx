@@ -13,6 +13,7 @@ import {
   type ListMode,
   rowAgent,
   rowState,
+  sectionIsVisible,
 } from "../lib/taskList";
 import { Icon } from "./Icons";
 
@@ -179,6 +180,9 @@ export function TaskList({ snapshot, seen, selectedTaskId, onSelect, compact }: 
         {searching && !sections.length ? <p className="task-list__empty muted">没有匹配的任务。</p> : null}
 
         {sections.map((section) => {
+          if (!sectionIsVisible(section, revealDone)) {
+            return null;
+          }
           const isCollapsed = section.kind !== "all" && collapsed.has(section.key);
           const activity = activityLabel(section);
           return (
@@ -197,6 +201,10 @@ export function TaskList({ snapshot, seen, selectedTaskId, onSelect, compact }: 
             </section>
           );
         })}
+
+        {!searching && snapshot.tasks.length > 0 && !sections.some((section) => sectionIsVisible(section, revealDone)) && !attention.length && !running.length ? (
+          <p className="task-list__empty muted">没有进行中的任务。{doneTotal ? "已完成的在下面。" : ""}</p>
+        ) : null}
 
         {doneTotal && !searching ? (
           <button type="button" className="task-list__done-toggle" onClick={() => setShowDone((value) => !value)}>

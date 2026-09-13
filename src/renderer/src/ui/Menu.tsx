@@ -31,6 +31,7 @@ export function Menu({ icon, label, title, tone = "default", panelClassName, chi
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.stopPropagation();
         setOpen(false);
       }
     };
