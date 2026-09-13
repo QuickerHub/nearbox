@@ -16,16 +16,21 @@ export const AGENT_SHORT_LABELS: Record<AgentKind, string> = {
   opencode: "opencode",
 };
 
+function parseTime(value: string | undefined): number {
+  const ms = Date.parse(value ?? "");
+  return Number.isFinite(ms) ? ms : 0;
+}
+
 /** Newest first, important ones before the rest. */
 function byRecent(a: Task, b: Task): number {
   if (a.priority !== b.priority) {
     return a.priority === "high" ? -1 : 1;
   }
-  return Date.parse(b.updatedAt) - Date.parse(a.updatedAt);
+  return parseTime(b.updatedAt) - parseTime(a.updatedAt);
 }
 
 function byCompleted(a: Task, b: Task): number {
-  return Date.parse(b.completedAt ?? b.updatedAt) - Date.parse(a.completedAt ?? a.updatedAt);
+  return parseTime(b.completedAt ?? b.updatedAt) - parseTime(a.completedAt ?? a.updatedAt);
 }
 
 /**
@@ -133,7 +138,7 @@ export function attentionFor(tasks: readonly Task[], runs: readonly AgentRun[], 
     }
     items.push({ task, run: turn, reason: turn.status === "failed" ? "failed" : "finished" });
   }
-  const when = (item: AttentionItem) => Date.parse(item.run.finishedAt ?? item.task.updatedAt);
+  const when = (item: AttentionItem) => parseTime(item.run.finishedAt ?? item.task.updatedAt);
   return items.sort((a, b) => ATTENTION_RANK[a.reason] - ATTENTION_RANK[b.reason] || when(b) - when(a));
 }
 

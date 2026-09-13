@@ -200,3 +200,20 @@ test("wheelZoomFactor zooms in on wheel-up and is symmetric", () => {
   assert.equal(wheelZoomFactor(Number.NaN), 1);
   close(wheelZoomFactor(-100_000), Math.exp(1), "huge deltas are capped");
 });
+
+test("zoomTo recovers from a zero / non-finite scale", () => {
+  const fitted = fitTransform(phoneFit, phone);
+  const fromZero = zoomTo({ scale: 0, x: 0, y: 0 }, 2, phoneFit, phone);
+  assert.equal(fromZero.scale, 2);
+  const fromNaN = zoomTo({ scale: Number.NaN, x: 10, y: 10 }, 3, phoneFit, phone);
+  assert.equal(fromNaN.scale, 3);
+});
+
+test("refitTransform recovers from a zero scale", () => {
+  const next = refitTransform(
+    { scale: 0, x: 0, y: 0 },
+    { fit: phoneFit, viewport: phone },
+    { fit: phoneFit, viewport: phone },
+  );
+  assert.deepEqual(next, fitTransform(phoneFit, phone));
+});

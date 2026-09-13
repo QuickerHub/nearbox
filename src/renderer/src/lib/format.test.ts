@@ -23,3 +23,10 @@ test("formatRelative covers near and far", () => {
   assert.equal(formatRelative(undefined), "");
   assert.equal(formatRelative("bogus"), "");
 });
+
+test("formatRelative does not call a future stamp 刚刚", () => {
+  const future = new Date(Date.now() + 2 * 3_600_000).toISOString();
+  const label = formatRelative(future);
+  assert.notEqual(label, "刚刚");
+  assert.ok(label.length > 0);
+});
