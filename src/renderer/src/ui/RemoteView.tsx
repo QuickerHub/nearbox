@@ -216,6 +216,8 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const connRef = useRef<RemoteConnection | null>(null);
   const decodeRef = useRef<{ busy: boolean; queued: Blob | null }>({ busy: false, queued: null });
+  /** False once the /rc effect tears down — drop in-flight bitmap decodes so they cannot setState. */
+  const liveRef = useRef(true);
   const framesRef = useRef(0);
   const lastMoveRef = useRef(0);
   const layoutRef = useRef<Layout>({
@@ -277,6 +279,9 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
     }
     rafRef.current = window.requestAnimationFrame(() => {
       rafRef.current = 0;
+      if (!liveRef.current) {
+        return;
+      }
       const canvas = canvasRef.current;
       const { t, fit } = layoutRef.current;
       const crop = drawnCropRef.current;
@@ -396,6 +401,12 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
       decode.busy = true;
       void createImageBitmap(blob)
         .then((bitmap) => {
+          if (!liveRef.current) {
+            bitmap.close();
+            decode.busy = false;
+            decode.queued = null;
+            return;
+          }
           const layout = layoutRef.current;
           const streamCrop = streamCropRef.current;
           const cropped = !isFullCrop(streamCrop);
@@ -501,24 +512,46 @@ export function RemoteView({ client, snapshot, onExit }: RemoteViewProps): JSX.E
   }, []);
 
   useEffect(() => {
+    liveRef.current = true;
     setState("connecting");
     setError(null);
     const conn = connectRemote(client.origin, client.token, {
       onFrame: drawFrame,
       onHello: (_display, canInput, quality) => {
+        if (!liveRef.current) {
+          return;
+        }
         supportsInputRef.current = canInput;
         setSupportsInput(canInput);
         acceptHostQuality(quality);
         pushViewQuality(true);
       },
-      onConfig: acceptHostQuality,
-      onPeers: setControllers,
+      onConfig: (quality) => {
+        if (liveRef.current) {
+          acceptHostQuality(quality);
+        }
+      },
+      onPeers: (count) => {
+        if (liveRef.current) {
+          setControllers(count);
+        }
+      },
       onPong: () => undefined,
-      onError: (message) => setError(message),
-      onState: setState,
+      onError: (message) => {
+        if (liveRef.current) {
+          setError(message);
+        }
+      },
+      onState: (next) => {
+        if (liveRef.current) {
+          setState(next);
+        }
+      },
     });
     connRef.current = conn;
     return () => {
+      liveRef.current = false;
+      decodeRef.current.queued = null;
       conn.dispose();
       connRef.current = null;
     };

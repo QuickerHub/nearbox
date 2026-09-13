@@ -120,6 +120,7 @@ export function ChatComposer({
   const fileRef = useRef<HTMLInputElement>(null);
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
+  const aliveRef = useRef(true);
   const desktop = client.surface === "desktop";
 
   const project = snapshot.projects.find((item) => item.id === chips.projectId);
@@ -160,10 +161,14 @@ export function ChatComposer({
 
   // Thumbnails are object URLs; let them go when the composer unmounts.
   useEffect(
-    () => () => {
-      for (const item of attachmentsRef.current) {
-        revokePreview(item);
-      }
+    () => {
+      aliveRef.current = true;
+      return () => {
+        aliveRef.current = false;
+        for (const item of attachmentsRef.current) {
+          revokePreview(item);
+        }
+      };
     },
     [],
   );
@@ -195,6 +200,9 @@ export function ChatComposer({
       // Files first, so a failed upload leaves the draft intact instead of a half-sent message.
       const files: FileMeta[] = [];
       for (const [index, item] of attachments.entries()) {
+        if (!aliveRef.current) {
+          return;
+        }
         if (!item.uploaded) {
           setProgress(attachments.length === 1 ? "正在上传附件…" : `正在上传附件 ${index + 1}/${attachments.length}…`);
           const uploaded = await client.uploadFile(item.file);
@@ -202,8 +210,14 @@ export function ChatComposer({
         }
         files.push(item.uploaded);
       }
+      if (!aliveRef.current) {
+        return;
+      }
       setProgress(files.length ? "正在发送…" : null);
       await onSend(plan, { text: draft.trim(), files });
+      if (!aliveRef.current) {
+        return;
+      }
       for (const item of attachments) {
         revokePreview(item);
       }
@@ -211,11 +225,15 @@ export function ChatComposer({
       setDraft("");
       requestAnimationFrame(resize);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (aliveRef.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setProgress(null);
-      setBusy(false);
-      textRef.current?.focus();
+      if (aliveRef.current) {
+        setProgress(null);
+        setBusy(false);
+        textRef.current?.focus();
+      }
     }
   };
 
@@ -874,14 +892,24 @@ interface CatalogState {
 function useModelCatalog(agent: AgentKind, info: AgentInfo | undefined, client: ClientHandle): CatalogState {
   const [refreshing, setRefreshing] = useState(false);
   const inFlight = useRef<Promise<unknown> | null>(null);
+  const alive = useRef(true);
   const listable = canListModels(agent) && Boolean(info?.available);
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   const refresh = (force: boolean) => {
     // Share one in-flight promise so opening the menu and tapping refresh do not stack CLI calls.
     if (inFlight.current) {
-      setRefreshing(true);
+      if (alive.current) {
+        setRefreshing(true);
+      }
       void inFlight.current.finally(() => {
-        if (!inFlight.current) {
+        if (!inFlight.current && alive.current) {
           setRefreshing(false);
         }
       });
@@ -889,14 +917,18 @@ function useModelCatalog(agent: AgentKind, info: AgentInfo | undefined, client: 
         return;
       }
     }
-    setRefreshing(true);
+    if (alive.current) {
+      setRefreshing(true);
+    }
     const job = client
       .refreshModels(agent, force)
       .catch(() => undefined)
       .finally(() => {
         if (inFlight.current === job) {
           inFlight.current = null;
-          setRefreshing(false);
+          if (alive.current) {
+            setRefreshing(false);
+          }
         }
       });
     inFlight.current = job;

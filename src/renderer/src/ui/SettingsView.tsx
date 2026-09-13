@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type AgentKind, type AppUpdateStatus, canListModels, type HostSnapshot, modelsForAgent } from "@shared/protocol";
 import { isNewerVersion, shellVersionFromUserAgent } from "@shared/version";
 import type { ClientHandle } from "../lib/client";
@@ -29,6 +29,8 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
     window.location.hash = "#/remote";
   };
 
+  const copiedTimer = useRef<number | null>(null);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -36,13 +38,25 @@ export function SettingsView({ snapshot, client, themeMode, onCycleTheme, onClos
       }
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (copiedTimer.current !== null) {
+        window.clearTimeout(copiedTimer.current);
+      }
+    };
   }, [onClose]);
 
   const copy = async (label: string, text: string) => {
     await navigator.clipboard.writeText(text);
     setCopied(label);
-    window.setTimeout(() => setCopied(null), 1600);
+    if (copiedTimer.current !== null) {
+      window.clearTimeout(copiedTimer.current);
+    }
+    // Cleared on unmount so a closed settings sheet cannot flash-setState after teardown.
+    copiedTimer.current = window.setTimeout(() => {
+      copiedTimer.current = null;
+      setCopied(null);
+    }, 1600);
   };
 
   const patchAgent = (kind: AgentKind, patch: Partial<{ access: "safe" | "full"; model: string; command: string }>) => {
@@ -384,13 +398,21 @@ function UpdateRow({ snapshot, client, desktop }: { snapshot: HostSnapshot; clie
     if (!status?.checking && !status?.downloading) {
       return;
     }
+    let cancelled = false;
     const timer = window.setInterval(() => {
       void client
         .updateStatus()
-        .then(setStatus)
+        .then((next) => {
+          if (!cancelled) {
+            setStatus(next);
+          }
+        })
         .catch(() => undefined);
     }, 400);
-    return () => window.clearInterval(timer);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [client, status?.checking, status?.downloading]);
 
   const refresh = () => {
@@ -506,12 +528,23 @@ function UpdateRow({ snapshot, client, desktop }: { snapshot: HostSnapshot; clie
 /** One line under an installed agent: how many models its CLI reported, when, and a way to ask again. */
 function ModelCatalogStatus({ info, client }: { info: AgentInfo; client: ClientHandle }): JSX.Element {
   const [refreshing, setRefreshing] = useState(false);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
   const refresh = () => {
     setRefreshing(true);
     void client
       .refreshModels(info.kind, true)
       .catch(() => undefined)
-      .finally(() => setRefreshing(false));
+      .finally(() => {
+        if (alive.current) {
+          setRefreshing(false);
+        }
+      });
   };
   if (!canListModels(info.kind)) {
     return <span className="muted small agent-table__models">不提供模型列表，模型名手动填写</span>;

@@ -32,6 +32,8 @@ export function Menu({ icon, label, title, tone = "default", panelClassName, chi
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setOpen(false);
+        // Panel unmounts; return focus to the chip so keyboard users are not dumped onto <body>.
+        queueMicrotask(() => root.current?.querySelector<HTMLButtonElement>(".chip-btn")?.focus());
       }
     };
     document.addEventListener("pointerdown", onPointer);
