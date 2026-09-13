@@ -12,6 +12,7 @@ import {
   pickInFamily,
   pickVariant,
   presentFamilies,
+  sortFamilies,
   variantCanToggleFast,
 } from "./model-variants.ts";
 
@@ -223,4 +224,19 @@ test("search lists older matches instead of hiding them", () => {
     ["claude-opus-4-6"],
   );
   assert.deepEqual(older, []);
+});
+
+test("sortFamilies pins selected first then product lines over older siblings", () => {
+  const families = groupModelFamilies([
+    { id: "claude-opus-4-6-thinking", label: "Claude Opus 4.6 Thinking" },
+    { id: "claude-opus-5-thinking-max", label: "Claude Opus 5 Max" },
+    { id: "composer-2.5-fast", label: "Composer 2.5 Fast" },
+    { id: "gpt-5.5-high", label: "GPT-5.5 High" },
+  ]);
+  const sorted = sortFamilies(families, "claude-opus-4-6-thinking");
+  assert.equal(sorted[0]?.key, "claude-opus-4-6");
+  // Without a selection, composer stays ahead of GPT / older Opus.
+  const natural = sortFamilies(families, "");
+  assert.equal(natural[0]?.key, "composer-2.5");
+  assert.ok(natural.findIndex((family) => family.key === "claude-opus-5") < natural.findIndex((family) => family.key === "claude-opus-4-6"));
 });

@@ -4,11 +4,16 @@ import {
   FULL_CROP,
   MAX_SCALE,
   clampTransform,
+  cropsClose,
+  distance,
   fitSize,
   fitTransform,
+  frameMatchesCrop,
   isFullCrop,
+  midpoint,
   panBy,
   pointToFrame,
+  qualityEqual,
   quantizeCrop,
   refitTransform,
   streamQuality,
@@ -199,4 +204,42 @@ test("wheelZoomFactor zooms in on wheel-up and is symmetric", () => {
   assert.equal(wheelZoomFactor(0), 1);
   assert.equal(wheelZoomFactor(Number.NaN), 1);
   close(wheelZoomFactor(-100_000), Math.exp(1), "huge deltas are capped");
+});
+
+test("cropsClose / qualityEqual / distance / midpoint pin viewer equality helpers", () => {
+  assert.equal(cropsClose({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, { x: 0.11, y: 0.2, w: 0.3, h: 0.4 }, 0.02), true);
+  assert.equal(cropsClose({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 }, { x: 0.2, y: 0.2, w: 0.3, h: 0.4 }, 0.02), false);
+  assert.equal(
+    qualityEqual(
+      { quality: 72, fps: 12, maxWidth: 1920 },
+      { quality: 72, fps: 12, maxWidth: 1920, crop: FULL_CROP },
+    ),
+    true,
+  );
+  assert.equal(
+    qualityEqual(
+      { quality: 72, fps: 12, maxWidth: 1920, crop: { x: 0.1, y: 0.1, w: 0.5, h: 0.5 } },
+      { quality: 72, fps: 12, maxWidth: 1920, crop: { x: 0.1, y: 0.1, w: 0.5, h: 0.5 } },
+    ),
+    true,
+  );
+  assert.equal(
+    qualityEqual(
+      { quality: 72, fps: 12, maxWidth: 1920 },
+      { quality: 80, fps: 12, maxWidth: 1920 },
+    ),
+    false,
+  );
+  assert.equal(distance({ x: 0, y: 0 }, { x: 3, y: 4 }), 5);
+  assert.deepEqual(midpoint({ x: 0, y: 0 }, { x: 4, y: 6 }), { x: 2, y: 3 });
+});
+
+test("frameMatchesCrop accepts matching aspect and rejects empty or skewed bitmaps", () => {
+  const frame = { width: 1600, height: 900 };
+  const crop = { x: 0.25, y: 0.25, w: 0.5, h: 0.5 };
+  // Crop is half of each axis → same 16:9 aspect as a 800x450 bitmap.
+  assert.equal(frameMatchesCrop({ width: 800, height: 450 }, frame, crop), true);
+  assert.equal(frameMatchesCrop({ width: 400, height: 450 }, frame, crop), false);
+  assert.equal(frameMatchesCrop({ width: 0, height: 450 }, frame, crop), false);
+  assert.equal(frameMatchesCrop({ width: 800, height: 450 }, { width: 0, height: 900 }, crop), false);
 });

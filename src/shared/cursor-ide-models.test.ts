@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseCursorIdeModels } from "./cursor-ide-models.ts";
+import { normalizeIdeModelId, parseCursorIdeModels } from "./cursor-ide-models.ts";
 import { groupModelFamilies, presentFamilies } from "./model-variants.ts";
 
 test("Cursor IDE toggles: defaultOn plus user overrides", () => {
@@ -69,4 +69,16 @@ test("the picker follows Cursor IDE order and hides toggled-off families", () =>
     older.map((family) => family.key),
     ["claude-opus-4-8", "gpt-5.5"],
   );
+});
+
+test("normalizeIdeModelId trims, lowercases, and strips the cursor- prefix", () => {
+  assert.equal(normalizeIdeModelId("  Cursor-Grok-4.6  "), "grok-4.6");
+  assert.equal(normalizeIdeModelId("claude-opus-5"), "claude-opus-5");
+  assert.equal(normalizeIdeModelId("cursor-composer-2.5"), "composer-2.5");
+});
+
+test("parseCursorIdeModels ignores empty catalogs and non-objects", () => {
+  assert.equal(parseCursorIdeModels(null), undefined);
+  assert.equal(parseCursorIdeModels({ availableDefaultModels2: [] }), undefined);
+  assert.equal(parseCursorIdeModels({ availableDefaultModels2: [{ name: 1 }, null, { serverModelName: "  GPT-5.5  " }] })?.[0]?.id, "gpt-5.5");
 });

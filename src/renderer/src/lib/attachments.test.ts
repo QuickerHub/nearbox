@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type DraftAttachment, type FileLike, isLikelyImage, partitionImages, stageFiles, stageNotice, titleForFiles } from "./attachments.ts";
+import { type DraftAttachment, type FileLike, extractFiles, isLikelyImage, partitionImages, stageFiles, stageNotice, titleForFiles } from "./attachments.ts";
 
 function file(name: string, type = "image/png", size = 1000, lastModified = 1): FileLike {
   return { name, type, size, lastModified };
@@ -86,3 +86,28 @@ test("partitionImages splits in one pass", () => {
   );
 });
 
+
+test("extractFiles prefers data.files and falls back to item.getAsFile", () => {
+  assert.deepEqual(extractFiles(null), []);
+  assert.deepEqual(extractFiles(undefined), []);
+
+  const fromFiles = { name: "a.png" } as File;
+  const fromItem = { name: "b.png" } as File;
+  assert.deepEqual(
+    extractFiles({ files: [fromFiles] as unknown as FileList } as DataTransfer),
+    [fromFiles],
+  );
+  // Empty FileList must fall through to items (screenshot paste path).
+  const emptyFiles = { length: 0, item: () => null } as unknown as FileList;
+  assert.deepEqual(
+    extractFiles({
+      files: emptyFiles,
+      items: [
+        { kind: "string", getAsFile: () => fromItem },
+        { kind: "file", getAsFile: () => null },
+        { kind: "file", getAsFile: () => fromItem },
+      ],
+    } as unknown as DataTransfer),
+    [fromItem],
+  );
+});
