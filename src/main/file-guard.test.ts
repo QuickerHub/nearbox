@@ -19,3 +19,14 @@ test("assertAllowedFile rejects executables and scripts", () => {
   assert.doesNotThrow(() => assertAllowedFile("note.md", "text/markdown"));
   assert.doesNotThrow(() => assertAllowedFile("shot.png", "image/png"));
 });
+
+test("assertAllowedFile rejects search-ms / ClickOnce / scriptlet leftovers", () => {
+  assert.throws(() => assertAllowedFile("find.search-ms", "application/octet-stream"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("panel.settingcontent-ms", "application/octet-stream"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("fix.diagcab", "application/octet-stream"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("setup.application", "application/octet-stream"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("comp.wsc", "application/octet-stream"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("comp.sct", "application/octet-stream"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("task.job", "application/octet-stream"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("app.jnlp", "application/octet-stream"), /可执行文件或脚本/);
+});
