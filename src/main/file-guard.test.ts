@@ -19,3 +19,17 @@ test("assertAllowedFile rejects executables and scripts", () => {
   assert.doesNotThrow(() => assertAllowedFile("note.md", "text/markdown"));
   assert.doesNotThrow(() => assertAllowedFile("shot.png", "image/png"));
 });
+
+test("sanitizeFileName renames Windows reserved names with extra dots", () => {
+  assert.equal(sanitizeFileName("COM1.foo.bar", "file"), "COM1.foo_file.bar");
+  assert.equal(sanitizeFileName("nul.tar.gz", "file"), "nul.tar_file.gz");
+  assert.equal(sanitizeFileName("LPT1.x.y", "file"), "LPT1.x_file.y");
+});
+
+test("assertAllowedFile rejects extra script and binary extensions", () => {
+  assert.throws(() => assertAllowedFile("x.mjs", "text/javascript"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("x.cjs", "text/javascript"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("lib.dll", "application/octet-stream"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("app.jar", "application/java-archive"), /可执行文件或脚本/);
+  assert.throws(() => assertAllowedFile("folder.scf", "application/octet-stream"), /可执行文件或脚本/);
+});

@@ -616,6 +616,8 @@ export const FORBIDDEN_EXTENSIONS = [
   ".scr",
   ".js",
   ".jse",
+  ".mjs",
+  ".cjs",
   ".vbs",
   ".vbe",
   ".wsf",
@@ -625,6 +627,11 @@ export const FORBIDDEN_EXTENSIONS = [
   ".reg",
   ".url",
   ".apk",
+  ".dll",
+  ".jar",
+  ".scf",
+  ".pif",
+  ".msc",
 ];
 
 export function isImageMediaType(mediaType: string | undefined): boolean {
