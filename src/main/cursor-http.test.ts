@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isTransientAgentTransportError, preferHttp1InCliConfig } from "./cursor-http.ts";
+import { KEEPALIVE_CONTINUE_PROMPT, KEEPALIVE_RETRIES, cursorCliConfigPath, isTransientAgentTransportError, preferHttp1InCliConfig } from "./cursor-http.ts";
 
 test("the HTTP/2 keepalive drop cursor-agent reports is treated as transient", () => {
   assert.equal(
@@ -30,4 +30,24 @@ test("preferHttp1InCliConfig only writes when the flag is missing or false", () 
     next: { network: { useHttp1ForAgent: true } },
     changed: true,
   });
+});
+
+test("cursorCliConfigPath honors CURSOR_CONFIG_DIR and XDG_CONFIG_HOME", () => {
+  assert.match(
+    cursorCliConfigPath({ CURSOR_CONFIG_DIR: "/custom/cursor" }, "/home/cea").replaceAll("\\", "/"),
+    /\/custom\/cursor\/cli-config\.json$/,
+  );
+  assert.match(
+    cursorCliConfigPath({ XDG_CONFIG_HOME: "/xdg" }, "/home/cea").replaceAll("\\", "/"),
+    /\/xdg\/cursor\/cli-config\.json$/,
+  );
+  assert.match(
+    cursorCliConfigPath({}, "/home/cea").replaceAll("\\", "/"),
+    /\/home\/cea\/\.cursor\/cli-config\.json$/,
+  );
+});
+
+test("keepalive retry budget and continue prompt stay pinned", () => {
+  assert.equal(KEEPALIVE_RETRIES, 2);
+  assert.match(KEEPALIVE_CONTINUE_PROMPT, /从中断处继续/);
 });
