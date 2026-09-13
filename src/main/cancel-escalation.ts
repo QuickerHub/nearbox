@@ -29,3 +29,30 @@ export function markCancelling(state: { cancelled: boolean }): boolean {
   return true;
 }
 
+/** Timeline status when Stop hits a turn that already has a process / ssh client. */
+export function cancelStoppingProcessStatus(reason: string): string {
+  return `${reason}，正在停止进程…`;
+}
+
+/**
+ * Timeline status when Stop hits before spawn / warm attach — nothing to kill
+ * yet; startup code finishes on the next `cancelled` check.
+ */
+export function cancelStartingStatus(reason: string): string {
+  return `${reason}，正在取消…`;
+}
+
+/**
+ * Session id to `session/close` when Stop wins during warm startup before the
+ * turn is attached. Only brand-new sessions — a resumed conversation should
+ * stay loaded for a later reply.
+ */
+export function warmStartupSessionToClose(
+  sessionId: string | undefined,
+  resumed: boolean,
+): string | undefined {
+  if (!sessionId || resumed) {
+    return undefined;
+  }
+  return sessionId;
+}

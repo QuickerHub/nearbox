@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CANCEL_GRACE_MS, FORCE_CANCEL_GRACE_MS, markCancelling, warmCancelAfterSoftGrace } from "./cancel-escalation.ts";
+import {
+  CANCEL_GRACE_MS,
+  FORCE_CANCEL_GRACE_MS,
+  cancelStartingStatus,
+  cancelStoppingProcessStatus,
+  markCancelling,
+  warmCancelAfterSoftGrace,
+  warmStartupSessionToClose,
+} from "./cancel-escalation.ts";
 
 test("warm cancel after soft grace: shared abandons, sole-user forces then kills", () => {
   assert.deepEqual(warmCancelAfterSoftGrace(true), { action: "abandon-keep-host" });
@@ -17,3 +25,14 @@ test("markCancelling is once-only so Stop cannot stack warm timelines", () => {
   assert.equal(state.cancelled, true);
 });
 
+test("cancel status distinguishes pre-spawn from process kill", () => {
+  assert.equal(cancelStartingStatus("已取消"), "已取消，正在取消…");
+  assert.equal(cancelStoppingProcessStatus("已取消"), "已取消，正在停止进程…");
+});
+
+test("warmStartupSessionToClose only releases brand-new sessions", () => {
+  assert.equal(warmStartupSessionToClose("sess-1", false), "sess-1");
+  assert.equal(warmStartupSessionToClose("sess-1", true), undefined);
+  assert.equal(warmStartupSessionToClose(undefined, false), undefined);
+  assert.equal(warmStartupSessionToClose("", false), undefined);
+});

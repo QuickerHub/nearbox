@@ -52,3 +52,18 @@ export function queueLiveEvent<T extends Sequenced>(batch: T[], event: T, lastSe
   batch.push(event);
   return true;
 }
+
+/**
+ * Drain the live batch for a UI flush: sort by seq (WS can interleave with
+ * catch-up edges), clear `batch`, and return the tip seq for the next filter.
+ */
+export function drainLiveBatch<T extends Sequenced>(batch: T[]): { events: T[]; lastSeq: number } {
+  if (!batch.length) {
+    return { events: [], lastSeq: 0 };
+  }
+  if (batch.length > 1) {
+    batch.sort((a, b) => a.seq - b.seq);
+  }
+  const events = batch.splice(0, batch.length);
+  return { events, lastSeq: events[events.length - 1]!.seq };
+}
