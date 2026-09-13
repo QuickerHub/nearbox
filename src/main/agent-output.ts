@@ -7,6 +7,7 @@ import {
   mergeUsage,
   parseUsage,
 } from "../shared/usage.ts";
+import { formatMsDuration } from "../shared/duration.ts";
 import {
   asArray,
   basenameOf,
@@ -1051,21 +1052,7 @@ export function truncate(value: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-/** CLI result duration_ms → Chinese units (matches RunBlock / dock). */
-export function formatMsDuration(ms: number): string {
-  if (ms < 1000) {
-    return `${ms} 毫秒`;
-  }
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) {
-    return `${seconds} 秒`;
-  }
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) {
-    return `${minutes} 分 ${seconds % 60} 秒`;
-  }
-  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
-}
+export { formatMsDuration } from "../shared/duration.ts";
 
 function formatOutcome(status: string, extras: { duration?: string; usage?: TokenUsage; costUsd?: number }): string {
   const bits = [status];

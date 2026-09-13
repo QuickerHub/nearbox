@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from "react";
 import { type FileMeta, isImageFile } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
+import { partitionImages } from "../lib/attachments";
 import { formatBytes } from "../lib/format";
 import { Icon } from "./Icons";
 
@@ -56,11 +57,10 @@ interface FileStripProps {
  */
 export const FileStrip = memo(function FileStrip({ files, client }: FileStripProps): JSX.Element | null {
   const [preview, setPreview] = useState<FileMeta | null>(null);
-  const images = files.filter(isImageFile);
-  const others = files.filter((file) => !isImageFile(file));
   if (!files.length) {
     return null;
   }
+  const { images, others } = partitionImages(files, isImageFile);
   return (
     <>
       {images.length ? (

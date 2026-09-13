@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AGENT_KINDS, type AgentAccess, type AgentKind, type HostSnapshot, countActiveRuns, countOnlinePhones, isTopLevelActiveRun, modelsNeedRefresh, phonesOnlineLabel, splitCapture, type Task } from "@shared/protocol";
+import { AGENT_KINDS, type AgentAccess, type AgentKind, type HostSnapshot, countActiveRuns, countOnlinePhones, modelsNeedRefresh, phonesOnlineLabel, splitCapture, topLevelActiveRun, type Task } from "@shared/protocol";
 import { titleForFiles } from "./lib/attachments";
 import { connectClient, pairWithPin, type ClientHandle } from "./lib/client";
 import { conversationRun, type SendPlan } from "./lib/plan";
+import { mostRecentProject } from "./lib/projects";
 import { useRoute } from "./lib/router";
 import { updateSeen } from "./lib/taskList";
 import { applyTheme, cycleTheme, readThemeMode, themeLabel, type ThemeMode } from "./theme";
@@ -219,9 +220,7 @@ export function App(): JSX.Element {
     const available = snapshot.agents.filter((item) => item.available).map((item) => item.kind);
     const validAgent = (value: AgentKind | "" | null | undefined): value is AgentKind => Boolean(value) && available.includes(value as AgentKind);
     const validProject = (value: string | undefined) => Boolean(value) && snapshot.projects.some((item) => item.id === value);
-    const recentProject = [...snapshot.projects].sort(
-      (a, b) => Date.parse(b.lastUsedAt ?? b.createdAt) - Date.parse(a.lastUsedAt ?? a.createdAt),
-    )[0]?.id;
+    const recentProject = mostRecentProject(snapshot.projects)?.id;
     const override = task && taskOverride?.taskId === task.id ? taskOverride : null;
     const agentPick = override?.agent !== undefined ? override.agent : task?.agent;
     const projectPick = override?.projectId !== undefined ? override.projectId : task?.projectId;
@@ -428,7 +427,7 @@ export function App(): JSX.Element {
     return <RemoteView client={client} snapshot={snapshot} onExit={() => navigate({ name: "home" })} />;
   }
 
-  const activeRun = task ? snapshot.runs.find((run) => run.taskId === task.id && isTopLevelActiveRun(run)) : undefined;
+  const activeRun = task ? topLevelActiveRun(snapshot.runs, task.id) : undefined;
   const phonesOnline = countOnlinePhones(snapshot.devices);
   const remoteControllers = snapshot.remote?.controllers ?? 0;
   const canRemote = Boolean(snapshot.remote?.enabled);

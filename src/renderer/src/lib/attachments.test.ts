@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type DraftAttachment, type FileLike, isLikelyImage, stageFiles, stageNotice, titleForFiles } from "./attachments.ts";
+import { type DraftAttachment, type FileLike, isLikelyImage, partitionImages, stageFiles, stageNotice, titleForFiles } from "./attachments.ts";
 
 function file(name: string, type = "image/png", size = 1000, lastModified = 1): FileLike {
   return { name, type, size, lastModified };
@@ -68,3 +68,21 @@ test("a task recorded from pictures alone gets a sensible title", () => {
     "2 个文件",
   );
 });
+
+test("partitionImages splits in one pass", () => {
+  const files = [
+    { name: "a.png", mediaType: "image/png" },
+    { name: "log.txt", mediaType: "text/plain" },
+    { name: "b.jpg", mediaType: "image/jpeg" },
+  ];
+  const { images, others } = partitionImages(files, (file) => /^image\//i.test(file.mediaType));
+  assert.deepEqual(
+    images.map((f) => f.name),
+    ["a.png", "b.jpg"],
+  );
+  assert.deepEqual(
+    others.map((f) => f.name),
+    ["log.txt"],
+  );
+});
+
