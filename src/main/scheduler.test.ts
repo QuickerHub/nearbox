@@ -104,3 +104,46 @@ test("null/empty parentRunId does not mark a parent as waiting", () => {
     [],
   );
 });
+
+test("limit of 0 or negative still allows one slot", () => {
+  const runs = [run("a"), run("b", { projectId: "p2" })];
+  assert.equal(nextRunnable(runs, 0)?.id, "a");
+  assert.equal(nextRunnable(runs, -3)?.id, "a");
+  // Once one is running, a zero limit blocks further starts.
+  assert.equal(nextRunnable([run("a", { status: "running" }), run("b", { projectId: "p2" })], 0), undefined);
+});
+
+test("empty runs and finished-only lists yield nothing", () => {
+  assert.equal(nextRunnable([], 4), undefined);
+  assert.equal(nextRunnable([run("done", { status: "succeeded" }), run("fail", { status: "failed" })], 4), undefined);
+});
+
+test("a non-descendant queued in the same project stays blocked while parent waits", () => {
+  const runs = [
+    run("parent", { status: "running" }),
+    run("sibling", { projectId: "p1" }),
+    run("child", { parentRunId: "parent" }),
+  ];
+  // Child may slip in (ancestor of waiting parent); sibling must not.
+  assert.equal(nextRunnable(runs, 4)?.id, "child");
+  assert.equal(
+    nextRunnable([run("parent", { status: "running" }), run("sibling", { projectId: "p1" })], 4),
+    undefined,
+  );
+});
+
+test("activeDescendants ignores cyclic parent chains safely", () => {
+  const runs = [
+    run("a", { status: "running", parentRunId: "b" }),
+    run("b", { status: "running", parentRunId: "a" }),
+  ];
+  // Cycle walk stops via the seen set; each id still sees the other as descendant.
+  assert.deepEqual(
+    activeDescendants(runs, "a").map((item) => item.id).sort(),
+    ["a", "b"],
+  );
+  assert.deepEqual(
+    activeDescendants(runs, "b").map((item) => item.id).sort(),
+    ["a", "b"],
+  );
+});

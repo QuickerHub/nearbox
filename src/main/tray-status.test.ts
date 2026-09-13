@@ -46,3 +46,20 @@ test("trayTooltip joins Chinese status rows", () => {
   assert.equal(trayTooltip(1, 2, 3), "Nearbox · Agent：1 运行中 · 2 排队 · 3 台手机在线");
 });
 
+
+test("trayHostLabel and signature tolerate missing port", () => {
+  assert.equal(trayHostLabel("192.168.1.8", undefined), "192.168.1.8:undefined");
+  const withPort = trayStatusSignature("192.168.1.8", 7788, 0, 0, 0);
+  const withoutPort = trayStatusSignature("192.168.1.8", undefined, 0, 0, 0);
+  assert.notEqual(withPort, withoutPort);
+  assert.equal(trayStatusSignature(undefined, undefined, 0, 0, 0), "||0|0|0");
+});
+
+test("countRunStatuses ignores unknown statuses and trayAgentLabel treats queued-only as busy", () => {
+  assert.deepEqual(
+    countRunStatuses([{ status: "cancelled" }, { status: "queued" }, { status: "starting" as string }]),
+    { running: 0, queued: 1 },
+  );
+  assert.equal(trayAgentLabel(0, 1), "Agent：0 运行中 · 1 排队");
+  assert.equal(trayPhonesLabel(1), "1 台手机在线");
+});

@@ -27,3 +27,13 @@ test("remoteStatusFieldsMatch skips display lookup when core fields match", () =
   assert.equal(remoteStatusFieldsMatch(base, true, true, 1), false);
   assert.equal(remoteStatusFieldsMatch(null, true, true, 0), false);
 });
+
+test("reuseRemoteStatus treats display size changes as a new identity", () => {
+  const first = { ...base };
+  const resized = reuseRemoteStatus(first, { ...base, display: { width: 1280, height: 720 } });
+  assert.notEqual(resized, first);
+  assert.deepEqual(resized.display, { width: 1280, height: 720 });
+  assert.equal(remoteStatusSignature({ ...base, display: null }), "1|1|0|");
+  assert.equal(remoteStatusFieldsMatch(undefined, true, true, 0), false);
+  assert.equal(remoteStatusFieldsMatch({ supported: false, enabled: true, controllers: 0 }, true, true, 0), false);
+});

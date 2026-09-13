@@ -4,6 +4,7 @@ import {
   buildInvocation,
   createOutputParser,
   formatMsDuration,
+  truncate,
   type ParsedEvent,
   quoteForCmd,
   toolKindOf,
@@ -540,4 +541,28 @@ test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(4835), "5 秒");
   assert.equal(formatMsDuration(125_000), "2 分 5 秒");
   assert.equal(formatMsDuration(3_725_000), "1 小时 2 分");
+});
+
+test("truncate clips long values and normalizes CRLF", () => {
+  assert.equal(truncate("short", 10), "short");
+  assert.equal(truncate("abcdefghij", 5), "abcde…");
+  // CRLF → LF first, then clip: "a\nb\nc" length 5 → "a\nb\n…".
+  assert.equal(truncate("a\r\nb\r\nc", 4), "a\nb\n…");
+});
+
+test("cursor thinking deltas coalesce until a text chunk arrives", () => {
+  const parser = createOutputParser("cursor");
+  const events: ParsedEvent[] = [];
+  events.push(...parser.feed(JSON.stringify({ type: "thinking", subtype: "delta", text: "一步" })).events);
+  events.push(...parser.feed(JSON.stringify({ type: "thinking", subtype: "delta", text: "两步" })).events);
+  events.push(...parser.flushPartial().events);
+  events.push(...parser.feed(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "答" }] } })).events);
+  const tail = parser.end();
+  events.push(...tail.events);
+  const kinds = events.map((event) => event.kind);
+  assert.ok(kinds.includes("thinking"), kinds);
+  assert.ok(kinds.includes("text"), kinds);
+  const thinking = events.find((event) => event.kind === "thinking");
+  assert.match(thinking?.text ?? "", /一步两步/);
+  assert.equal(events.find((event) => event.kind === "text")?.text, "答");
 });
