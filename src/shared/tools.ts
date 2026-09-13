@@ -1,4 +1,5 @@
 import { countChanges, refineRewriteDiff } from "./diff.ts";
+import { findLast } from "./findLast.ts";
 import type { ToolCall, ToolKind, ToolStatus } from "./protocol";
 
 // How a tool call's arguments and result become a ToolCall, independent of the
@@ -205,7 +206,7 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
     }
     case "task": {
       const steps = asArray(body.conversationSteps).filter(isRecord);
-      const answer = [...steps].reverse().find((step) => isRecord(step.assistantMessage) && typeof step.assistantMessage.text === "string");
+      const answer = findLast(steps, (step) => isRecord(step.assistantMessage) && typeof step.assistantMessage.text === "string");
       const text = answer && isRecord(answer.assistantMessage) ? String(answer.assistantMessage.text) : pickString(body, ["result", "text", "output"]);
       patch.output = text ? clipHead(text) : undefined;
       break;
