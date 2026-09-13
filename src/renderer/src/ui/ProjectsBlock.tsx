@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AGENT_KINDS, AGENT_LABELS, type AgentKind, type HostSnapshot } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatRelative } from "../lib/format";
@@ -16,7 +16,15 @@ export function ProjectsBlock({ snapshot, client }: ProjectsBlockProps): JSX.Ele
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const alive = useRef(true);
   const desktop = window.nearboxDesktop;
+
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   const add = async (candidate: string) => {
     const value = candidate.trim();
@@ -27,11 +35,17 @@ export function ProjectsBlock({ snapshot, client }: ProjectsBlockProps): JSX.Ele
     setError(null);
     try {
       await client.addProject({ path: value });
-      setPath("");
+      if (alive.current) {
+        setPath("");
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (alive.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setBusy(false);
+      if (alive.current) {
+        setBusy(false);
+      }
     }
   };
 

@@ -46,3 +46,11 @@ test("angle-bracket autolinks work and javascript hrefs stay text", () => {
   ]);
   assert.ok(splitInline("[x](javascript:alert(1))").every((piece) => piece.type !== "link"));
 });
+
+test("link labels keep nested markdown for the renderer to paint", () => {
+  assert.deepEqual(splitInline("[**docs**](https://example.com) and [`code`](https://example.com/x)"), [
+    { type: "link", href: "https://example.com/", text: "**docs**" },
+    { type: "text", text: " and " },
+    { type: "link", href: "https://example.com/x", text: "`code`" },
+  ]);
+});

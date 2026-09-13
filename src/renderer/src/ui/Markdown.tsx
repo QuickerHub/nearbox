@@ -122,7 +122,7 @@ function renderInline(text: string): ReactNode[] {
       case "link":
         return (
           <a key={key} className="md__link" href={piece.href} target="_blank" rel="noreferrer noopener" onClick={(event) => openHref(event, piece.href)}>
-            {piece.text}
+            {renderInline(piece.text)}
           </a>
         );
       default:
