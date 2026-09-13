@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 // The command itself is plain JavaScript shipped in resources/; these tests pin its argument handling.
-import { agentKindOf, DEFAULT_WAIT_SECONDS, formatDuration, MAX_WAIT_SECONDS, parseArgs, readContext } from "../../resources/cli/nearbox.mjs";
+import { agentKindOf, DEFAULT_WAIT_SECONDS, formatDuration, MAX_WAIT_SECONDS, parseArgs, readContext, shortId } from "../../resources/cli/nearbox.mjs";
 
 test("agent names are forgiving about case, dashes and long forms", () => {
   assert.equal(agentKindOf("grok"), "grok");
@@ -77,4 +77,10 @@ test("durations read like the app shows them", () => {
   assert.equal(formatDuration("2026-09-07T00:00:00.000Z", "2026-09-07T00:00:42.000Z"), "42s");
   assert.equal(formatDuration("2026-09-07T00:00:00.000Z", "2026-09-07T00:02:05.000Z"), "2m05s");
   assert.equal(formatDuration(undefined, undefined), "");
+});
+
+test("shortId keeps the leading eight characters", () => {
+  assert.equal(shortId("abcdef0123456789"), "abcdef01");
+  assert.equal(shortId("short"), "short");
+  assert.equal(shortId(123456789), "12345678");
 });
