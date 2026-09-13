@@ -46,3 +46,27 @@ test("angle-bracket autolinks work and javascript hrefs stay text", () => {
   ]);
   assert.ok(splitInline("[x](javascript:alert(1))").every((piece) => piece.type !== "link"));
 });
+
+test("italic and strikethrough paint without eating bold", () => {
+  assert.deepEqual(splitInline("say *hello* and ~~bye~~ now"), [
+    { type: "text", text: "say " },
+    { type: "italic", text: "hello" },
+    { type: "text", text: " and " },
+    { type: "strike", text: "bye" },
+    { type: "text", text: " now" },
+  ]);
+  assert.deepEqual(splitInline("keep **bold** and *thin*"), [
+    { type: "text", text: "keep " },
+    { type: "bold", text: "bold" },
+    { type: "text", text: " and " },
+    { type: "italic", text: "thin" },
+  ]);
+});
+
+test("www hosts become https links; trailing punctuation peels off", () => {
+  assert.deepEqual(splitInline("see www.example.com/path."), [
+    { type: "text", text: "see " },
+    { type: "link", href: "https://www.example.com/path", text: "www.example.com/path" },
+    { type: "text", text: "." },
+  ]);
+});

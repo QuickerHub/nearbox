@@ -151,6 +151,7 @@ export async function connectClient(
   let socket: WebSocket | null = null;
   let disposed = false;
   let retry = 0;
+  let reconnectTimer: number | null = null;
 
   const send = (payload: unknown) => {
     if (socket?.readyState === WebSocket.OPEN) {
@@ -161,6 +162,10 @@ export async function connectClient(
   const openSocket = () => {
     if (disposed) {
       return;
+    }
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
     const next = new WebSocket(wsUrl(origin, token));
     socket = next;
@@ -189,7 +194,7 @@ export async function connectClient(
       }
       retry += 1;
       onStatus(surface === "desktop" ? "正在重新连接本机服务…" : "和电脑的连接断开了，正在重试…");
-      window.setTimeout(openSocket, Math.min(8000, 1000 * retry));
+      reconnectTimer = window.setTimeout(openSocket, Math.min(8000, 1000 * retry));
     });
   };
   openSocket();
@@ -213,6 +218,10 @@ export async function connectClient(
     snapshot: state,
     dispose: () => {
       disposed = true;
+      if (reconnectTimer !== null) {
+        window.clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       socket?.close();
     },
     subscribeRun: (runId, listener) => {
