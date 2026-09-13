@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { RunEvent } from "@shared/protocol";
 import type { ClientHandle } from "./client";
-import { mergeCatchUpHistory, queueLiveEvent } from "./liveEvents";
+import { drainLiveBatch, mergeCatchUpHistory, queueLiveEvent } from "./liveEvents";
 
 /** Coalesce streamed events so the transcript rebuilds a few times a second, not per token. */
 const LIVE_FLUSH_MS = 50;
@@ -31,10 +31,17 @@ export function useRunEvents(client: ClientHandle, runId: string | undefined, en
       if (disposed || !liveBatch.length) {
         return;
       }
-      const batch = liveBatch;
-      liveBatch = [];
-      lastSeq = batch[batch.length - 1]!.seq;
-      setEvents((current) => [...(current ?? []), ...batch]);
+      const drained = drainLiveBatch(liveBatch);
+      lastSeq = drained.lastSeq;
+      setEvents((current) => [...(current ?? []), ...drained.events]);
+    };
+
+    const applyCatchUp = (history: RunEvent[]) => {
+      const caught = mergeCatchUpHistory(history, buffered);
+      lastSeq = caught.lastSeq;
+      buffered = [];
+      caughtUp = true;
+      setEvents(caught.events);
     };
 
     const unsubscribe = client.subscribeRun(runId, (event) => {
@@ -58,16 +65,12 @@ export function useRunEvents(client: ClientHandle, runId: string | undefined, en
         if (disposed) {
           return;
         }
-        const caught = mergeCatchUpHistory(history, buffered);
-        lastSeq = caught.lastSeq;
-        buffered = [];
-        caughtUp = true;
-        setEvents(caught.events);
+        applyCatchUp(history);
       })
       .catch(() => {
         if (!disposed) {
-          caughtUp = true;
-          setEvents((current) => current ?? []);
+          // HTTP catch-up failed; still promote whatever WS already delivered.
+          applyCatchUp([]);
         }
       });
     return () => {

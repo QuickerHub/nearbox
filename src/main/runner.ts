@@ -46,7 +46,12 @@ import {
 } from "./agents";
 import { remoteCwdPreflight, remoteDevicePreflight } from "./remote-preflight";
 import { localPreflightFailure, shouldAttemptWarm, warmFallbackStatus } from "./run-start";
-import { markCancelling } from "./cancel-escalation";
+import {
+  cancelStartingStatus,
+  cancelStoppingProcessStatus,
+  markCancelling,
+  warmStartupSessionToClose,
+} from "./cancel-escalation";
 import { startWarmCancelOnHost } from "./warm-cancel-host";
 import { drainPermissionQueue, pendingPermissionView, settlePermissionHead } from "./permission-queue";
 import { type DelegationConfig, withDelegationPath } from "./delegation";
@@ -228,14 +233,20 @@ export class RunManager extends EventEmitter {
       });
       return true;
     }
-    this.append(run, "status", `${reason}，正在停止进程…`);
     if (active.remote) {
       // Dropping the ssh connection alone leaves the agent running on the device.
+      this.append(run, "status", cancelStoppingProcessStatus(reason));
       const { device, pidFile } = active.remote;
       void killRemoteRun(device, pidFile).finally(() => killLocal(active.child));
       return true;
     }
-    killLocal(active.child);
+    if (active.child) {
+      this.append(run, "status", cancelStoppingProcessStatus(reason));
+      killLocal(active.child);
+      return true;
+    }
+    // Warm startup / pre-spawn: nothing to kill yet; startWarm/runStart finish on cancelled.
+    this.append(run, "status", cancelStartingStatus(reason));
     return true;
   }
 
@@ -558,6 +569,10 @@ export class RunManager extends EventEmitter {
       return false;
     }
     if (state.cancelled) {
+      const closeId = warmStartupSessionToClose(session.sessionId, Boolean(resumeSessionId));
+      if (closeId) {
+        void host.closeSession(closeId);
+      }
       this.finish(state, null, undefined);
       return true;
     }
@@ -583,6 +598,14 @@ export class RunManager extends EventEmitter {
           return false;
         }
       }
+    }
+    if (state.cancelled) {
+      const closeId = warmStartupSessionToClose(session.sessionId, Boolean(resumeSessionId));
+      if (closeId) {
+        void host.closeSession(closeId);
+      }
+      this.finish(state, null, undefined);
+      return true;
     }
 
     state.sessionId = session.sessionId;
