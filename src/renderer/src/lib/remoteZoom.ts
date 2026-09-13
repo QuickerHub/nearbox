@@ -46,8 +46,15 @@ export function fitTransform(fit: Size, viewport: Size): ViewTransform {
 }
 
 function clampAxis(offset: number, drawn: number, viewport: number): number {
+  if (!Number.isFinite(drawn) || !Number.isFinite(viewport)) {
+    return 0;
+  }
   if (drawn <= viewport) {
     return (viewport - drawn) / 2; // smaller than the viewport: keep it centered
+  }
+  // Corrupt pan offsets recenter rather than paint NaN transforms.
+  if (!Number.isFinite(offset)) {
+    return (viewport - drawn) / 2;
   }
   // Larger than the viewport: never let the edge of the frame come inside.
   return offset > 0 ? 0 : offset < viewport - drawn ? viewport - drawn : offset;

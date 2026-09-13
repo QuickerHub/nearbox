@@ -67,3 +67,23 @@ test("successful resolve keeps busy until askId swap", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(states, [true]);
 });
+
+test("stale failure after askId moves on does not clear the next ask busy", async () => {
+  const states: boolean[] = [];
+  let rejectFirst!: (error: Error) => void;
+  const first = new Promise<void>((_resolve, reject) => {
+    rejectFirst = reject;
+  });
+  trackPermissionResolve(
+    (busy) => {
+      states.push(busy);
+    },
+    () => first,
+    () => false,
+  );
+  assert.deepEqual(states, [true]);
+  rejectFirst(new Error("stale"));
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(states, [true]);
+});

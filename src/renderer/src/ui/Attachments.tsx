@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { type FileMeta, isImageFile } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { partitionImages } from "../lib/attachments";
@@ -15,7 +15,9 @@ interface LightboxProps {
 
 /** Full-size view of one picture. Click outside or press Esc to close. */
 export function Lightbox({ src, name, href, onClose }: LightboxProps): JSX.Element {
+  const returnFocus = useRef<HTMLElement | null>(null);
   useEffect(() => {
+    returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -23,7 +25,13 @@ export function Lightbox({ src, name, href, onClose }: LightboxProps): JSX.Eleme
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      const node = returnFocus.current;
+      if (node?.isConnected) {
+        queueMicrotask(() => node.focus());
+      }
+    };
   }, [onClose]);
 
   return (

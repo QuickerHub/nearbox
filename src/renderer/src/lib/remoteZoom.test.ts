@@ -200,3 +200,14 @@ test("wheelZoomFactor zooms in on wheel-up and is symmetric", () => {
   assert.equal(wheelZoomFactor(Number.NaN), 1);
   close(wheelZoomFactor(-100_000), Math.exp(1), "huge deltas are capped");
 });
+
+test("clampTransform recovers from a non-finite pan offset", () => {
+  const fit = fitSize(frame, phone);
+  const broken = clampTransform({ scale: 2, x: Number.NaN, y: Number.NaN }, fit, phone);
+  assert.equal(broken.scale, 2);
+  assert.ok(Number.isFinite(broken.x));
+  assert.ok(Number.isFinite(broken.y));
+  // Drawn larger than the viewport: NaN offset recenters to the mid clamp (negative inset).
+  assert.equal(broken.x, (phone.width - fit.width * 2) / 2);
+  assert.equal(broken.y, (phone.height - fit.height * 2) / 2);
+});
