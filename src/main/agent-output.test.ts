@@ -488,6 +488,44 @@ test("partial flushes stream text as deltas without losing the whole answer", ()
   assert.equal(tail.result, "Done.");
 });
 
+test("claude thinking deltas accept a thinking field (not only text)", () => {
+  const parser = createOutputParser("claude");
+  const all = feedAll(parser, [
+    JSON.stringify({ type: "thinking", subtype: "delta", thinking: "step one " }),
+    JSON.stringify({ type: "thinking", subtype: "delta", thinking: "step two" }),
+    JSON.stringify({ type: "thinking", subtype: "completed" }),
+  ]);
+  const thinking = all.events.filter((event) => event.kind === "thinking");
+  assert.equal(thinking.length, 1);
+  assert.equal(thinking[0]?.text, "step one step two");
+});
+
+test("codex web_search keeps url subject; file_change reads item.path", () => {
+  const parser = createOutputParser("codex");
+  const all = feedAll(parser, [
+    JSON.stringify({
+      type: "item.completed",
+      item: { id: "w1", type: "web_search", url: "https://example.com/docs", status: "completed" },
+    }),
+    JSON.stringify({
+      type: "item.completed",
+      item: { id: "f1", type: "file_change", path: "src/app.ts", kind: "update", status: "completed" },
+    }),
+    JSON.stringify({
+      type: "item.completed",
+      item: { id: "f2", type: "file_change", path: "new.ts", kind: "add", status: "completed" },
+    }),
+  ]);
+  const tools = all.events.filter((event) => event.tool).map((event) => event.tool!);
+  assert.equal(tools[0]?.kind, "web");
+  assert.equal(tools[0]?.subject, "https://example.com/docs");
+  assert.equal(tools[1]?.kind, "edit");
+  assert.deepEqual(tools[1]?.files, ["src/app.ts"]);
+  assert.equal(tools[1]?.subject, "app.ts");
+  assert.equal(tools[2]?.kind, "write");
+  assert.deepEqual(tools[2]?.files, ["new.ts"]);
+});
+
 test("non-JSON lines are kept as raw output", () => {
   const parser = createOutputParser("codex");
   const all = feedAll(parser, ["warning: something odd", "{not json"]);
