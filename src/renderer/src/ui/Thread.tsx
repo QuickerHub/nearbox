@@ -1,5 +1,5 @@
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import { AGENT_LABELS, type AgentKind, type AgentRun, type HostSnapshot, STATUS_LABELS, type Task, type TaskNote } from "@shared/protocol";
+import { AGENT_LABELS, type AgentKind, type AgentRun, type HostSnapshot, hasParentRunId, STATUS_LABELS, type Task, type TaskNote } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatRelative } from "../lib/format";
 import { FileStrip } from "./Attachments";
@@ -65,7 +65,7 @@ export function Thread({ snapshot, client, task, onDeleted, children }: ThreadPr
   const lastRunNoteId = [...task.notes].reverse().find((note) => note.kind === "run")?.id;
   // Once an agent has taken a turn here, the task is that agent's conversation. Sub-runs it
   // delegated to other agents show in the thread but are not turns of that conversation.
-  const turns = useMemo(() => snapshot.runs.filter((run) => run.taskId === task.id && !run.parentRunId), [snapshot.runs, task.id]);
+  const turns = useMemo(() => snapshot.runs.filter((run) => run.taskId === task.id && !hasParentRunId(run)), [snapshot.runs, task.id]);
   const conversationAgent = turns.at(-1)?.agent;
 
   const save = async (patch: Parameters<ClientHandle["updateTask"]>[1]) => {
@@ -229,7 +229,7 @@ export function Thread({ snapshot, client, task, onDeleted, children }: ThreadPr
 
           {task.notes.map((note) => {
             const run = note.runId ? runsById.get(note.runId) : undefined;
-            const parent = run?.parentRunId ? runsById.get(run.parentRunId) : undefined;
+            const parent = run && hasParentRunId(run) ? runsById.get(run.parentRunId!) : undefined;
             return (
               <ThreadItem
                 key={note.id}
