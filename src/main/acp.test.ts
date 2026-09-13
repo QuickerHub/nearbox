@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { AcpConnection, type AcpModel, choosePermission, mapCursorModel, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
+import { ACP_LAUNCH, AcpConnection, type AcpModel, choosePermission, describePermission, HOST_IDLE_MINUTES, isExecuteTool, mapCursorModel, reviewOptions, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
 
 /** A fake agent on the other end of the pipes. */
 function pipes() {
@@ -153,4 +153,76 @@ test("list-models aliases map to ACP presets only when they mean the same config
   assert.equal(mapCursorModel("claude-4.5-sonnet-thinking", PRESETS), "claude-sonnet-4-5[thinking=true,context=200k]");
   assert.equal(mapCursorModel("no-such-model", PRESETS), undefined);
   assert.equal(mapCursorModel("", PRESETS), undefined);
+});
+
+test("reviewOptions prefers once over always for allow and reject", () => {
+  assert.deepEqual(
+    reviewOptions([
+      { optionId: "allow-always", kind: "allow_always" },
+      { optionId: "allow-once", kind: "allow_once" },
+      { optionId: "reject-always", kind: "reject_always" },
+      { optionId: "reject-once", kind: "reject_once" },
+    ]),
+    {
+      allow: { optionId: "allow-once", kind: "allow_once" },
+      reject: { optionId: "reject-once", kind: "reject_once" },
+    },
+  );
+  assert.deepEqual(reviewOptions([{ optionId: "x", kind: "allow_always" }]), {
+    allow: { optionId: "x", kind: "allow_always" },
+    reject: undefined,
+  });
+  assert.deepEqual(reviewOptions([]), { allow: undefined, reject: undefined });
+});
+
+test("isExecuteTool treats execute and shell as terminal work", () => {
+  assert.equal(isExecuteTool({ kind: "execute" }), true);
+  assert.equal(isExecuteTool({ kind: "shell" }), true);
+  assert.equal(isExecuteTool({ kind: "edit" }), false);
+  assert.equal(isExecuteTool({}), false);
+});
+
+test("describePermission prefers command text and falls back to kind", () => {
+  assert.deepEqual(
+    describePermission({
+      toolCallId: "tc-1",
+      title: "Run",
+      kind: "execute",
+      rawInput: { command: "  ls -la  " },
+    }),
+    { toolCallId: "tc-1", title: "Run", command: "ls -la" },
+  );
+  assert.deepEqual(
+    describePermission({ toolCallId: "tc-2", command: "echo hi", kind: "shell" }),
+    { toolCallId: "tc-2", title: "echo hi", command: "echo hi" },
+  );
+  assert.deepEqual(describePermission({ kind: "read" }), { toolCallId: "", title: "read", command: undefined });
+  assert.deepEqual(describePermission({}), { toolCallId: "", title: "命令", command: undefined });
+});
+
+test("safe mode with execute and no options rejects instead of hanging", () => {
+  assert.deepEqual(choosePermission("safe", { kind: "shell" }, []), {
+    action: "select",
+    optionId: null,
+    rejected: true,
+  });
+});
+
+test("ACP_LAUNCH builds cursor acp args for direct commands and HOST_IDLE stays 2h", () => {
+  assert.equal(HOST_IDLE_MINUTES, 120);
+  assert.deepEqual(
+    ACP_LAUNCH.cursor?.({ file: "/bin/cursor-agent", prefixArgs: [], display: "/bin/cursor-agent", viaCmd: false }),
+    { file: "/bin/cursor-agent", args: ["acp"] },
+  );
+  assert.deepEqual(
+    ACP_LAUNCH.cursor?.({
+      file: "C:\\Windows\\System32\\cmd.exe",
+      prefixArgs: ["C:\\Users\\cea\\.cursor\\bin\\cursor-agent.cmd"],
+      display: "cursor-agent.cmd",
+      viaCmd: true,
+    }),
+    null,
+  );
+  assert.equal(ACP_LAUNCH.codex, undefined);
+  assert.equal(ACP_LAUNCH.claude, undefined);
 });

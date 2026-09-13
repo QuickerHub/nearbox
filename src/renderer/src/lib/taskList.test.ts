@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentRun, Project, Task } from "../../../shared/protocol.ts";
-import { activeRuns, activityLabel, attentionFor, buildSections, latestTurns, rowAgent, rowState, seenMarker, updateSeen } from "./taskList.ts";
+import { activeRuns, activityLabel, AGENT_SHORT_LABELS, ATTENTION_LABELS, attentionFor, buildSections, latestTurns, rowAgent, rowState, seenMarker, updateSeen } from "./taskList.ts";
 
 const actor = { id: "desktop", name: "PC", role: "desktop" as const };
 
@@ -228,4 +228,22 @@ test("the row agent: working now, else last turn, else the chip", () => {
   assert.equal(rowAgent(t, run({ id: "a", taskId: "t1", agent: "grok", status: "running" }), run({ id: "b", taskId: "t1", agent: "codex" })), "grok");
   assert.equal(rowAgent(t, undefined, run({ id: "b", taskId: "t1", agent: "codex" })), "codex");
   assert.equal(rowAgent(t, undefined, undefined), "claude");
+});
+
+test("AGENT_SHORT_LABELS and ATTENTION_LABELS stay glanceable Chinese chips", () => {
+  assert.equal(AGENT_SHORT_LABELS.cursor, "Cursor");
+  assert.equal(AGENT_SHORT_LABELS.codex, "Codex");
+  assert.equal(AGENT_SHORT_LABELS.grok, "Grok");
+  assert.equal(AGENT_SHORT_LABELS.claude, "Claude");
+  assert.equal(AGENT_SHORT_LABELS.opencode, "opencode");
+  assert.equal(ATTENTION_LABELS.permission, "等待允许");
+  assert.equal(ATTENTION_LABELS.failed, "运行失败");
+  assert.equal(ATTENTION_LABELS.finished, "新回复");
+});
+
+test("activityLabel covers running-only, queued-only, and idle sections", () => {
+  assert.equal(activityLabel({ running: 2, queued: 0 }), "2 运行");
+  assert.equal(activityLabel({ running: 0, queued: 3 }), "3 排队");
+  assert.equal(activityLabel({ running: 0, queued: 0 }), "");
+  assert.equal(activityLabel({ running: 1, queued: 1 }), "1 运行 · 1 排队");
 });

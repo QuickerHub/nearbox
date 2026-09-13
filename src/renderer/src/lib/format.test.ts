@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatBytes, formatDuration, formatRelative } from "./format.ts";
+import { dayKey, formatBytes, formatDuration, formatRelative, formatTime, sameDay } from "./format.ts";
 
 test("formatDuration uses Chinese units and rejects bad dates", () => {
   assert.equal(formatDuration(undefined, undefined), "");
@@ -22,4 +22,22 @@ test("formatRelative covers near and far", () => {
   assert.equal(formatRelative(new Date(now - 5 * 60_000).toISOString()), "5 分钟前");
   assert.equal(formatRelative(undefined), "");
   assert.equal(formatRelative("bogus"), "");
+});
+
+test("formatTime and dayKey reject empty or invalid stamps", () => {
+  assert.equal(formatTime(undefined), "");
+  assert.equal(formatTime("bogus"), "");
+  assert.equal(dayKey(undefined), "");
+  assert.equal(dayKey("bogus"), "");
+  const stamp = "2026-09-13T15:04:00.000Z";
+  assert.ok(formatTime(stamp).length > 0);
+  assert.match(dayKey(stamp), /^2026-\d+-\d+$/);
+});
+
+test("sameDay compares calendar fields only", () => {
+  const localA = new Date(2026, 8, 13, 1, 0, 0);
+  const localB = new Date(2026, 8, 13, 23, 0, 0);
+  const localC = new Date(2026, 8, 14, 1, 0, 0);
+  assert.equal(sameDay(localA, localB), true);
+  assert.equal(sameDay(localA, localC), false);
 });
