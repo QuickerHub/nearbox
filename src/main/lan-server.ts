@@ -37,6 +37,8 @@ import {
   type TaskPatch,
 } from "@shared/protocol";
 import { receiveToInbox } from "./files";
+import { listDiscoveryBroadcastTargets } from "./lan-broadcast";
+import { restrictSettingsPatch } from "./settings-patch";
 import { countOnlinePhones, reuseMapValues } from "./snapshot-devices";
 import { recentRuns } from "./snapshot-runs";
 import type { TaskHub } from "./hub";
@@ -263,14 +265,15 @@ export class LanServer extends EventEmitter {
     this.scheduleSnapshot();
   }
 
-  snapshot(): HostSnapshot {
+  snapshot(includeInvite = true): HostSnapshot {
     return {
       running: this.server !== null,
       hostName: this.hostName,
       hostAddresses: this.hostAddressesForSnapshot(),
       selectedHost: this.selectedHost,
       port: this.port,
-      invite: liveInvite(this.invite),
+      // Paired phones must not learn the live PIN/token from the shared snapshot.
+      invite: includeInvite ? liveInvite(this.invite) : null,
       devices: this.devicesForSnapshot(),
       remoteDevices: this.hub.remoteDevices,
       tasks: this.hub.tasks,
@@ -402,7 +405,9 @@ export class LanServer extends EventEmitter {
       const payload = Buffer.from(JSON.stringify(info));
       try {
         socket.setBroadcast(true);
-        socket.send(payload, DISCOVERY_PORT, "255.255.255.255");
+        for (const target of listDiscoveryBroadcastTargets()) {
+          socket.send(payload, DISCOVERY_PORT, target);
+        }
       } catch {
         /* ignore a missed pulse */
       }
@@ -542,7 +547,11 @@ export class LanServer extends EventEmitter {
     }
 
     if (path === "/api/state" && method === "GET") {
-      this.writeJson(res, { ...this.snapshot(), sessionToken: session.token, self: session.device });
+      this.writeJson(res, {
+        ...this.snapshot(session.device.role === "desktop"),
+        sessionToken: session.token,
+        self: session.device,
+      });
       return;
     }
     if (path === "/api/invite" && method === "POST") {
@@ -742,7 +751,8 @@ export class LanServer extends EventEmitter {
     }
     if (path === "/api/settings" && method === "POST") {
       const body = await readJson<Partial<HostSettings>>(req);
-      this.writeJson(res, this.hub.updateSettings(body));
+      const role = session.device.role === "desktop" ? "desktop" : "phone";
+      this.writeJson(res, this.hub.updateSettings(restrictSettingsPatch(role, body)));
       return;
     }
     if (path === "/api/update" && method === "GET") {
@@ -920,7 +930,11 @@ export class LanServer extends EventEmitter {
     this.setDevice(device.id, device);
     const binding: SocketBinding = { socket, deviceId: device.id, runs: new Set() };
     this.sockets.add(binding);
-    sendSocket(socket, { type: "ready", self: device, snapshot: this.snapshot() });
+    sendSocket(socket, {
+      type: "ready",
+      self: device,
+      snapshot: this.snapshot(device.role === "desktop"),
+    });
     this.scheduleSnapshot();
 
     socket.on("message", (raw) => {
@@ -1000,12 +1014,14 @@ export class LanServer extends EventEmitter {
     this.snapshotTimer = setTimeout(() => {
       this.snapshotTimer = null;
       void this.ensureInviteFresh();
-      const snapshot = this.snapshot();
-      const payload = JSON.stringify({ type: "snapshot", snapshot } satisfies HostToClient);
+      const desktopSnapshot = this.snapshot(true);
+      const phoneSnapshot = this.snapshot(false);
       for (const binding of this.sockets) {
-        sendRaw(binding.socket, payload);
+        const device = this.devices.get(binding.deviceId);
+        const snapshot = device?.role === "desktop" ? desktopSnapshot : phoneSnapshot;
+        sendRaw(binding.socket, JSON.stringify({ type: "snapshot", snapshot } satisfies HostToClient));
       }
-      this.emit("snapshot", snapshot);
+      this.emit("snapshot", desktopSnapshot);
     }, 60);
   }
 
@@ -1162,6 +1178,7 @@ async function readJson<T>(req: http.IncomingMessage): Promise<T> {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
     if (total > 1024 * 1024) {
+      req.destroy();
       throw new Error("请求过大。");
     }
     chunks.push(buffer);

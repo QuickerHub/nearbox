@@ -46,3 +46,8 @@ export function assertSafeRemotePath(path: string): void {
     throw new Error("路径不合法。");
   }
 }
+
+/** Login name for `ssh -l`: no leading dash (option-like) and no whitespace / controls. */
+export function isSshUser(user: string): boolean {
+  return Boolean(user) && !user.startsWith("-") && !/[\r\n\u0000\s]/.test(user) && user.length <= 128;
+}

@@ -48,6 +48,9 @@ import { discoverDevices } from "./lan-discover";
 import { buildDelegatedPrompt, buildTurnPrompt, delegationSection, imagePaths, type PromptAttachment } from "./prompt";
 import { type RunAttachment, RunManager } from "./runner";
 import { assertSafeRemotePath, directoryExists, listDirectory, probeDevice, remoteAttachmentPath } from "./ssh";
+import { isSshUser } from "./ssh-explain";
+import { mergeAgentSetting } from "./settings-patch";
+import { waitForActiveRun } from "./wait-run";
 import { Store, type StoredFile } from "./store";
 
 function fail(message: string, code = "BAD_REQUEST"): never {
@@ -512,6 +515,9 @@ export class TaskHub extends EventEmitter {
       fail("请填写主机名、IP 地址，或 ~/.ssh/config 里的别名。");
     }
     const user = String(input.user ?? "").trim() || undefined;
+    if (user && !isSshUser(user)) {
+      fail("用户名不合法。");
+    }
     const port = normalizePort(input.port);
     const identityFile = String(input.identityFile ?? "").trim() || undefined;
     const existing = this.remoteDevices.find(
@@ -555,6 +561,9 @@ export class TaskHub extends EventEmitter {
     }
     if (patch.user !== undefined) {
       const user = String(patch.user ?? "").trim() || undefined;
+      if (user && !isSshUser(user)) {
+        fail("用户名不合法。");
+      }
       reconnect = reconnect || user !== device.user;
       device.user = user;
     }
@@ -905,23 +914,11 @@ export class TaskHub extends EventEmitter {
 
   /** Resolves when `run` has finished or `timeoutMs` has passed, whichever comes first. */
   waitForRun(run: AgentRun, timeoutMs: number): Promise<AgentRun> {
-    const wait = Math.min(MAX_WAIT_MS, Math.max(0, timeoutMs));
-    if (!isRunActive(run) || wait === 0) {
-      return Promise.resolve(run);
-    }
-    return new Promise((resolve) => {
-      const settle = () => {
-        clearTimeout(timer);
-        this.off("run-finished", done);
-        resolve(run);
-      };
-      const done = (finished: AgentRun) => {
-        if (finished.id === run.id) {
-          settle();
-        }
-      };
-      const timer = setTimeout(settle, wait);
-      this.on("run-finished", done);
+    return waitForActiveRun(run, timeoutMs, {
+      isActive: isRunActive,
+      onFinished: (listener) => this.on("run-finished", listener),
+      offFinished: (listener) => this.off("run-finished", listener),
+      maxWaitMs: MAX_WAIT_MS,
     });
   }
 
@@ -1016,11 +1013,17 @@ export class TaskHub extends EventEmitter {
         if (!next) {
           continue;
         }
-        settings.agents[kind] = {
-          access: next.access === "full" ? "full" : "safe",
-          model: normalizeModelId(next.model),
-          command: String(next.command ?? "").trim() || undefined,
-        };
+        const agentPatch: { access?: "safe" | "full"; model?: string; command?: string } = {};
+        if (next.access !== undefined) {
+          agentPatch.access = next.access === "full" ? "full" : "safe";
+        }
+        if (next.model !== undefined) {
+          agentPatch.model = normalizeModelId(next.model);
+        }
+        if (next.command !== undefined) {
+          agentPatch.command = next.command;
+        }
+        settings.agents[kind] = mergeAgentSetting(settings.agents[kind], agentPatch);
       }
     }
     this.store.save();
