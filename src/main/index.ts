@@ -24,6 +24,13 @@ import { isTransientSocketError } from "./network";
 import { RemoteControlHub } from "./remote";
 import { ScreenSource, primaryDisplaySize } from "./screen";
 import { AppUpdater } from "./updater";
+import {
+  countRunStatuses,
+  trayAgentLabel,
+  trayHostLabel,
+  trayPhonesLabel,
+  trayStatusSignature,
+} from "./tray-status";
 
 process.on("uncaughtException", (error) => {
   if (isTransientSocketError(error)) {
@@ -49,6 +56,7 @@ let server: LanServer | null = null;
 let hub: TaskHub | null = null;
 let quitting = false;
 let trayHintShown = false;
+let lastTraySignature = "";
 // Letting the launcher pin the secret makes local API testing possible; the default is per-process random.
 const desktopSecret = process.env.NEARBOX_DESKTOP_SECRET || randomBytes(24).toString("base64url");
 // A second copy (different --user-data-dir) can be run next to the real one for testing by picking another port.
@@ -150,6 +158,7 @@ function showWindow(hash?: string): void {
 function createTray(): void {
   tray = new Tray(trayIcon());
   tray.setToolTip("Nearbox");
+  lastTraySignature = "";
   refreshTrayMenu();
   tray.on("click", () => showWindow());
   tray.on("double-click", () => showWindow());
@@ -160,18 +169,23 @@ function refreshTrayMenu(): void {
     return;
   }
   const snapshot = server?.snapshot();
-  const running = snapshot?.runs.filter((run) => run.status === "running").length ?? 0;
-  const queued = snapshot?.runs.filter((run) => run.status === "queued").length ?? 0;
+  const { running, queued } = countRunStatuses(snapshot?.runs ?? []);
   const phones = server?.onlinePhones() ?? 0;
+  const signature = trayStatusSignature(snapshot?.selectedHost, snapshot?.port, phones, running, queued);
+  // Snapshots coalesce ~60ms but still fire often with unchanged tray rows.
+  if (signature === lastTraySignature) {
+    return;
+  }
+  lastTraySignature = signature;
   const menu = Menu.buildFromTemplate([
     { label: "打开 Nearbox", click: () => showWindow() },
     { type: "separator" },
     {
-      label: snapshot?.selectedHost ? `${snapshot.selectedHost}:${snapshot.port}` : "未发现局域网地址",
+      label: trayHostLabel(snapshot?.selectedHost, snapshot?.port),
       enabled: false,
     },
-    { label: phones ? `${phones} 台手机在线` : "没有手机在线", enabled: false },
-    { label: running || queued ? `Agent：${running} 运行中 · ${queued} 排队` : "Agent 空闲", enabled: false },
+    { label: trayPhonesLabel(phones), enabled: false },
+    { label: trayAgentLabel(running, queued), enabled: false },
     { type: "separator" },
     {
       label: "退出",
