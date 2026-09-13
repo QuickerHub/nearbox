@@ -166,6 +166,12 @@ export class LanServer extends EventEmitter {
     });
     server.on("upgrade", (req, socket, head) => {
       ignoreStreamError(socket);
+      // Same LAN gate as HTTP: a forwarded port must not let the internet pair over /ws.
+      const remoteIp = normalizeRemoteIp(req.socket.remoteAddress);
+      if (!isLoopbackOrPrivate(remoteIp)) {
+        socket.destroy();
+        return;
+      }
       const url = new URL(req.url ?? "/", "http://nearbox.local");
       if (url.pathname === "/ws") {
         wss.handleUpgrade(req, socket, head, (ws) => {
@@ -647,17 +653,20 @@ export class LanServer extends EventEmitter {
       return;
     }
 
-    // ----- remote devices (other computers reached over ssh)
+    // ----- remote devices (other computers reached over ssh; desktop-only — LAN SSH scan / identity paths)
     if (path === "/api/remote-devices" && method === "POST") {
+      this.requireDesktop(session);
       const body = await readJson<RemoteDeviceInput>(req);
       this.writeJson(res, await this.hub.addDevice(body));
       return;
     }
     if (path === "/api/remote-devices/discover" && method === "POST") {
+      this.requireDesktop(session);
       this.writeJson(res, { candidates: await this.hub.discoverDevices() });
       return;
     }
     if (segments[1] === "remote-devices" && segments[2]) {
+      this.requireDesktop(session);
       const deviceId = decodeURIComponent(segments[2]);
       const tail = segments[3];
       if (!tail && method === "PATCH") {

@@ -44,6 +44,8 @@ const FORBIDDEN_EXTENSIONS = [
   ".scr",
   ".js",
   ".jse",
+  ".mjs",
+  ".cjs",
   ".vbs",
   ".vbe",
   ".wsf",
@@ -53,6 +55,11 @@ const FORBIDDEN_EXTENSIONS = [
   ".reg",
   ".url",
   ".apk",
+  ".dll",
+  ".jar",
+  ".scf",
+  ".pif",
+  ".msc",
 ];
 
 export function sanitizeFileName(raw: string | undefined, fallback: string): string {
@@ -61,8 +68,9 @@ export function sanitizeFileName(raw: string | undefined, fallback: string): str
   const stem = cleaned || fallback;
   const ext = extname(stem);
   const name = stem.slice(0, stem.length - ext.length) || fallback;
-  const upper = name.toUpperCase();
-  if (WINDOWS_RESERVED.has(upper)) {
+  // Windows reserves COM1 / NUL even with extra dots (`COM1.foo.bar`, `nul.tar.gz`).
+  const reservedKey = name.split(".")[0]!.toUpperCase();
+  if (WINDOWS_RESERVED.has(reservedKey) || WINDOWS_RESERVED.has(name.toUpperCase())) {
     return `${name}_${fallback}${ext}`;
   }
   return `${name}${ext}`.slice(0, 180);
