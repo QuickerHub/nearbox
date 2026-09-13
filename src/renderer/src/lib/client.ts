@@ -172,7 +172,13 @@ export async function connectClient(
       }
     });
     next.addEventListener("message", (event) => {
-      const payload = JSON.parse(String(event.data)) as HostToClient;
+      let payload: HostToClient;
+      try {
+        payload = JSON.parse(String(event.data)) as HostToClient;
+      } catch {
+        // Bad frame must not tear down the socket listener (same guard as /rc).
+        return;
+      }
       if (payload.type === "snapshot" || payload.type === "ready") {
         onSnapshot(payload.snapshot);
       } else if (payload.type === "run-event") {

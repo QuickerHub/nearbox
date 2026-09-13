@@ -7,34 +7,35 @@ export type Sequenced = { seq: number };
 
 /**
  * Merge HTTP history with WS events that arrived before catch-up finished.
- * Buffered duplicates (same seq twice, or already in history) are dropped;
- * extras are appended in seq order so a reordered buffer cannot scramble the
- * transcript.
+ * Buffered duplicates are dropped; missing seqs that only arrived on the
+ * socket are filled in. The result is always sorted by seq.
  */
 export function mergeCatchUpHistory<T extends Sequenced>(
   history: readonly T[],
   buffered: readonly T[],
 ): { events: T[]; lastSeq: number } {
-  const lastFromHistory = history[history.length - 1]?.seq ?? 0;
-  const seen = new Set<number>();
+  // Merge by seq so a WS event that fills a hole in HTTP history is kept (not
+  // dropped just because its seq is below the history tip).
+  if (!buffered.length) {
+    const lastSeq = history[history.length - 1]?.seq ?? 0;
+    return { events: [...history], lastSeq };
+  }
+  const bySeq = new Map<number, T>();
   for (const event of history) {
-    seen.add(event.seq);
+    bySeq.set(event.seq, event);
   }
-  const extra: T[] = [];
   for (const event of buffered) {
-    if (event.seq <= lastFromHistory || seen.has(event.seq)) {
-      continue;
+    if (!bySeq.has(event.seq)) {
+      bySeq.set(event.seq, event);
     }
-    seen.add(event.seq);
-    extra.push(event);
   }
-  if (extra.length > 1) {
-    extra.sort((a, b) => a.seq - b.seq);
+  const events = [...bySeq.values()];
+  if (events.length > 1) {
+    events.sort((a, b) => a.seq - b.seq);
   }
-  const merged = extra.length ? [...history, ...extra] : [...history];
   return {
-    events: merged,
-    lastSeq: merged[merged.length - 1]?.seq ?? lastFromHistory,
+    events,
+    lastSeq: events[events.length - 1]?.seq ?? 0,
   };
 }
 

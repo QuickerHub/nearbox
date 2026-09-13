@@ -199,12 +199,20 @@ export function visibleCrop(t: ViewTransform, fit: Size, viewport: Size, pad = 0
   if (y + h > 1) {
     h = 1 - y;
   }
-  return {
-    x: clamp01(x),
-    y: clamp01(y),
-    w: Math.max(0.08, w),
-    h: Math.max(0.08, h),
-  };
+  // Prefer staying inside [0,1] over the 0.08 floor when zoomed into a corner.
+  let outX = clamp01(x);
+  let outY = clamp01(y);
+  let outW = Math.max(0.08, w);
+  let outH = Math.max(0.08, h);
+  if (outX + outW > 1) {
+    outX = Math.max(0, 1 - outW);
+    outW = Math.min(outW, 1 - outX);
+  }
+  if (outY + outH > 1) {
+    outY = Math.max(0, 1 - outH);
+    outH = Math.min(outH, 1 - outY);
+  }
+  return { x: outX, y: outY, w: outW, h: outH };
 }
 
 /** Snap a crop onto a coarse grid so tiny pans do not spam the host. */

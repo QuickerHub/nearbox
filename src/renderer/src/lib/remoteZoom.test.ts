@@ -200,3 +200,11 @@ test("wheelZoomFactor zooms in on wheel-up and is symmetric", () => {
   assert.equal(wheelZoomFactor(Number.NaN), 1);
   close(wheelZoomFactor(-100_000), Math.exp(1), "huge deltas are capped");
 });
+
+test("visibleCrop never extends past the frame when the min window is larger than the remainder", () => {
+  // Extreme zoom into the far corner: the 0.08 floor must not push x+w past 1.
+  const crop = visibleCrop({ scale: 20, x: -1900, y: -1900 }, { width: 100, height: 100 }, { width: 50, height: 50 }, 2);
+  assert.ok(crop.x + crop.w <= 1 + 1e-9, `x+w=${crop.x + crop.w}`);
+  assert.ok(crop.y + crop.h <= 1 + 1e-9, `y+h=${crop.y + crop.h}`);
+  assert.ok(crop.w > 0 && crop.h > 0);
+});

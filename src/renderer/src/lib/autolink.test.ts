@@ -46,3 +46,11 @@ test("angle-bracket autolinks work and javascript hrefs stay text", () => {
   ]);
   assert.ok(splitInline("[x](javascript:alert(1))").every((piece) => piece.type !== "link"));
 });
+
+test("bold can contain a single asterisk", () => {
+  assert.deepEqual(splitInline("use **a*b** here"), [
+    { type: "text", text: "use " },
+    { type: "bold", text: "a*b" },
+    { type: "text", text: " here" },
+  ]);
+});
