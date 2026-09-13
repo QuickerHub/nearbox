@@ -301,6 +301,21 @@ export class RunManager extends EventEmitter {
     this.active.set(run.id, state);
     this.eventCache.set(run.id, this.eventCache.get(run.id) ?? []);
 
+    try {
+      await this.runStart(state);
+    } catch (error) {
+      // An unexpected throw used to leave the run "running" forever and block its project.
+      if (!this.active.has(run.id)) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.append(run, "stderr", message);
+      this.finish(state, null, message);
+    }
+  }
+
+  private async runStart(state: ActiveRun): Promise<void> {
+    const run = state.run;
     if (run.deviceId) {
       await this.startRemote(state);
       return;
@@ -488,21 +503,9 @@ export class RunManager extends EventEmitter {
       this.finish(state, null, undefined);
       return true;
     }
-    // A picked model must exist as a preset in the host; before the first session we do not know them yet.
-    let modelId: string | undefined;
-    if (run.model) {
-      if (!host.models && !resumeSessionId) {
-        return false;
-      }
-      if (host.models) {
-        modelId = mapCursorModel(run.model, host.models);
-        if (!modelId) {
-          this.append(run, "status", `常驻会话不支持模型 ${run.model}，本轮改用单独进程运行。`);
-          return false;
-        }
-      }
-    }
-
+    // Open the session first: session/new and session/load both teach host.models, so a
+    // first turn that picked a model no longer has to fall back to a one-shot process
+    // just because the catalog was still unknown.
     let session: AcpSession;
     try {
       session = resumeSessionId ? await host.loadSession(resumeSessionId, run.cwd) : await host.newSession(run.cwd);
@@ -526,9 +529,9 @@ export class RunManager extends EventEmitter {
       this.finish(state, null, undefined);
       return true;
     }
+    let modelId: string | undefined;
     if (run.model) {
-      // The model list only becomes known with the first session; a resumed turn may learn it just now.
-      modelId = modelId ?? (host.models ? mapCursorModel(run.model, host.models) : undefined);
+      modelId = host.models ? mapCursorModel(run.model, host.models) : undefined;
       if (!modelId) {
         this.append(run, "status", `常驻会话不支持模型 ${run.model}，本轮改用单独进程运行。`);
         return false;
@@ -803,6 +806,11 @@ export class RunManager extends EventEmitter {
       );
     }
     return new Promise((resolve) => {
+      // A second ask must not orphan the first Promise: cancel it so the ACP
+      // request gets an answer and the agent is not left hanging forever.
+      if (state.permission) {
+        this.settlePermission(state, null);
+      }
       state.permission = { resolve };
       state.run.pendingPermission = {
         toolCallId: described.toolCallId,

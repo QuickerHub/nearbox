@@ -198,12 +198,15 @@ export class AcpConnection extends EventEmitter {
       }
       return;
     }
-    if (hasId && typeof message.id === "number") {
-      const entry = this.pending.get(message.id);
+    if (hasId) {
+      // Agents usually echo the numeric id we sent; some JSON-RPC stacks stringify it.
+      const rawId = message.id as number | string;
+      const id = typeof rawId === "number" ? rawId : Number(rawId);
+      const entry = Number.isInteger(id) ? this.pending.get(id) : undefined;
       if (!entry) {
         return;
       }
-      this.pending.delete(message.id);
+      this.pending.delete(id);
       if (entry.timer) {
         clearTimeout(entry.timer);
       }
