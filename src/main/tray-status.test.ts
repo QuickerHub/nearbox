@@ -6,6 +6,7 @@ import {
   trayHostLabel,
   trayPhonesLabel,
   trayStatusSignature,
+  trayTooltip,
 } from "./tray-status.ts";
 
 test("countRunStatuses tallies running and queued in one pass", () => {
@@ -39,3 +40,9 @@ test("trayStatusSignature changes only when a status row would change", () => {
   assert.notEqual(trayStatusSignature("192.168.1.8", 7788, 1, 1, 0), a);
   assert.notEqual(trayStatusSignature(undefined, 7788, 1, 0, 0), a);
 });
+
+test("trayTooltip joins Chinese status rows", () => {
+  assert.equal(trayTooltip(0, 0, 0), "Nearbox · Agent 空闲 · 没有手机在线");
+  assert.equal(trayTooltip(1, 2, 3), "Nearbox · Agent：1 运行中 · 2 排队 · 3 台手机在线");
+});
+
