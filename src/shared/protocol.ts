@@ -655,7 +655,8 @@ export {
 } from "./usage";
 export { adoptSessionTitle, splitCapture } from "./titles";
 
-export { canContinueRun, countActiveRuns, hasParentRunId, isRunActive, isTopLevelActiveRun, sessionIdAlongChain, topLevelActiveRun } from "./conversation";
+export { canContinueRun, countActiveRuns, hasParentRunId, isRunActive, isTopLevelActiveRun, sessionIdAlongChain, topLevelActiveRun, topLevelTurnsForTask } from "./conversation";
+export { formatMsDuration, formatSecondsDuration } from "./duration";
 export { countOnlinePhones, phonesOnlineLabel } from "./devices";
 export { parseCursorIdeModels } from "./cursor-ide-models";
 export { BUILTIN_MODELS, canListModels, filterModels, modelLabel, modelsForAgent, modelsNeedRefresh, normalizeModelId } from "./models";
