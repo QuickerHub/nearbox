@@ -41,6 +41,17 @@ export function formatRelative(value: string | undefined): string {
   if (Number.isNaN(diff)) {
     return "";
   }
+  // Far-future stamps (bad data / big clock skew): show the clock, not "刚刚".
+  if (diff < -60_000) {
+    const day = formatDay(value);
+    if (day === "今天") {
+      return formatTime(value);
+    }
+    if (day === "昨天") {
+      return `昨天 ${formatTime(value)}`;
+    }
+    return date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric" });
+  }
   if (diff < 60_000) {
     return "刚刚";
   }

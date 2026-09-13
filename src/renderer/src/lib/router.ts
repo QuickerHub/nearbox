@@ -12,15 +12,24 @@ export type Route =
   | { name: "remote" }
   | { name: "settings" };
 
+/** decodeURIComponent throws on lone "%" / bad hex; a bad hash must not crash the app. */
+export function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#\/?/, "");
   const [pathPart = ""] = raw.split("?");
   const parts = pathPart.split("/").filter(Boolean);
   switch (parts[0]) {
     case "task":
-      return parts[1] ? { name: "task", id: decodeURIComponent(parts[1]) } : { name: "home" };
+      return parts[1] ? { name: "task", id: safeDecodeURIComponent(parts[1]) } : { name: "home" };
     case "run":
-      return parts[1] ? { name: "run", id: decodeURIComponent(parts[1]) } : { name: "home" };
+      return parts[1] ? { name: "run", id: safeDecodeURIComponent(parts[1]) } : { name: "home" };
     case "remote":
       return { name: "remote" };
     case "settings":

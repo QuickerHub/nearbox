@@ -72,7 +72,8 @@ export function parseBlocks(text: string): MdBlock[] {
     if (LIST.test(line)) {
       const ordered = ORDERED.test(line);
       const items: string[] = [];
-      while (index < lines.length && LIST.test(lines[index] ?? "")) {
+      // Ordered and unordered markers are different list types; do not swallow a `-` into a `1.` run.
+      while (index < lines.length && LIST.test(lines[index] ?? "") && ORDERED.test(lines[index] ?? "") === ordered) {
         items.push((lines[index] ?? "").replace(LIST, ""));
         index += 1;
       }

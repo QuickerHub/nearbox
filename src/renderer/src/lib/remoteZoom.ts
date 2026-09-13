@@ -97,6 +97,10 @@ export function zoomAt(t: ViewTransform, factor: number, at: Point, fit: Size, v
 /** Zoom to an exact scale around the middle of the viewport. */
 export function zoomTo(t: ViewTransform, scale: number, fit: Size, viewport: Size): ViewTransform {
   const center = { x: viewport.width / 2, y: viewport.height / 2 };
+  // Non-positive / non-finite scale cannot ratio into a target; start from fit.
+  if (!Number.isFinite(t.scale) || t.scale <= 0) {
+    return zoomAt(fitTransform(fit, viewport), clampScale(scale), center, fit, viewport);
+  }
   return zoomAt(t, clampScale(scale) / t.scale, center, fit, viewport);
 }
 
@@ -113,7 +117,7 @@ export function refitTransform(
   previous: { fit: Size; viewport: Size },
   next: { fit: Size; viewport: Size },
 ): ViewTransform {
-  if (previous.fit.width <= 0 || previous.fit.height <= 0) {
+  if (previous.fit.width <= 0 || previous.fit.height <= 0 || !Number.isFinite(t.scale) || t.scale <= 0) {
     return clampTransform(fitTransform(next.fit, next.viewport), next.fit, next.viewport);
   }
   const centerX = (previous.viewport.width / 2 - t.x) / (t.scale * previous.fit.width);

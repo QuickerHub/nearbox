@@ -19,6 +19,7 @@ export function Lightbox({ src, name, href, onClose }: LightboxProps): JSX.Eleme
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopPropagation();
         onClose();
       }
     };

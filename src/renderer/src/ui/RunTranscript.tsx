@@ -198,6 +198,12 @@ function ThinkingRow({ text }: { text: string }): JSX.Element {
 
 function LinesFold({ label, lines, tone, initiallyOpen }: { label: string; lines: string[]; tone: "warn" | "muted"; initiallyOpen: boolean }): JSX.Element {
   const [open, setOpen] = useState(initiallyOpen);
+  // A live turn that fails after mount should still reveal diagnostics.
+  useEffect(() => {
+    if (initiallyOpen) {
+      setOpen(true);
+    }
+  }, [initiallyOpen]);
   return (
     <div className={`trow-wrap${open ? " is-open" : ""}`}>
       <button type="button" className={`trow trow--${tone}`} aria-expanded={open} onClick={() => setOpen((value) => !value)}>

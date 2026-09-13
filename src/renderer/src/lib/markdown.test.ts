@@ -105,3 +105,19 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+test("ordered and unordered markers start separate lists", () => {
+  const blocks = parseBlocks("1. a\n- b\n- c\n\n- d\n2. e");
+  assert.deepEqual(
+    blocks.map((block) => block.type),
+    ["list", "list", "list", "list"],
+  );
+  assert.equal(blocks[0]?.type === "list" && blocks[0].ordered, true);
+  assert.deepEqual(blocks[0]?.type === "list" ? blocks[0].items : [], ["a"]);
+  assert.equal(blocks[1]?.type === "list" && blocks[1].ordered, false);
+  assert.deepEqual(blocks[1]?.type === "list" ? blocks[1].items : [], ["b", "c"]);
+  assert.equal(blocks[2]?.type === "list" && blocks[2].ordered, false);
+  assert.deepEqual(blocks[2]?.type === "list" ? blocks[2].items : [], ["d"]);
+  assert.equal(blocks[3]?.type === "list" && blocks[3].ordered, true);
+  assert.deepEqual(blocks[3]?.type === "list" ? blocks[3].items : [], ["e"]);
+});

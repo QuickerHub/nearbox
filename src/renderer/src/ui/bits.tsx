@@ -134,7 +134,7 @@ function UsageStats({ usage }: { usage: TokenUsage }): JSX.Element {
     rows.push(["窗口", formatTokens(usage.contextWindow)]);
   }
   rows.push(["占用", formatTokens(contextUsed(usage))]);
-  if (usage.costUsd !== undefined) {
+  if (usage.costUsd !== undefined && Number.isFinite(usage.costUsd)) {
     rows.push(["费用", `$${usage.costUsd.toFixed(4)}`]);
   }
   return (

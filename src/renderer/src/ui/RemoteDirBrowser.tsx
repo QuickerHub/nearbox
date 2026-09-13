@@ -36,6 +36,8 @@ export function RemoteDirBrowser({ client, deviceId, deviceName, initialPath, on
       })
       .catch((err: unknown) => {
         if (!disposed) {
+          // Drop the previous folder's entries so a failed hop cannot be picked as "this" directory.
+          setListing(null);
           setError(err instanceof Error ? err.message : String(err));
         }
       })
