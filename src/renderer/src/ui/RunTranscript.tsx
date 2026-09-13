@@ -148,11 +148,20 @@ function WorkFold({
   const [open, setOpen] = useState(live || failed || defaultOpen);
   // Opened by request: stays put when the turn finishes instead of snapping shut.
   const [pinned, setPinned] = useState(defaultOpen);
+  // Open when a permission ask arrives so Allow/Deny is not trapped in a
+  // collapsed body (activity line alone only says 等待你确认命令). User can
+  // still collapse afterward; the dock also surfaces the ask.
   useEffect(() => {
-    if (!pinned) {
-      setOpen(live || failed);
+    if (waiting) {
+      setOpen(true);
     }
-  }, [live, failed, pinned]);
+  }, [waiting]);
+  useEffect(() => {
+    if (waiting || pinned) {
+      return;
+    }
+    setOpen(live || failed);
+  }, [live, failed, pinned, waiting]);
   const steps = toolCount ? `${toolCount} 步` : "";
   const label = waiting
     ? ["等待确认", steps, durationLabel, usageLabel].filter(Boolean).join(" · ")

@@ -2120,9 +2120,11 @@ a:has(> .icon:only-child) {
 }
 
 .md__stream-tail {
-  margin: 0;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.md__stream-tail > :first-child {
+  margin-top: 0;
 }
 
 .md p {

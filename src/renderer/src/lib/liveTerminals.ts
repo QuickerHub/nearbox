@@ -22,6 +22,23 @@ export function isLiveTerminal(terminal: Pick<DockTerminal, "status">): boolean 
 }
 
 /**
+ * Header row for the dock: a shell waiting for permission beats any still-running
+ * one, so a collapsed bar still says 等待确认 instead of 运行中.
+ */
+export function pickDockLead(terminals: readonly DockTerminal[]): DockTerminal | undefined {
+  let running: DockTerminal | undefined;
+  for (const terminal of terminals) {
+    if (terminal.status === "waiting") {
+      return terminal;
+    }
+    if (!running && terminal.status === "running") {
+      running = terminal;
+    }
+  }
+  return running ?? terminals[0];
+}
+
+/**
  * Collapse tool events into one row per shell. A pending permission on a
  * call that has not appeared yet still gets a row, so the dock can ask
  * before the transcript has loaded.

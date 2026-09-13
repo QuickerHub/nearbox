@@ -7,6 +7,7 @@ import {
   formatTerminalDuration,
   isLiveTerminal,
   lastOutputLine,
+  pickDockLead,
   terminalTitle,
 } from "./liveTerminals.ts";
 
@@ -69,3 +70,21 @@ test("labels and the last output line are what the dock shows", () => {
   assert.equal(lastOutputLine("   \n\t"), "");
   assert.equal(formatTerminalDuration("2026-09-07T00:00:00.000Z", "2026-09-07T00:01:05.000Z"), "1 分 5 秒");
 });
+
+test("pickDockLead prefers a waiting shell over a still-running one", () => {
+  const terminals = collectDockTerminals(
+    [ev(1, "tool", shell("s1", { command: "npm test" })), ev(2, "tool", shell("s2", { command: "dir" }))],
+    pending,
+  );
+  assert.deepEqual(
+    terminals.map((item) => [item.id, item.status]),
+    [
+      ["s1", "running"],
+      ["s2", "waiting"],
+    ],
+  );
+  assert.equal(pickDockLead(terminals)?.id, "s2");
+  assert.equal(pickDockLead(terminals.filter((item) => item.id === "s1"))?.id, "s1");
+  assert.equal(pickDockLead([]), undefined);
+});
+
