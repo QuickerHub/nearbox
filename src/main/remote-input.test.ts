@@ -119,3 +119,9 @@ test("control messages are validated before they reach the injector", () => {
     crop: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
   });
 });
+
+test("clampQuality repairs a poisoned base when the patch omits fields", () => {
+  const poisoned = { quality: Number.NaN, fps: Number.POSITIVE_INFINITY, maxWidth: Number.NaN };
+  assert.deepEqual(clampQuality(undefined, poisoned), { quality: 72, fps: 12, maxWidth: 1920 });
+  assert.deepEqual(clampQuality({ fps: 8 }, poisoned), { quality: 72, fps: 8, maxWidth: 1920 });
+});
