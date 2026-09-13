@@ -77,3 +77,17 @@ export function countActiveRuns(runs: readonly Pick<AgentRun, "status">[]): numb
   return count;
 }
 
+/** Top-level turns for one task (thread list); delegated children are omitted. */
+export function topLevelTurnsForTask<T extends Pick<AgentRun, "taskId" | "parentRunId">>(
+  runs: readonly T[],
+  taskId: string,
+): T[] {
+  const out: T[] = [];
+  for (const run of runs) {
+    if (run.taskId === taskId && !hasParentRunId(run)) {
+      out.push(run);
+    }
+  }
+  return out;
+}
+
