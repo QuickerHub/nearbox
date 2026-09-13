@@ -106,3 +106,11 @@ test("model ids are trimmed and must fit on a command line", () => {
   assert.equal(normalizeModelId("bad\nid"), undefined);
   assert.equal(normalizeModelId(undefined), undefined);
 });
+
+test("MODEL_LIST_ARGS pins catalog CLIs and leaves Claude without a list command", () => {
+  assert.deepEqual(MODEL_LIST_ARGS.cursor, ["--list-models"]);
+  assert.deepEqual(MODEL_LIST_ARGS.codex, ["debug", "models"]);
+  assert.deepEqual(MODEL_LIST_ARGS.grok, ["models"]);
+  assert.deepEqual(MODEL_LIST_ARGS.opencode, ["models"]);
+  assert.equal(MODEL_LIST_ARGS.claude, undefined);
+});
