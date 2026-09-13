@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { PendingPermission, ToolCall, ToolKind } from "@shared/protocol";
 import { diffLines, displayTool, groupLabel, hasDetail, isFailed, prettyToolName, statusLabel, toolVerb } from "../lib/runTranscript";
 import { Icon, TOOL_ICONS } from "./Icons";
@@ -13,7 +13,7 @@ interface AskProps {
  * into its details, terminals as small cards, edits with a diff, and runs of
  * lookups folded into a single "读取了 4 个文件".
  */
-export function ToolRow({ tool: recorded, pending, onResolve }: { tool: ToolCall } & AskProps): JSX.Element {
+export const ToolRow = memo(function ToolRow({ tool: recorded, pending, onResolve }: { tool: ToolCall } & AskProps): JSX.Element {
   const tool = useMemo(() => displayTool(recorded), [recorded]);
   if (tool.kind === "shell") {
     return <ShellCard tool={tool} pending={pending} onResolve={onResolve} />;
@@ -22,9 +22,9 @@ export function ToolRow({ tool: recorded, pending, onResolve }: { tool: ToolCall
     return <FileChangeRow tool={tool} />;
   }
   return <GenericRow tool={tool} />;
-}
+});
 
-export function ToolGroupRow({ kind, tools, pending, onResolve }: { kind: ToolKind; tools: ToolCall[] } & AskProps): JSX.Element {
+export const ToolGroupRow = memo(function ToolGroupRow({ kind, tools, pending, onResolve }: { kind: ToolKind; tools: ToolCall[] } & AskProps): JSX.Element {
   const waiting = Boolean(pending && tools.some((tool) => tool.id === pending.toolCallId));
   const [open, setOpen] = useState(waiting);
   useEffect(() => {
@@ -52,7 +52,7 @@ export function ToolGroupRow({ kind, tools, pending, onResolve }: { kind: ToolKi
       ) : null}
     </div>
   );
-}
+});
 
 export function PermissionAsk({ pending, onResolve }: { pending: PendingPermission; onResolve(optionId: string): void }): JSX.Element {
   const [busy, setBusy] = useState(false);

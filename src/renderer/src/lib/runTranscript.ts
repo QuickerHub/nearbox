@@ -41,62 +41,107 @@ export function isNoisyStatus(text: string): boolean {
   return NOISY_STATUS.test(text.trim());
 }
 
+/** Mutable cursor that applies only new events so a live turn does not rescan history. */
+export interface TranscriptCursor {
+  items: TranscriptItem[];
+  toolIndex: Map<string, number>;
+  /** How many events from the front of the list have already been applied. */
+  count: number;
+  /** `seq` of events[count - 1], used to detect a replaced history. */
+  lastSeq: number;
+}
+
+export function createTranscriptCursor(): TranscriptCursor {
+  return { items: [], toolIndex: new Map(), count: 0, lastSeq: 0 };
+}
+
 /**
  * Turn the raw event stream into ordered items. Tool events that share an id
  * collapse into one item that keeps the position of the first and the state
  * of the latest; text and thinking deltas merge with their neighbours.
  */
 export function buildTranscript(events: readonly RunEvent[]): TranscriptItem[] {
-  const items: TranscriptItem[] = [];
-  const toolIndex = new Map<string, number>();
-  for (const event of events) {
-    switch (event.kind) {
-      case "thinking":
-      case "text": {
-        const last = items.at(-1);
-        if (last?.type === event.kind) {
-          // Streamed fragments continue the previous text exactly; whole messages get a line break between them.
-          last.text = event.delta ? last.text + event.text : joinText(last.text, event.text);
-        } else {
-          items.push({ type: event.kind, text: event.text, seq: event.seq });
-        }
-        break;
-      }
-      case "tool": {
-        const tool = event.tool ?? legacyTool(event.text, event.seq, items);
-        if (!tool) {
-          break;
-        }
-        const existing = toolIndex.get(tool.id);
-        if (existing !== undefined) {
-          const item = items[existing];
-          if (item?.type === "tool") {
-            item.tool = { ...item.tool, ...tool };
-          }
-        } else {
-          toolIndex.set(tool.id, items.length);
-          items.push({ type: "tool", tool, seq: event.seq });
-        }
-        break;
-      }
-      case "status":
-        if (!isNoisyStatus(event.text)) {
-          items.push({ type: "status", text: event.text, seq: event.seq });
-        }
-        break;
-      case "stderr":
-      case "raw":
-        items.push({ type: event.kind, text: event.text, seq: event.seq });
-        break;
-      case "result":
-        break;
+  return advanceTranscript(createTranscriptCursor(), events).items;
+}
+
+/**
+ * Apply only the suffix of `events` that this cursor has not seen. When the
+ * list was replaced (shorter, or a different event at the previous tip), the
+ * cursor rebuilds from scratch. Item object identity is kept for rows the
+ * suffix did not touch, so memoised work rows stay mounted while the answer streams.
+ */
+export function advanceTranscript(cursor: TranscriptCursor, events: readonly RunEvent[]): TranscriptCursor {
+  if (cursor.count > 0) {
+    const tip = events[cursor.count - 1];
+    if (events.length < cursor.count || !tip || tip.seq !== cursor.lastSeq) {
+      cursor = createTranscriptCursor();
     }
   }
-  return items;
+  if (events.length === cursor.count) {
+    return cursor;
+  }
+  // Copy-on-write: only clone the list (and a mutated tip) when the suffix writes.
+  const items = cursor.items.slice();
+  const toolIndex = new Map(cursor.toolIndex);
+  for (let index = cursor.count; index < events.length; index += 1) {
+    applyEvent(items, toolIndex, events[index]!);
+  }
+  const last = events[events.length - 1];
+  return {
+    items,
+    toolIndex,
+    count: events.length,
+    lastSeq: last?.seq ?? 0,
+  };
+}
+
+function applyEvent(items: TranscriptItem[], toolIndex: Map<string, number>, event: RunEvent): void {
+  switch (event.kind) {
+    case "thinking":
+    case "text": {
+      const last = items.at(-1);
+      if (last?.type === event.kind) {
+        // Streamed fragments continue the previous text exactly; whole messages get a line break between them.
+        const text = event.delta ? last.text + event.text : joinText(last.text, event.text);
+        items[items.length - 1] = { ...last, text };
+      } else {
+        items.push({ type: event.kind, text: event.text, seq: event.seq });
+      }
+      break;
+    }
+    case "tool": {
+      const tool = event.tool ?? legacyTool(event.text, event.seq, items);
+      if (!tool) {
+        break;
+      }
+      const existing = toolIndex.get(tool.id);
+      if (existing !== undefined) {
+        const item = items[existing];
+        if (item?.type === "tool") {
+          items[existing] = { ...item, tool: { ...item.tool, ...tool } };
+        }
+      } else {
+        toolIndex.set(tool.id, items.length);
+        items.push({ type: "tool", tool, seq: event.seq });
+      }
+      break;
+    }
+    case "status":
+      if (!isNoisyStatus(event.text)) {
+        items.push({ type: "status", text: event.text, seq: event.seq });
+      }
+      break;
+    case "stderr":
+    case "raw":
+      items.push({ type: event.kind, text: event.text, seq: event.seq });
+      break;
+    case "result":
+      break;
+  }
 }
 
 /** Split items into the collapsible work section and the final answer, grouping rows for display. */
-export function summarizeTranscript(items: readonly TranscriptItem[]): Transcript {
+export function summarizeTranscript(items: readonly TranscriptItem[], previous?: Transcript | null): Transcript {
   let lastWork = -1;
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index]!;
@@ -112,7 +157,8 @@ export function summarizeTranscript(items: readonly TranscriptItem[]): Transcrip
     .filter(Boolean)
     .join("\n\n");
   // Diagnostics that arrive after the answer (stderr on exit, a late status) still belong to the work section.
-  const work = groupRows([...head, ...tail.filter((item) => item.type !== "text")]);
+  const workItems = [...head, ...tail.filter((item) => item.type !== "text")];
+  const work = reuseWorkRows(groupRows(workItems), previous?.work);
   const tools = items.filter((item): item is Extract<TranscriptItem, { type: "tool" }> => item.type === "tool").map((item) => item.tool);
   return {
     work,
@@ -156,6 +202,42 @@ function groupRows(items: readonly TranscriptItem[]): WorkRow[] {
     }
   }
   return rows;
+}
+
+/** Keep prior WorkRow object identity when the grouped content did not change. */
+function reuseWorkRows(next: WorkRow[], previous: WorkRow[] | undefined): WorkRow[] {
+  if (!previous || previous.length !== next.length) {
+    return next;
+  }
+  let changed = false;
+  const out = next.map((row, index) => {
+    const prior = previous[index]!;
+    if (sameWorkRow(prior, row)) {
+      return prior;
+    }
+    changed = true;
+    return row;
+  });
+  return changed ? out : previous;
+}
+
+function sameWorkRow(a: WorkRow, b: WorkRow): boolean {
+  if (a.type !== b.type || a.seq !== b.seq) {
+    return false;
+  }
+  switch (a.type) {
+    case "tool":
+      return b.type === "tool" && a.tool === b.tool;
+    case "tools":
+      return b.type === "tools" && a.kind === b.kind && a.tools.length === b.tools.length && a.tools.every((tool, index) => tool === b.tools[index]);
+    case "thinking":
+    case "text":
+    case "status":
+      return b.type === a.type && a.text === b.text;
+    case "stderr":
+    case "raw":
+      return b.type === a.type && a.lines.length === b.lines.length && a.lines.every((line, index) => line === b.lines[index]);
+  }
 }
 
 // ---------------------------------------------------------------------------
