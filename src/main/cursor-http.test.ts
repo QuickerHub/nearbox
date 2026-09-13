@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isTransientAgentTransportError, preferHttp1InCliConfig } from "./cursor-http.ts";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ensureCursorAgentHttp1, isTransientAgentTransportError, preferHttp1InCliConfig, resetCursorHttp1Ensure } from "./cursor-http.ts";
 
 test("the HTTP/2 keepalive drop cursor-agent reports is treated as transient", () => {
   assert.equal(
@@ -30,4 +33,21 @@ test("preferHttp1InCliConfig only writes when the flag is missing or false", () 
     next: { network: { useHttp1ForAgent: true } },
     changed: true,
   });
+});
+
+test("ensureCursorAgentHttp1 creates parent dirs when the config path is missing", () => {
+  const root = mkdtempSync(join(tmpdir(), "nearbox-cursor-http-"));
+  const home = join(root, "home");
+  try {
+    resetCursorHttp1Ensure();
+    const changed = ensureCursorAgentHttp1({ CURSOR_CONFIG_DIR: join(home, "nested", "cursor") }, home);
+    assert.equal(changed, true);
+    const file = join(home, "nested", "cursor", "cli-config.json");
+    assert.equal(existsSync(file), true);
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as { network?: { useHttp1ForAgent?: boolean } };
+    assert.equal(parsed.network?.useHttp1ForAgent, true);
+  } finally {
+    resetCursorHttp1Ensure();
+    rmSync(root, { recursive: true, force: true });
+  }
 });

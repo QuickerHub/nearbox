@@ -33,7 +33,11 @@ export function trayPhonesLabel(phones: number): string {
 
 /** Host:port row, or the empty-LAN placeholder. */
 export function trayHostLabel(selectedHost: string | undefined, port: number | undefined): string {
-  return selectedHost ? `${selectedHost}:${port}` : "未发现局域网地址";
+  // Port must be a real listening port; 0 / negative / NaN would render as "host:0".
+  if (!selectedHost || port == null || !Number.isFinite(port) || port <= 0) {
+    return "未发现局域网地址";
+  }
+  return `${selectedHost}:${port}`;
 }
 
 /**

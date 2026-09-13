@@ -1,4 +1,4 @@
-import { createWriteStream, existsSync } from "node:fs";
+import { createWriteStream, existsSync, readdirSync } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AppUpdateStatus } from "@shared/protocol";
@@ -206,17 +206,49 @@ export class AppUpdater {
         await new Promise<void>((resolve, reject) => {
           file.write(value, (error) => (error ? reject(error) : resolve()));
         });
-        this.snapshot = { ...this.snapshot, downloading: true, progress: total ? received / total : 0 };
+        const ratio = total > 0 ? received / total : 0;
+        this.snapshot = { ...this.snapshot, downloading: true, progress: clampProgress(ratio) };
       }
       await new Promise<void>((resolve, reject) => file.end((error: NodeJS.ErrnoException | null | undefined) => (error ? reject(error) : resolve())));
     } catch (error) {
+      try {
+        await reader.cancel();
+      } catch {
+        /* body already closed */
+      }
       file.destroy();
       await unlink(dest).catch(() => undefined);
       throw error;
     }
+    await pruneOldInstallers(this.options.cacheDir, dest);
     this.readyFile = dest;
     this.readyVersion = version;
     this.snapshot = { ...this.snapshot, downloading: false, progress: 1 };
     return dest;
   }
+}
+
+/** Keep progress in [0, 1] even when Content-Length is wrong or missing mid-stream. */
+export function clampProgress(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  return value >= 1 ? 1 : value;
+}
+
+/** Drop older Nearbox-*-win-x64.exe files so the cache dir does not grow forever. */
+export async function pruneOldInstallers(cacheDir: string, keep: string): Promise<void> {
+  let names: string[];
+  try {
+    names = readdirSync(cacheDir);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    names
+      .filter((name) => /^Nearbox-.*-win-x64\.exe$/i.test(name))
+      .map((name) => join(cacheDir, name))
+      .filter((file) => file !== keep)
+      .map((file) => unlink(file).catch(() => undefined)),
+  );
 }
