@@ -229,3 +229,8 @@ test("the row agent: working now, else last turn, else the chip", () => {
   assert.equal(rowAgent(t, undefined, run({ id: "b", taskId: "t1", agent: "codex" })), "codex");
   assert.equal(rowAgent(t, undefined, undefined), "claude");
 });
+
+test("seenMarker is empty without a run and joins id with status", () => {
+  assert.equal(seenMarker(undefined), "");
+  assert.equal(seenMarker(run({ id: "r1", taskId: "t1", status: "failed" })), "r1|failed");
+});

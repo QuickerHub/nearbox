@@ -105,3 +105,15 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+test("an unclosed fence is still a code block; underscore HRs and mixed lists parse", () => {
+  const open = parseBlocks("```ts\nconst x = 1");
+  assert.deepEqual(open, [{ type: "code", lang: "ts", body: "const x = 1" }]);
+  const hrs = parseBlocks("***\n\n___\n\n* item\n\n1. first");
+  assert.deepEqual(
+    hrs.map((block) => block.type),
+    ["hr", "hr", "list", "list"],
+  );
+  assert.equal(hrs[2]?.type === "list" ? hrs[2].ordered : null, false);
+  assert.equal(hrs[3]?.type === "list" ? hrs[3].ordered : null, true);
+});

@@ -62,3 +62,11 @@ test("a delegated prompt says who is asking and where to work; follow-ups carry 
   assert.match(first, /项目「nearbox」（D:\\source\\nearbox）/);
   assert.equal(buildDelegatedPrompt("再检查一遍", "Cursor Agent", project, true), "再检查一遍");
 });
+
+test("imagePaths treats IMAGE/* with parameters as images", () => {
+  assert.deepEqual(
+    imagePaths([{ name: "x", path: "/tmp/x", mediaType: " IMAGE/PNG; charset=binary " }]),
+    ["/tmp/x"],
+  );
+  assert.deepEqual(imagePaths([{ name: "x.png", path: "/tmp/x", mediaType: "" }]), []);
+});

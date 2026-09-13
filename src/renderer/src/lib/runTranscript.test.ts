@@ -235,3 +235,33 @@ test("advanceTranscript rebuilds when history is replaced", () => {
   assert.equal(cursor.count, 1);
   assert.equal(cursor.items[0]?.type === "text" ? cursor.items[0].text : "", "new");
 });
+
+test("toolVerb and groupLabel cover the remaining kinds", () => {
+  assert.equal(toolVerb({ kind: "shell", status: "running" }), "运行");
+  assert.equal(toolVerb({ kind: "write", status: "ok" }), "写入了");
+  assert.equal(toolVerb({ kind: "edit", status: "running" }), "编辑");
+  assert.equal(toolVerb({ kind: "delete", status: "ok" }), "删除了");
+  assert.equal(toolVerb({ kind: "glob", status: "ok" }), "查找了");
+  assert.equal(toolVerb({ kind: "ls", status: "running" }), "列出");
+  assert.equal(toolVerb({ kind: "web", status: "ok" }), "查询了");
+  assert.equal(toolVerb({ kind: "task", status: "running" }), "子任务");
+  assert.equal(toolVerb({ kind: "todo", status: "ok" }), "更新了待办");
+  assert.equal(toolVerb({ kind: "mcp", status: "running" }), "调用");
+  assert.equal(toolVerb({ kind: "other", status: "ok" }), "调用了");
+  assert.equal(groupLabel("shell", 2, true), "运行 2 条命令");
+  assert.equal(groupLabel("write", 1, false), "写入了 1 个文件");
+  assert.equal(groupLabel("edit", 3, false), "编辑了 3 处");
+  assert.equal(groupLabel("ls", 1, false), "列出了 1 个目录");
+  assert.equal(groupLabel("task", 2, true), "子任务 2 个子任务");
+  assert.equal(groupLabel("todo", 1, false), "更新了待办 1 次");
+});
+
+test("displayTool unwraps totalFiles wrappers and deleted-file diffs number from 1", () => {
+  const files = displayTool(call("g", { kind: "glob", status: "ok", output: '{"totalFiles":12,"truncated":true}' }));
+  assert.equal(files.output, "12 个文件（结果已截断）");
+  const deleted = diffLines("--- a/gone.txt\n+++ /dev/null\n-old\n-line");
+  assert.deepEqual(
+    deleted.filter((line) => line.tag === "del").map((line) => line.oldNo),
+    [1, 2],
+  );
+});
