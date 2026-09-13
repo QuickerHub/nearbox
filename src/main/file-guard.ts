@@ -3,7 +3,8 @@
  * protocol barrel so `node --test` can cover the edges without path aliases.
  */
 
-import { basename, extname } from "node:path";
+import { mkdir, open } from "node:fs/promises";
+import { basename, extname, join } from "node:path";
 
 const WINDOWS_RESERVED = new Set([
   "CON",
@@ -81,4 +82,28 @@ export function assertAllowedFile(fileName: string, mediaType: string): void {
   ) {
     throw Object.assign(new Error("出于安全考虑，不接收可执行文件。"), { code: "FILE_FORBIDDEN" });
   }
+}
+
+/**
+ * Reserve `fileName` in `directory` with O_EXCL and leave the empty file in
+ * place so a concurrent caller cannot claim the same name before rename.
+ */
+export async function uniquePath(directory: string, fileName: string): Promise<string> {
+  const ext = extname(fileName);
+  const stem = fileName.slice(0, fileName.length - ext.length);
+  await mkdir(directory, { recursive: true });
+  let candidate = join(directory, fileName);
+  for (let index = 1; index < 1000; index += 1) {
+    try {
+      const handle = await open(candidate, "wx");
+      await handle.close();
+      return candidate;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw error;
+      }
+      candidate = join(directory, `${stem} (${index})${ext}`);
+    }
+  }
+  throw new Error("无法生成不冲突的文件名。");
 }

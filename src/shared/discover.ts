@@ -54,6 +54,24 @@ export function liveInvite<T extends { expiresAt: string }>(invite: T | null | u
   return invite;
 }
 
+/**
+ * Which LAN address to advertise. Keep `selected` while it is still on an
+ * adapter; otherwise the user's preferred address, else the first one.
+ */
+export function pickLanHost(addresses: readonly string[], selected: string, preferred?: string | null): string {
+  if (selected && addresses.includes(selected)) {
+    return selected;
+  }
+  if (preferred && addresses.includes(preferred)) {
+    return preferred;
+  }
+  return addresses[0] ?? "";
+}
+
+function isValidPort(port: number): boolean {
+  return Number.isInteger(port) && port >= 1 && port <= 65535;
+}
+
 export function parseDiscover(raw: unknown): DiscoverInfo | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -70,7 +88,7 @@ export function parseDiscover(raw: unknown): DiscoverInfo | null {
   const host = typeof value.host === "string" ? value.host.trim() : "";
   const port = Number(value.port ?? DEFAULT_PORT);
   const version = typeof value.version === "string" ? value.version : "";
-  if (!name || !host || !Number.isInteger(port) || port < 1 || port > 65535) {
+  if (!name || !host || !isValidPort(port)) {
     return null;
   }
   return {
@@ -97,13 +115,17 @@ export function parseInviteText(text: string): { host: string; port: number; tok
     if (url.protocol === "nearbox:" && url.hostname === "connect") {
       const host = url.searchParams.get("host")?.trim() ?? "";
       const port = Number(url.searchParams.get("port") ?? DEFAULT_PORT);
-      if (host && token) {
-        return { host, port: Number.isInteger(port) ? port : DEFAULT_PORT, token };
+      if (host && token && isValidPort(port)) {
+        return { host, port, token };
       }
       return null;
     }
     if ((url.protocol === "http:" || url.protocol === "https:") && url.hostname && token) {
-      return { host: url.hostname, port: url.port ? Number(url.port) : DEFAULT_PORT, token };
+      const port = url.port ? Number(url.port) : DEFAULT_PORT;
+      if (!isValidPort(port)) {
+        return null;
+      }
+      return { host: url.hostname, port, token };
     }
   } catch {
     return null;
