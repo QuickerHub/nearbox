@@ -119,3 +119,16 @@ test("control messages are validated before they reach the injector", () => {
     crop: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
   });
 });
+
+test("remote input caps wheel notches, text length, and combo size", () => {
+  assert.equal(wheelCommand(1000), "W 4800");
+  assert.equal(wheelCommand(-1000), "W -4800");
+  const long = "x".repeat(600);
+  assert.equal(textCommands(long).length, 512);
+  const parsedText = parseControlMessage(JSON.stringify({ t: "text", value: long }));
+  assert.equal(parsedText && parsedText.t === "text" ? parsedText.value.length : 0, 512);
+  const codes = Array.from({ length: 20 }, () => "KeyA");
+  const combo = translateInput({ t: "combo", codes });
+  // 8 keys → 8 down + 8 up
+  assert.equal(combo.length, 16);
+});

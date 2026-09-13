@@ -11,7 +11,7 @@ export function listPrivateLanAddresses(): string[] {
       if (item.internal || item.family !== "IPv4") {
         continue;
       }
-      if (isPrivateLanAddress(item.address) && !seen.has(item.address)) {
+      if (isAdvertisableLanAddress(item.address) && !seen.has(item.address)) {
         seen.add(item.address);
         ranked.push({ address: item.address, rank: rankInterface(name, item.address) });
       }
@@ -25,11 +25,13 @@ function rankInterface(name: string, address: string): number {
   if (VIRTUAL_ADAPTER.test(name)) {
     rank += 100;
   }
-  // 192.168.x.x home routers first, then 10.x corporate, then 172.16/12.
+  // 192.168.x.x home routers first, then 10.x corporate, then 172.16/12, then APIPA last.
   if (address.startsWith("192.168.")) {
     rank += 0;
   } else if (address.startsWith("10.")) {
     rank += 1;
+  } else if (isLinkLocalAddress(address)) {
+    rank += 20;
   } else {
     rank += 2;
   }
@@ -49,14 +51,30 @@ export function isPrivateLanAddress(ipText: string | undefined): boolean {
   return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
+/**
+ * IPv4 link-local (APIPA) 169.254/16. Used when DHCP fails or two devices share a
+ * direct cable; not RFC1918, but still the same L2 segment as the phone.
+ */
+export function isLinkLocalAddress(ipText: string | undefined): boolean {
+  const parts = (ipText ?? "").split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  return parts[0] === 169 && parts[1] === 254;
+}
+
+/** Addresses we may put on the QR / UDP beacon / Settings picker. */
+export function isAdvertisableLanAddress(ipText: string | undefined): boolean {
+  return isPrivateLanAddress(ipText) || isLinkLocalAddress(ipText);
+}
+
 export function isLoopbackOrPrivate(ipText: string | undefined): boolean {
   const value = ipText ?? "";
-  return (
-    value === "127.0.0.1" ||
-    value === "::1" ||
-    value === "::ffff:127.0.0.1" ||
-    isPrivateLanAddress(normalizeRemoteIp(value))
-  );
+  if (value === "127.0.0.1" || value === "::1" || value === "::ffff:127.0.0.1") {
+    return true;
+  }
+  const normalized = normalizeRemoteIp(value);
+  return isPrivateLanAddress(normalized) || isLinkLocalAddress(normalized);
 }
 
 export function normalizeRemoteIp(ipText: string | undefined): string {

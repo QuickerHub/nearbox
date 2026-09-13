@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isPrivateLanAddress, isTransientSocketError, normalizeRemoteIp, refreshPrivateLanAddresses, sameStringList } from "./network.ts";
+import { isAdvertisableLanAddress, isLinkLocalAddress, isLoopbackOrPrivate, isPrivateLanAddress, isTransientSocketError, normalizeRemoteIp, refreshPrivateLanAddresses, sameStringList } from "./network.ts";
 
 test("only RFC1918 addresses count as LAN", () => {
   assert.equal(isPrivateLanAddress("192.168.1.8"), true);
@@ -32,4 +32,14 @@ test("refreshPrivateLanAddresses reuses previous when unchanged", () => {
   const first = refreshPrivateLanAddresses(null);
   const again = refreshPrivateLanAddresses(first);
   assert.equal(again, first);
+});
+
+test("link-local APIPA is nearby for allow-list and advertise", () => {
+  assert.equal(isLinkLocalAddress("169.254.10.20"), true);
+  assert.equal(isLinkLocalAddress("169.253.0.1"), false);
+  assert.equal(isPrivateLanAddress("169.254.10.20"), false);
+  assert.equal(isAdvertisableLanAddress("169.254.10.20"), true);
+  assert.equal(isLoopbackOrPrivate("169.254.1.1"), true);
+  assert.equal(isLoopbackOrPrivate("::ffff:169.254.1.1"), true);
+  assert.equal(isLoopbackOrPrivate("8.8.8.8"), false);
 });
