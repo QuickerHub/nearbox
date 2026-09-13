@@ -1,6 +1,6 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 // cursor-agent talks to the model over HTTP/2 with a 5 s keepalive ping. A
 // long turn (thinking, tools, a slow hop) that does not answer the ping in
@@ -65,10 +65,17 @@ export function ensureCursorAgentHttp1(env: NodeJS.ProcessEnv = process.env, hom
   try {
     let raw: unknown = {};
     if (existsSync(path)) {
-      raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      try {
+        raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      } catch {
+        // Corrupt cli-config.json used to abort the whole ensure (and warn on every
+        // warm start). Treat it as empty so we can rewrite the HTTP/1.1 flag.
+        raw = {};
+      }
     }
     const { next, changed } = preferHttp1InCliConfig(raw);
     if (changed) {
+      mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
     }
     ensured = true;

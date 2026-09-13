@@ -33,7 +33,9 @@ export function trayPhonesLabel(phones: number): string {
 
 /** Host:port row, or the empty-LAN placeholder. */
 export function trayHostLabel(selectedHost: string | undefined, port: number | undefined): string {
-  return selectedHost ? `${selectedHost}:${port}` : "未发现局域网地址";
+  // Whitespace-only hosts used to render as "  :7788" in the tray.
+  const host = typeof selectedHost === "string" ? selectedHost.trim() : "";
+  return host ? `${host}:${port}` : "未发现局域网地址";
 }
 
 /**
