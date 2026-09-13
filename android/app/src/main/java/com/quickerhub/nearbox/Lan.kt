@@ -41,11 +41,17 @@ object Lan {
         } ?: return result
         for (nic in interfaces) {
             try {
-                if (nic.isLoopback || !nic.isUp || nic.name in networks.nonLanInterfaces) {
+                if (nic.isLoopback || !nic.isUp) {
                     continue
                 }
+                // Cellular / generic VPN tunnels are skipped for RFC1918, but Tailscale-style
+                // CGNAT (100.64/10) still means the PC may be on the same overlay.
+                val skipSiteLocal = nic.name in networks.nonLanInterfaces
                 for (address in nic.inetAddresses) {
-                    if (address is Inet4Address && address.isSiteLocalAddress) {
+                    if (address !is Inet4Address) {
+                        continue
+                    }
+                    if (isCgnatAddress(address) || (address.isSiteLocalAddress && !skipSiteLocal)) {
                         result.add(address)
                     }
                 }
@@ -54,6 +60,18 @@ object Lan {
             }
         }
         return result
+    }
+
+
+    /** Tailscale / ZeroTier CGNAT 100.64.0.0/10 — reachable like a LAN when Wi-Fi is not shared. */
+    fun isCgnatAddress(address: Inet4Address): Boolean {
+        val bytes = address.address
+        if (bytes.size != 4) {
+            return false
+        }
+        val a = bytes[0].toInt() and 0xff
+        val b = bytes[1].toInt() and 0xff
+        return a == 100 && b in 64..127
     }
 
     /** What the system knows about the networks that are up right now. */

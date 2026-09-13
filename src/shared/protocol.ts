@@ -625,6 +625,13 @@ export const FORBIDDEN_EXTENSIONS = [
   ".reg",
   ".url",
   ".apk",
+  ".cpl",
+  ".msix",
+  ".appx",
+  ".command",
+  ".desktop",
+  ".workflow",
+  ".action",
 ];
 
 export function isImageMediaType(mediaType: string | undefined): boolean {

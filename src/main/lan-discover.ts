@@ -5,6 +5,7 @@ import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import type { DeviceCandidate, DevicePlatform } from "@shared/protocol";
 import { isPrivateLanAddress } from "./network";
+import { appendSshBanner } from "./ssh-banner";
 
 const SSH_PORT = 22;
 const CONNECT_TIMEOUT_MS = 700;
@@ -121,6 +122,7 @@ export interface PortProbe {
   banner?: string;
 }
 
+
 /** Connect to host:port and read the SSH identification line if one arrives. */
 export function probeSshPort(host: string, port = SSH_PORT): Promise<PortProbe> {
   return new Promise((resolve) => {
@@ -140,9 +142,10 @@ export function probeSshPort(host: string, port = SSH_PORT): Promise<PortProbe> 
       setTimeout(() => finish({ reachable: true, banner: banner.trim() || undefined }), BANNER_TIMEOUT_MS);
     });
     socket.on("data", (chunk: Buffer) => {
-      banner += chunk.toString("latin1");
-      if (banner.includes("\n")) {
-        finish({ reachable: true, banner: banner.split("\n")[0]!.trim() });
+      const next = appendSshBanner(banner, chunk);
+      banner = next.banner;
+      if (next.done) {
+        finish({ reachable: true, banner: banner.split("\n")[0]!.trim() || undefined });
       }
     });
     socket.once("error", () => {

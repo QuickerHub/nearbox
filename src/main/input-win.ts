@@ -14,6 +14,21 @@ export interface InputSink {
   dispose(): void;
 }
 
+/** How many injector lines we keep while PowerShell is still starting. */
+export const MAX_PENDING_INPUT_COMMANDS = 256;
+
+/** Append commands, dropping the oldest when the queue would exceed `max`. */
+export function enqueueInputCommands(pending: string[], commands: readonly string[], max = MAX_PENDING_INPUT_COMMANDS): string[] {
+  if (commands.length === 0) {
+    return pending;
+  }
+  const next = pending.length ? pending.concat(commands as string[]) : commands.slice();
+  if (next.length <= max) {
+    return next;
+  }
+  return next.slice(next.length - max);
+}
+
 // C# compiled once via Add-Type. Only user32 is needed, so it works on stock
 // Windows PowerShell without extra assemblies. "NB_READY" tells us the loop is up.
 const CSHARP = String.raw`
@@ -92,7 +107,7 @@ class WindowsInputInjector implements InputSink {
       this.writeNow(commands);
       return;
     }
-    this.pending.push(...commands);
+    this.pending = enqueueInputCommands(this.pending, commands);
     void this.start();
   }
 

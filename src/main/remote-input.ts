@@ -18,6 +18,8 @@ import type {
 
 const ABS_MAX = 65535;
 const WHEEL_STEP = 120;
+/** DOM `KeyboardEvent.code` values are short tokens (`KeyA`, `ControlLeft`). */
+const MAX_KEY_CODE_LENGTH = 32;
 
 const BUTTON_CODE: Record<RemoteButton, number> = { left: 1, right: 2, middle: 3 };
 
@@ -351,11 +353,15 @@ export function parseControlMessage(raw: string): RemoteControlToHost | null {
       return out as RemoteControlToHost;
     }
     case "key":
-      return typeof msg.code === "string" && typeof msg.down === "boolean"
+      return typeof msg.code === "string" &&
+        msg.code.length > 0 &&
+        msg.code.length <= MAX_KEY_CODE_LENGTH &&
+        typeof msg.down === "boolean"
         ? { t: "key", code: msg.code, down: msg.down }
         : null;
     case "combo":
-      return Array.isArray(msg.codes) && msg.codes.every((c) => typeof c === "string")
+      return Array.isArray(msg.codes) &&
+        msg.codes.every((c) => typeof c === "string" && c.length > 0 && c.length <= MAX_KEY_CODE_LENGTH)
         ? { t: "combo", codes: msg.codes as string[] }
         : null;
     case "text":

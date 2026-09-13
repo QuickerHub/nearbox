@@ -119,3 +119,14 @@ test("control messages are validated before they reach the injector", () => {
     crop: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
   });
 });
+
+test("key and combo codes reject oversized strings", () => {
+  const long = "K".repeat(64);
+  assert.equal(parseControlMessage(JSON.stringify({ t: "key", code: long, down: true })), null);
+  assert.equal(parseControlMessage(JSON.stringify({ t: "combo", codes: [long] })), null);
+  assert.deepEqual(parseControlMessage(JSON.stringify({ t: "key", code: "KeyA", down: true })), {
+    t: "key",
+    code: "KeyA",
+    down: true,
+  });
+});
