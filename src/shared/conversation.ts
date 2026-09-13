@@ -32,8 +32,12 @@ export function sessionIdAlongChain(runs: readonly AgentRun[], runId: string | u
  * produce one.
  */
 export function canContinueRun(runs: readonly AgentRun[], run: AgentRun): boolean {
-  const active = run.status === "queued" || run.status === "running";
-  return active || Boolean(sessionIdAlongChain(runs, run.id));
+  return isRunActive(run) || Boolean(sessionIdAlongChain(runs, run.id));
+}
+
+/** Queued or running — shared by composer, list, scheduler, snapshots. */
+export function isRunActive(run: Pick<AgentRun, "status">): boolean {
+  return run.status === "queued" || run.status === "running";
 }
 
 /**
@@ -46,14 +50,27 @@ export function hasParentRunId(run: Pick<AgentRun, "parentRunId">): boolean {
 
 /** Queued/running turn that blocks the composer; delegated children do not. */
 export function isTopLevelActiveRun(run: Pick<AgentRun, "status" | "parentRunId">): boolean {
-  return (run.status === "queued" || run.status === "running") && !hasParentRunId(run);
+  return isRunActive(run) && !hasParentRunId(run);
+}
+
+/** First top-level queued/running turn for a task (composer, plan, dock). */
+export function topLevelActiveRun<T extends Pick<AgentRun, "taskId" | "status" | "parentRunId">>(
+  runs: readonly T[],
+  taskId: string,
+): T | undefined {
+  for (const run of runs) {
+    if (run.taskId === taskId && isTopLevelActiveRun(run)) {
+      return run;
+    }
+  }
+  return undefined;
 }
 
 /** Count queued+running without allocating a filtered array (document title, badges). */
 export function countActiveRuns(runs: readonly Pick<AgentRun, "status">[]): number {
   let count = 0;
   for (const run of runs) {
-    if (run.status === "queued" || run.status === "running") {
+    if (isRunActive(run)) {
       count += 1;
     }
   }

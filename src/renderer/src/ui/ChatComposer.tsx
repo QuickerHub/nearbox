@@ -19,7 +19,7 @@ import {
   type HostSnapshot,
   type IdeModelPref,
   type Project,
-  isTopLevelActiveRun,
+  topLevelActiveRun,
   MAX_FILES_PER_MESSAGE,
   type ModelFamily,
   modelLabel,
@@ -124,7 +124,7 @@ export function ChatComposer({
 
   const project = snapshot.projects.find((item) => item.id === chips.projectId);
   const agentInfo = snapshot.agents.find((item) => item.kind === chips.agent);
-  const activeRun = task ? snapshot.runs.find((run) => run.taskId === task.id && isTopLevelActiveRun(run)) : undefined;
+  const activeRun = task ? topLevelActiveRun(snapshot.runs, task.id) : undefined;
   const [lingerRunId, setLingerRunId] = useState<string | null>(null);
   useEffect(() => {
     setLingerRunId(null);

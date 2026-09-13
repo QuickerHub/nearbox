@@ -1,18 +1,14 @@
-import { hasParentRunId } from "../shared/conversation.ts";
+import { hasParentRunId, isRunActive } from "../shared/conversation.ts";
 import type { AgentRun } from "@shared/protocol";
 
 // Pure: which queued run may start next. Kept free of Node imports so it can
 // be unit-tested under plain `node --test`.
 
-function isActive(run: Pick<AgentRun, "status">): boolean {
-  return run.status === "queued" || run.status === "running";
-}
-
 /** Runs that another run is waiting on (its `nearbox ask` has not returned yet). */
 function waitingParents(runs: readonly AgentRun[]): Set<string> {
   const waiting = new Set<string>();
   for (const run of runs) {
-    if (hasParentRunId(run) && isActive(run)) {
+    if (hasParentRunId(run) && isRunActive(run)) {
       waiting.add(run.parentRunId!);
     }
   }
@@ -39,10 +35,19 @@ function isAncestor(byId: ReadonlyMap<string, AgentRun>, ancestorId: string, run
  * follow-up the user queued behind it still waits its turn).
  */
 export function nextRunnable(runs: readonly AgentRun[], limit: number): AgentRun | undefined {
-  const running = runs.filter((run) => run.status === "running");
   const waiting = waitingParents(runs);
-  const occupying = running.filter((run) => !waiting.has(run.id));
-  if (occupying.length >= Math.max(1, limit || 1)) {
+  const running: AgentRun[] = [];
+  let occupying = 0;
+  for (const run of runs) {
+    if (run.status !== "running") {
+      continue;
+    }
+    running.push(run);
+    if (!waiting.has(run.id)) {
+      occupying += 1;
+    }
+  }
+  if (occupying >= Math.max(1, limit || 1)) {
     return undefined;
   }
   const byId = new Map(runs.map((run) => [run.id, run] as const));
@@ -57,5 +62,5 @@ export function nextRunnable(runs: readonly AgentRun[], limit: number): AgentRun
 /** Active runs started (directly or through further delegation) by `runId`. */
 export function activeDescendants(runs: readonly AgentRun[], runId: string): AgentRun[] {
   const byId = new Map(runs.map((run) => [run.id, run] as const));
-  return runs.filter((run) => isActive(run) && hasParentRunId(run) && isAncestor(byId, runId, run));
+  return runs.filter((run) => isRunActive(run) && hasParentRunId(run) && isAncestor(byId, runId, run));
 }
