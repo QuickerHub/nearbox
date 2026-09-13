@@ -61,6 +61,25 @@ test("closing the connection fails every pending request", async () => {
   await assert.rejects(connection.request("session/new", {}), /已关闭/);
 });
 
+test("string response ids still resolve the matching numeric request", async () => {
+  const { connection, agentSays, flush } = pipes();
+  const pending = connection.request("initialize", { protocolVersion: 1 });
+  await flush();
+  agentSays({ jsonrpc: "2.0", id: "1", result: { protocolVersion: 1 } });
+  assert.deepEqual(await pending, { protocolVersion: 1 });
+});
+
+test("$/cancel_request notifies with the pending request id", async () => {
+  const { connection, sent, flush } = pipes();
+  const out = { id: 0 };
+  void connection.request("session/prompt", { sessionId: "s" }, undefined, out);
+  await flush();
+  assert.equal(out.id, 1);
+  connection.cancelRequest(out.id);
+  await flush();
+  assert.deepEqual(sent[sent.length - 1], { jsonrpc: "2.0", method: "$/cancel_request", params: { id: 1 } });
+});
+
 test("permission policy: full access allows, safe mode asks before commands", () => {
   const options = [
     { optionId: "allow-once", kind: "allow_once" },

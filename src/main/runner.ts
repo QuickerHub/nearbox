@@ -43,6 +43,7 @@ import {
   spawnEnv,
   truncate,
 } from "./agents";
+import { remoteCwdPreflight, remoteDevicePreflight } from "./remote-preflight";
 import { localPreflightFailure, shouldAttemptWarm, warmFallbackStatus } from "./run-start";
 import { type DelegationConfig, withDelegationPath } from "./delegation";
 import { activeDescendants, nextRunnable } from "./scheduler";
@@ -66,8 +67,10 @@ const MAX_CACHED_RUNS = 30;
 const SUMMARY_CHARS = 12_000;
 /** How often streamed text is pushed to the UI while the agent is writing. */
 const STREAM_FLUSH_MS = 120;
-/** A cancelled warm turn that has not acknowledged by then takes its host process down with it. */
+/** Soft cancel first; if the turn ignores it, try $/cancel_request then kill (sole-user only). */
 const CANCEL_GRACE_MS = 10_000;
+/** Extra wait after $/cancel_request before taking the host process down. */
+const FORCE_CANCEL_GRACE_MS = 3_000;
 
 interface ActiveRun {
   run: AgentRun;
@@ -216,7 +219,15 @@ export class RunManager extends EventEmitter {
           this.finish(active, null, undefined);
           return;
         }
-        host.kill();
+        // Session-scoped force: cancel the in-flight prompt RPC before killing the process.
+        this.append(run, "status", "Agent 未及时停止，正在强制取消本轮…");
+        host.forceCancel(sessionId);
+        setTimeout(() => {
+          if (this.active.get(runId) !== active) {
+            return;
+          }
+          host.kill();
+        }, FORCE_CANCEL_GRACE_MS).unref();
       }, CANCEL_GRACE_MS).unref();
       return true;
     }
@@ -411,14 +422,15 @@ export class RunManager extends EventEmitter {
       return;
     }
     const agent = device.agents.find((item) => item.kind === run.agent);
-    if (!agent?.available || !agent.command) {
-      this.append(run, "stderr", `${device.name} 上没有找到 ${AGENT_LABELS[run.agent]} 的命令行工具。请先在那台电脑上安装并登录，然后在设置里重新检测。`);
-      this.finish(state, null, `${device.name} 上未安装对应的 CLI`);
-      return;
-    }
-    if (!device.home) {
-      this.append(run, "stderr", `还不知道 ${device.name} 的用户目录，请在设置里重新检测这台电脑。`);
-      this.finish(state, null, "设备信息不完整");
+    const devicePreflight = remoteDevicePreflight({
+      deviceName: device.name,
+      agentLabel: AGENT_LABELS[run.agent],
+      agentAvailable: Boolean(agent?.available && agent.command),
+      hasHome: Boolean(device.home),
+    });
+    if (devicePreflight) {
+      this.append(run, "stderr", devicePreflight.stderr);
+      this.finish(state, null, devicePreflight.error);
       return;
     }
 
@@ -428,7 +440,7 @@ export class RunManager extends EventEmitter {
     const quote = isWindowsDevice(device) ? quoteForCmd : shQuote;
     const built = buildShellCommandLine(
       run.agent,
-      agent.command,
+      agent!.command!,
       {
         prompt: run.prompt,
         cwd: run.cwd,
@@ -448,9 +460,14 @@ export class RunManager extends EventEmitter {
     );
 
     try {
-      if (!(await directoryExists(device, run.cwd))) {
-        this.append(run, "stderr", `${device.name} 上没有这个目录：${run.cwd}`);
-        this.finish(state, null, "项目目录不存在");
+      const cwdMissing = remoteCwdPreflight({
+        deviceName: device.name,
+        cwd: run.cwd,
+        cwdExists: await directoryExists(device, run.cwd),
+      });
+      if (cwdMissing) {
+        this.append(run, "stderr", cwdMissing.stderr);
+        this.finish(state, null, cwdMissing.error);
         return;
       }
       await uploadFile(device, paths.promptFile, run.prompt);
