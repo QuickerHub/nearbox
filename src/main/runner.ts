@@ -51,6 +51,7 @@ import {
   cancelStartingStatus,
   cancelStoppingProcessStatus,
   markCancelling,
+  warmHostAfterLookup,
   warmStartupSessionToClose,
 } from "./cancel-escalation";
 import { startWarmCancelOnHost } from "./warm-cancel-host";
@@ -358,6 +359,11 @@ export class RunManager extends EventEmitter {
     const settings = this.options.getSettings();
     const override = settings.agents[run.agent]?.command;
     const command = await resolveAgentCommand(run.agent, override);
+    // Stop during CLI resolve: finish cancel before preflight stderr / warm attempt noise.
+    if (state.cancelled) {
+      this.finish(state, null, undefined);
+      return;
+    }
     const preflight = localPreflightFailure({
       agentLabel: AGENT_LABELS[run.agent],
       hasCommand: Boolean(command),
@@ -446,8 +452,16 @@ export class RunManager extends EventEmitter {
     try {
       device = await this.options.resolveDevice(run.deviceId!);
     } catch (error) {
+      if (state.cancelled) {
+        this.finish(state, null, undefined);
+        return;
+      }
       this.append(run, "stderr", error instanceof Error ? error.message : String(error));
       this.finish(state, null, "连不上远程电脑");
+      return;
+    }
+    if (state.cancelled) {
+      this.finish(state, null, undefined);
       return;
     }
     const agent = device.agents.find((item) => item.kind === run.agent);
@@ -488,10 +502,15 @@ export class RunManager extends EventEmitter {
     );
 
     try {
+      const cwdExists = await directoryExists(device, run.cwd);
+      if (state.cancelled) {
+        this.finish(state, null, undefined);
+        return;
+      }
       const cwdMissing = remoteCwdPreflight({
         deviceName: device.name,
         cwd: run.cwd,
-        cwdExists: await directoryExists(device, run.cwd),
+        cwdExists,
       });
       if (cwdMissing) {
         this.append(run, "stderr", cwdMissing.stderr);
@@ -501,11 +520,23 @@ export class RunManager extends EventEmitter {
       await uploadFile(device, paths.promptFile, run.prompt);
       // The local log keeps a copy too, like local runs do.
       await writeFile(join(this.options.runsDir, `${run.id}.prompt.md`), run.prompt, "utf8");
+      if (state.cancelled) {
+        this.finish(state, null, undefined);
+        return;
+      }
       for (const attachment of this.options.attachmentsFor(run)) {
+        if (state.cancelled) {
+          this.finish(state, null, undefined);
+          return;
+        }
         if (!existsSync(attachment.local)) {
           continue;
         }
         await uploadFile(device, attachment.remote, await readFile(attachment.local));
+        if (state.cancelled) {
+          this.finish(state, null, undefined);
+          return;
+        }
         this.append(run, "status", `已复制附件到 ${device.name}：${attachment.remote}`);
       }
     } catch (error) {
@@ -545,13 +576,14 @@ export class RunManager extends EventEmitter {
   private async startWarm(state: ActiveRun, resumeSessionId: string | undefined): Promise<boolean> {
     const run = state.run;
     const host = await this.hosts.host(run.agent);
-    if (!host) {
-      this.append(run, "status", warmFallbackStatus("host-down"));
-      return false;
-    }
-    if (state.cancelled) {
+    const afterHost = warmHostAfterLookup(state.cancelled, Boolean(host));
+    if (afterHost === "cancel") {
       this.finish(state, null, undefined);
       return true;
+    }
+    if (afterHost === "fallback" || !host) {
+      this.append(run, "status", warmFallbackStatus("host-down"));
+      return false;
     }
     // Open the session first: session/new and session/load both teach host.models, so a
     // first turn that picked a model no longer has to fall back to a one-shot process
