@@ -20,14 +20,14 @@ object InviteParser {
         }
         if (uri.scheme == "nearbox" && uri.host == "connect") {
             val host = uri.getQueryParameter("host")?.trim().orEmpty()
-            if (host.isEmpty()) {
+            if (host.isEmpty() || !Lan.isPairableHost(host)) {
                 return null
             }
             return Invite(host, uri.getQueryParameter("port")?.toIntOrNull() ?: 17831, token)
         }
         if (uri.scheme == "http" || uri.scheme == "https") {
             val host = uri.host?.trim().orEmpty()
-            if (host.isEmpty()) {
+            if (host.isEmpty() || !Lan.isPairableHost(host)) {
                 return null
             }
             val port = uri.port.takeIf { it > 0 } ?: 17831

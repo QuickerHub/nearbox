@@ -6,7 +6,7 @@ import type { IncomingMessage } from "node:http";
 import { isImageMediaType } from "@shared/protocol";
 import { assertAllowedFile, sanitizeFileName } from "./file-guard";
 
-export { assertAllowedFile, sanitizeFileName } from "./file-guard";
+export { assertAllowedFile, inboxFolderSegment, isInboxPath, sanitizeFileName } from "./file-guard";
 
 export async function uniquePath(directory: string, fileName: string): Promise<string> {
   const ext = extname(fileName);

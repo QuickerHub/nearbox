@@ -17,6 +17,7 @@ import java.util.concurrent.Executors
 /** Downloads the APK the paired PC is serving and asks Android to install it. */
 object ApkInstaller {
     private val io = Executors.newSingleThreadExecutor()
+    private const val MAX_APK_BYTES = 80L * 1024 * 1024
 
     fun start(activity: Activity, url: String) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !activity.packageManager.canRequestPackageInstalls()) {
@@ -45,8 +46,13 @@ object ApkInstaller {
 
     private fun download(activity: Activity, url: String): File {
         val dest = File(activity.cacheDir, "nearbox-update.apk")
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            instanceFollowRedirects = true
+        val parsed = URL(url)
+        val host = parsed.host.orEmpty()
+        if (parsed.protocol != "http" || !Lan.isPairableHost(host)) {
+            throw IllegalStateException("只能从配对的电脑下载安装包。")
+        }
+        val connection = (parsed.openConnection() as HttpURLConnection).apply {
+            instanceFollowRedirects = false
             connectTimeout = 15_000
             readTimeout = 60_000
             setRequestProperty("User-Agent", "Nearbox")
@@ -55,8 +61,26 @@ object ApkInstaller {
             if (connection.responseCode !in 200..299) {
                 throw IllegalStateException("HTTP ${connection.responseCode}")
             }
+            val declared = connection.contentLengthLong
+            if (declared > MAX_APK_BYTES) {
+                throw IllegalStateException("安装包太大")
+            }
+            var copied = 0L
+            val buffer = ByteArray(16 * 1024)
             connection.inputStream.use { input ->
-                dest.outputStream().use { output -> input.copyTo(output) }
+                dest.outputStream().use { output ->
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) {
+                            break
+                        }
+                        copied += n
+                        if (copied > MAX_APK_BYTES) {
+                            throw IllegalStateException("安装包太大")
+                        }
+                        output.write(buffer, 0, n)
+                    }
+                }
             }
         } finally {
             connection.disconnect()
@@ -66,7 +90,7 @@ object ApkInstaller {
 
     private fun signaturesClash(activity: Activity, apk: File): Boolean {
         val installed = signingCerts(activity.packageManager, activity.packageName, archive = null) ?: return false
-        val incoming = signingCerts(activity.packageManager, activity.packageName, archive = apk) ?: return false
+        val incoming = signingCerts(activity.packageManager, activity.packageName, archive = apk) ?: return true
         return installed != incoming
     }
 

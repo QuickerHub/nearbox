@@ -3,7 +3,7 @@
  * protocol barrel so `node --test` can cover the edges without path aliases.
  */
 
-import { basename, extname } from "node:path";
+import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 
 const WINDOWS_RESERVED = new Set([
   "CON",
@@ -66,6 +66,33 @@ export function sanitizeFileName(raw: string | undefined, fallback: string): str
     return `${name}_${fallback}${ext}`;
   }
   return `${name}${ext}`.slice(0, 180);
+}
+
+/**
+ * Inbox folder leaf for a paired device. Windows reserved device names
+ * (`NUL`, `CON`, …) would alias to the console if used as a folder; trailing
+ * dots/spaces are stripped because NTFS ignores them (`foo.` → `foo`).
+ */
+export function inboxFolderSegment(raw: string): string {
+  const cleaned = raw.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "phone";
+  let leaf = cleaned.slice(0, 60);
+  // All-dot names are left for the caller; stripping them would hide `..`.
+  if (/[^. ]/.test(leaf)) {
+    leaf = leaf.replace(/[. ]+$/g, "") || "phone";
+  }
+  const key = leaf.split(".")[0]!.toUpperCase();
+  if (WINDOWS_RESERVED.has(leaf.toUpperCase()) || WINDOWS_RESERVED.has(key)) {
+    return `${leaf}_phone`.slice(0, 60);
+  }
+  return leaf;
+}
+
+/** True when `filePath` is `inboxDir` or a file/dir under it (not a prefix sibling). */
+export function isInboxPath(inboxDir: string, filePath: string): boolean {
+  const base = resolve(inboxDir);
+  const resolved = resolve(filePath);
+  const rel = relative(base, resolved);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 export function assertAllowedFile(fileName: string, mediaType: string): void {

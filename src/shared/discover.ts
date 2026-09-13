@@ -54,6 +54,38 @@ export function liveInvite<T extends { expiresAt: string }>(invite: T | null | u
   return invite;
 }
 
+/**
+ * Hosts a phone may open from a QR / UDP / paste invite. Public IPv4 would
+ * send the pairing token off the LAN; dotted public DNS names are refused too.
+ * RFC1918, CGNAT (100.64/10, Tailscale), loopback, `.local` / `.lan` and
+ * single-label names stay allowed.
+ */
+export function isPairableHost(host: string): boolean {
+  const value = host.trim().toLowerCase();
+  if (!value || value.length > 253) {
+    return false;
+  }
+  const parts = value.split(".");
+  if (parts.length === 4 && parts.every((part) => /^\d{1,3}$/.test(part))) {
+    const nums = parts.map((part) => Number(part));
+    if (nums.some((part) => part > 255)) {
+      return false;
+    }
+    const [a, b] = nums;
+    return (
+      a === 10 ||
+      a === 127 ||
+      (a === 192 && b === 168) ||
+      (a === 172 && b! >= 16 && b! <= 31) ||
+      (a === 100 && b! >= 64 && b! <= 127)
+    );
+  }
+  if (value.includes(":")) {
+    return value === "::1";
+  }
+  return !value.includes(".") || value.endsWith(".local") || value.endsWith(".lan");
+}
+
 export function parseDiscover(raw: unknown): DiscoverInfo | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -70,7 +102,7 @@ export function parseDiscover(raw: unknown): DiscoverInfo | null {
   const host = typeof value.host === "string" ? value.host.trim() : "";
   const port = Number(value.port ?? DEFAULT_PORT);
   const version = typeof value.version === "string" ? value.version : "";
-  if (!name || !host || !Number.isInteger(port) || port < 1 || port > 65535) {
+  if (!name || !host || !isPairableHost(host) || !Number.isInteger(port) || port < 1 || port > 65535) {
     return null;
   }
   return {
@@ -97,12 +129,12 @@ export function parseInviteText(text: string): { host: string; port: number; tok
     if (url.protocol === "nearbox:" && url.hostname === "connect") {
       const host = url.searchParams.get("host")?.trim() ?? "";
       const port = Number(url.searchParams.get("port") ?? DEFAULT_PORT);
-      if (host && token) {
+      if (host && token && isPairableHost(host)) {
         return { host, port: Number.isInteger(port) ? port : DEFAULT_PORT, token };
       }
       return null;
     }
-    if ((url.protocol === "http:" || url.protocol === "https:") && url.hostname && token) {
+    if ((url.protocol === "http:" || url.protocol === "https:") && url.hostname && token && isPairableHost(url.hostname)) {
       return { host: url.hostname, port: url.port ? Number(url.port) : DEFAULT_PORT, token };
     }
   } catch {

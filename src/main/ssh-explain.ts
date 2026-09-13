@@ -42,7 +42,9 @@ export function explainSshFailure(target: SshExplainTarget, stderr: string): str
 
 /** Reject anything that could not be a single path: control chars break every shell we talk to. */
 export function assertSafeRemotePath(path: string): void {
-  if (!path.trim() || /[\r\n\u0000]/.test(path)) {
+  const value = path.trim();
+  // A lone `-` is OLDPWD for `cd` and stdout for `cat > -`, not a directory.
+  if (!value || value === "-" || /[\r\n\u0000]/.test(path)) {
     throw new Error("路径不合法。");
   }
 }

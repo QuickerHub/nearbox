@@ -359,7 +359,7 @@ $parent=[IO.Path]::GetDirectoryName($full)
 [pscustomobject]@{nearbox=1;path=[string]$full;parent=$(if($parent){[string]$parent}else{''});entries=$e}|ConvertTo-Json -Compress -Depth 4`;
 
 // sh has no JSON; names with quotes or backslashes are escaped by hand and control characters dropped.
-const POSIX_LIST = (path: string) => `p=${shQuote(path)}; [ -z "$p" ] && p="$HOME"; cd "$p" 2>/dev/null || { echo '{"nearbox":1,"error":"missing"}'; exit 0; }; full=$(pwd); esc() { printf '%s' "$1" | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g' | tr -d '\\000-\\037'; }; printf '{"nearbox":1,"path":"%s","parent":"%s","entries":[' "$(esc "$full")" "$(esc "$(dirname "$full")")"; s=""; for d in */; do [ -d "$d" ] || continue; n=\${d%/}; printf '%s{"name":"%s","path":"%s"}' "$s" "$(esc "$n")" "$(esc "$full/$n")"; s=","; done; printf ']}\\n'`;
+const POSIX_LIST = (path: string) => `p=${shQuote(path)}; [ -z "$p" ] && p="$HOME"; cd -- "$p" 2>/dev/null || { echo '{"nearbox":1,"error":"missing"}'; exit 0; }; full=$(pwd); esc() { printf '%s' "$1" | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g' | tr -d '\\000-\\037'; }; printf '{"nearbox":1,"path":"%s","parent":"%s","entries":[' "$(esc "$full")" "$(esc "$(dirname "$full")")"; s=""; for d in */; do [ -d "$d" ] || continue; n=\${d%/}; printf '%s{"name":"%s","path":"%s"}' "$s" "$(esc "$n")" "$(esc "$full/$n")"; s=","; done; printf ']}\\n'`;
 
 /** Subdirectories of `path`; an empty path lists drive roots (Windows) or the home directory (POSIX). */
 export async function listDirectory(device: RemoteDevice, path: string): Promise<RemoteDirListing> {
@@ -438,6 +438,6 @@ $p.WaitForExit()
 exit $p.ExitCode`);
   }
   return shCommand(
-    `${POSIX_PATH}; export PATH NO_COLOR=1 FORCE_COLOR=0 TERM=dumb; cd ${shQuote(request.cwd)} || exit 97; echo $$ > ${shQuote(request.pidFile)}; exec ${request.commandLine}`,
+    `${POSIX_PATH}; export PATH NO_COLOR=1 FORCE_COLOR=0 TERM=dumb; cd -- ${shQuote(request.cwd)} || exit 97; echo $$ > ${shQuote(request.pidFile)}; exec ${request.commandLine}`,
   );
 }
