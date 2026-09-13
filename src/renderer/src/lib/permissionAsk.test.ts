@@ -67,3 +67,21 @@ test("successful resolve keeps busy until askId swap", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(states, [true]);
 });
+
+test("failed resolve after a slow reject still unlocks for retry", async () => {
+  const states: boolean[] = [];
+  let reject!: (error: Error) => void;
+  const pending = new Promise<void>((_resolve, rej) => {
+    reject = rej;
+  });
+  trackPermissionResolve(
+    (busy) => {
+      states.push(busy);
+    },
+    () => pending,
+  );
+  assert.deepEqual(states, [true]);
+  reject(new Error("timeout"));
+  await waitFor(() => states.length === 2 && states[1] === false);
+  assert.deepEqual(states, [true, false]);
+});

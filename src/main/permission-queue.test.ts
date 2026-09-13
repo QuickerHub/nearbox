@@ -78,3 +78,40 @@ test("drainPermissionQueue clears without resolving", () => {
   }
   assert.deepEqual(resolved, [null, null]);
 });
+
+test("settlePermissionHeadIfAsk is a no-op on empty queue or after settleAll", () => {
+  const empty: PermissionWaiter<Pending>[] = [];
+  assert.equal(settlePermissionHeadIfAsk(empty, "any", "allow-once"), false);
+
+  const resolved: Array<string | null> = [];
+  const queue: PermissionWaiter<Pending>[] = [
+    { pending: { askId: "ask-1", toolCallId: "1", title: "a" }, resolve: (id) => resolved.push(id) },
+  ];
+  settleAllPermissions(queue);
+  assert.deepEqual(resolved, [null]);
+  // Stale UI click after cancel must not invent a waiter.
+  assert.equal(settlePermissionHeadIfAsk(queue, "ask-1", "allow-once"), false);
+  assert.deepEqual(resolved, [null]);
+});
+
+test("settlePermissionHeadIfAsk accepts deny (null) only for the matching askId", () => {
+  const resolved: Array<string | null> = [];
+  const queue: PermissionWaiter<Pending>[] = [
+    { pending: { askId: "ask-a", toolCallId: "1", title: "a" }, resolve: (id) => resolved.push(id) },
+    { pending: { askId: "ask-b", toolCallId: "2", title: "b" }, resolve: (id) => resolved.push(id) },
+  ];
+  assert.equal(settlePermissionHeadIfAsk(queue, "ask-b", null), false);
+  assert.equal(settlePermissionHeadIfAsk(queue, "ask-a", null), true);
+  assert.deepEqual(resolved, [null]);
+  assert.equal(queue[0]?.pending.askId, "ask-b");
+});
+
+test("FIFO view stays consistent across askId-gated settles", () => {
+  const queue: PermissionWaiter<Pending>[] = [
+    { pending: { askId: "a1", toolCallId: "1", title: "a" }, resolve() {} },
+    { pending: { askId: "a2", toolCallId: "2", title: "b" }, resolve() {} },
+  ];
+  assert.deepEqual(pendingPermissionView(queue), { pending: { askId: "a1", toolCallId: "1", title: "a" }, queued: 1 });
+  assert.equal(settlePermissionHeadIfAsk(queue, "a1", "allow-once"), true);
+  assert.deepEqual(pendingPermissionView(queue), { pending: { askId: "a2", toolCallId: "2", title: "b" } });
+});

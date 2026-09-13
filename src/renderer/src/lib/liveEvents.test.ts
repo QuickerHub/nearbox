@@ -77,3 +77,40 @@ test("mergeCatchUpHistory with empty history is the HTTP-failure promote path", 
   );
   assert.equal(caught.lastSeq, 3);
 });
+
+test("mergeCatchUpHistory empty inputs yield lastSeq 0", () => {
+  const caught = mergeCatchUpHistory<{ seq: number }>([], []);
+  assert.deepEqual(caught.events, []);
+  assert.equal(caught.lastSeq, 0);
+});
+
+test("mergeCatchUpHistory drops buffered seqs already covered by history tip", () => {
+  // History tip is 5; a late WS replay of 4/5 must not reappear after catch-up.
+  const history = [{ seq: 3 }, { seq: 5 }];
+  const buffered = [{ seq: 4 }, { seq: 5 }, { seq: 6 }];
+  const caught = mergeCatchUpHistory(history, buffered);
+  assert.deepEqual(
+    caught.events.map((event) => event.seq),
+    [3, 5, 6],
+  );
+  assert.equal(caught.lastSeq, 6);
+});
+
+test("live pipeline: queue then drain advances lastSeq for the next filter", () => {
+  const batch: Array<{ seq: number }> = [];
+  assert.equal(queueLiveEvent(batch, { seq: 10 }, 9), true);
+  assert.equal(queueLiveEvent(batch, { seq: 12 }, 9), true);
+  assert.equal(queueLiveEvent(batch, { seq: 11 }, 9), true);
+  const drained = drainLiveBatch(batch);
+  assert.deepEqual(
+    drained.events.map((event) => event.seq),
+    [10, 11, 12],
+  );
+  assert.equal(drained.lastSeq, 12);
+  assert.equal(queueLiveEvent(batch, { seq: 12 }, drained.lastSeq), false);
+  assert.equal(queueLiveEvent(batch, { seq: 13 }, drained.lastSeq), true);
+});
+
+test("drainLiveBatch on empty batch returns lastSeq 0", () => {
+  assert.deepEqual(drainLiveBatch<{ seq: number }>([]), { events: [], lastSeq: 0 });
+});

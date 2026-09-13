@@ -128,3 +128,24 @@ test("topLevelTurnsForTask keeps only the task's own turns", () => {
   assert.deepEqual(topLevelTurnsForTask(runs, "missing"), []);
 });
 
+
+test("topLevelTurnsForTask treats null/empty parentRunId as top-level", () => {
+  const runs = [
+    run("a"),
+    run("nullish", { parentRunId: null as unknown as string }),
+    run("empty", { parentRunId: "" }),
+    run("child", { parentRunId: "a" }),
+  ];
+  assert.deepEqual(
+    topLevelTurnsForTask(runs, "t1").map((item) => item.id),
+    ["a", "nullish", "empty"],
+  );
+});
+
+test("topLevelActiveRun skips delegated children even when they are queued first", () => {
+  const runs = [
+    run("child", { status: "queued", parentRunId: "parent" }),
+    run("empty-parent", { status: "running", parentRunId: "" }),
+  ];
+  assert.equal(topLevelActiveRun(runs, "t1")?.id, "empty-parent");
+});
