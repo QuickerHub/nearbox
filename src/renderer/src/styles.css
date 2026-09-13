@@ -2233,6 +2233,22 @@ a:has(> .icon:only-child) {
   margin-top: 6px;
 }
 
+.md__task {
+  list-style: none;
+  margin-left: -0.25em;
+}
+
+.md__task .md__check {
+  display: inline-block;
+  width: 1.2em;
+  margin-right: 0.35em;
+  color: var(--muted);
+}
+
+.md__task--done {
+  color: var(--muted);
+}
+
 .md__hr {
   margin: 10px 0;
   border: 0;

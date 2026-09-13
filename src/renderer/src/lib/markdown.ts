@@ -69,6 +69,37 @@ export function parseBlocks(text: string): MdBlock[] {
       blocks.push({ type: "quote", blocks: parseBlocks(quoted.join("\n")) });
       continue;
     }
+    if (isIndentedCodeLine(line)) {
+      const body: string[] = [];
+      while (index < lines.length) {
+        const current = lines[index] ?? "";
+        if (isIndentedCodeLine(current)) {
+          body.push(stripCodeIndent(current));
+          index += 1;
+          continue;
+        }
+        if (!current.trim()) {
+          let look = index + 1;
+          while (look < lines.length && !(lines[look] ?? "").trim()) {
+            look += 1;
+          }
+          if (look < lines.length && isIndentedCodeLine(lines[look] ?? "")) {
+            while (index < look) {
+              body.push("");
+              index += 1;
+            }
+            continue;
+          }
+          break;
+        }
+        break;
+      }
+      while (body.length && body[body.length - 1] === "") {
+        body.pop();
+      }
+      blocks.push({ type: "code", lang: "", body: body.join("\n") });
+      continue;
+    }
     if (LIST.test(line)) {
       const ordered = ORDERED.test(line);
       const items: string[] = [];
@@ -99,6 +130,16 @@ function startsBlock(lines: string[], index: number): boolean {
     return true;
   }
   return Boolean(fenceOpen(line)) || HEADING.test(line) || startsTable(lines, index) || (HR.test(line) && !LIST.test(line)) || QUOTE.test(line) || LIST.test(line);
+}
+
+
+/** Four-space indented code (CommonMark); tabs still go through the list path. */
+function isIndentedCodeLine(line: string): boolean {
+  return line.startsWith("    ");
+}
+
+function stripCodeIndent(line: string): string {
+  return line.startsWith("    ") ? line.slice(4) : line;
 }
 
 function fenceOpen(line: string): { char: string; length: number; lang: string } | null {
