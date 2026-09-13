@@ -1,4 +1,4 @@
-import { canContinueRun } from "../../../shared/conversation.ts";
+import { canContinueRun, isTopLevelActiveRun } from "../../../shared/conversation.ts";
 import type { AgentInfo, AgentKind, AgentRun, Task } from "../../../shared/protocol";
 
 /**
@@ -95,7 +95,7 @@ export function planSend(input: PlanInput): SendPlan {
   }
 
   // Delegated children are the parent's business; only a top-level turn blocks the composer.
-  const active = runs.find((run) => run.taskId === task.id && !run.parentRunId && (run.status === "queued" || run.status === "running"));
+  const active = runs.find((run) => run.taskId === task.id && isTopLevelActiveRun(run));
   const busy = Boolean(active);
   const previous = conversationRun(runs, task.id, agent, projectId);
   const conversation = Boolean(previous) && input.agentInfo?.supportsResume !== false && canContinueRun(runs, previous!);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AGENT_KINDS, type AgentAccess, type AgentKind, type HostSnapshot, isRunActive, modelsNeedRefresh, splitCapture, type Task } from "@shared/protocol";
+import { AGENT_KINDS, type AgentAccess, type AgentKind, type HostSnapshot, isRunActive, isTopLevelActiveRun, modelsNeedRefresh, splitCapture, type Task } from "@shared/protocol";
 import { titleForFiles } from "./lib/attachments";
 import { connectClient, pairWithPin, type ClientHandle } from "./lib/client";
 import { conversationRun, type SendPlan } from "./lib/plan";
@@ -428,7 +428,7 @@ export function App(): JSX.Element {
     return <RemoteView client={client} snapshot={snapshot} onExit={() => navigate({ name: "home" })} />;
   }
 
-  const activeRun = task ? snapshot.runs.find((run) => run.taskId === task.id && isRunActive(run)) : undefined;
+  const activeRun = task ? snapshot.runs.find((run) => run.taskId === task.id && isTopLevelActiveRun(run)) : undefined;
   const phonesOnline = snapshot.devices.filter((device) => device.role === "phone" && device.online).length;
   const remoteControllers = snapshot.remote?.controllers ?? 0;
   const canRemote = Boolean(snapshot.remote?.enabled);

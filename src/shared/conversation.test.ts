@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentRun } from "./protocol.ts";
-import { canContinueRun, sessionIdAlongChain } from "./conversation.ts";
+import { canContinueRun, isTopLevelActiveRun, sessionIdAlongChain } from "./conversation.ts";
 
 const actor = { id: "desktop", name: "PC", role: "desktop" as const };
 
@@ -50,3 +50,11 @@ test("canContinueRun is true for active turns and for finished turns with a sess
   assert.equal(canContinueRun(runs, dead), false);
   assert.equal(canContinueRun(runs, followUp), true);
 });
+
+test("isTopLevelActiveRun ignores delegated children", () => {
+  assert.equal(isTopLevelActiveRun(run("parent", { status: "running" })), true);
+  assert.equal(isTopLevelActiveRun(run("queued", { status: "queued" })), true);
+  assert.equal(isTopLevelActiveRun(run("done", { status: "succeeded" })), false);
+  assert.equal(isTopLevelActiveRun(run("child", { status: "running", parentRunId: "parent" })), false);
+});
+
