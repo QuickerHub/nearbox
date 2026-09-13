@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isPrivateLanAddress, isTransientSocketError, normalizeRemoteIp, refreshPrivateLanAddresses, sameStringList } from "./network.ts";
+import { isPrivateLanAddress, isTransientSocketError, listPrivateLanAddresses, normalizeRemoteIp, refreshPrivateLanAddresses, sameStringList } from "./network.ts";
 
 test("only RFC1918 addresses count as LAN", () => {
   assert.equal(isPrivateLanAddress("192.168.1.8"), true);
@@ -32,4 +32,13 @@ test("refreshPrivateLanAddresses reuses previous when unchanged", () => {
   const first = refreshPrivateLanAddresses(null);
   const again = refreshPrivateLanAddresses(first);
   assert.equal(again, first);
+});
+
+test("listPrivateLanAddresses only returns RFC1918 IPv4 addresses", () => {
+  const addresses = listPrivateLanAddresses();
+  for (const address of addresses) {
+    assert.equal(isPrivateLanAddress(address), true);
+  }
+  // Same snapshot shape as refreshPrivateLanAddresses(null).
+  assert.deepEqual(addresses, refreshPrivateLanAddresses(null));
 });
