@@ -530,7 +530,15 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
         contextWindow: contextWindowFromModelUsage(data.modelUsage),
         costUsd: typeof data.total_cost_usd === "number" ? data.total_cost_usd : undefined,
       });
-      const duration = typeof data.duration_ms === "number" ? formatMsDuration(data.duration_ms) : "";
+      const durationMs =
+        typeof data.duration_ms === "number"
+          ? data.duration_ms
+          : typeof data.durationMs === "number"
+            ? data.durationMs
+            : typeof data.duration_api_ms === "number"
+              ? data.duration_api_ms
+              : undefined;
+      const duration = typeof durationMs === "number" ? formatMsDuration(durationMs) : "";
       events.push({ kind: "result", text: formatOutcome(isError ? "失败" : "完成", { duration, usage: out.usage ?? usage() }) });
       return;
     }
@@ -565,8 +573,12 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
     return;
   }
   if (type === "error") {
-    out.isError = true;
-    sink.push(events, "stderr", typeof data.message === "string" ? data.message : compact(data));
+    const message = typeof data.message === "string" ? data.message : compact(data);
+    // Transient reconnect notices keep the turn alive; only hard errors fail the run.
+    if (!isCodexReconnectNotice(message)) {
+      out.isError = true;
+    }
+    sink.push(events, "stderr", message);
     return;
   }
   if (type.startsWith("item.")) {
@@ -624,16 +636,17 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
         return;
       }
       case "mcp_tool_call": {
+        const mcpError = codexMcpErrorText(item.error);
         sink.tool(
           events,
           track(id, {
             name: itemType,
             kind: "mcp",
-            status,
+            status: mcpError && status === "ok" ? "error" : status,
             subject: [item.server, item.tool].filter(Boolean).map(String).join(" · ") || undefined,
             input: item.arguments === undefined ? undefined : clipHead(compact(item.arguments), MAX_TOOL_INPUT),
-            output: item.result === undefined ? undefined : clipHead(compact(item.result)),
-            error: item.error === undefined ? undefined : firstLine(compact(item.error)),
+            output: codexMcpOutputText(item.result) || undefined,
+            error: mcpError || undefined,
           }),
         );
         return;
@@ -642,13 +655,29 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
         sink.tool(events, track(id, { name: itemType, kind: "web", status, subject: typeof item.query === "string" ? item.query : undefined }));
         return;
       case "todo_list": {
-        if (phase === "updated") {
-          return;
-        }
+        // item.updated is how Codex streams plan progress; dropping it leaves the checklist stuck.
         const todos = asArray(item.items)
           .filter(isRecord)
-          .map((todo) => `${todo.completed ? "☑" : "☐"} ${String(todo.text ?? "")}`);
-        sink.tool(events, track(id, { name: itemType, kind: "todo", status, subject: `${todos.length} 项`, output: todos.join("\n") || undefined }));
+          .map((todo) => `${todo.completed ? "☑" : "☐"} ${String(todo.text ?? todo.content ?? todo.step ?? "")}`);
+        sink.tool(
+          events,
+          track(id, {
+            name: itemType,
+            kind: "todo",
+            status: phase === "completed" || itemStatus === "completed" ? "ok" : "running",
+            subject: `${todos.length} 项`,
+            output: todos.join("\n") || undefined,
+          }),
+        );
+        return;
+      }
+      case "error": {
+        const message =
+          typeof item.message === "string" && item.message.trim()
+            ? item.message.trim()
+            : compact(item);
+        // Non-fatal item warnings (truncated output, etc.) — not a failed turn.
+        sink.push(events, "stderr", message);
         return;
       }
       default:
@@ -686,7 +715,15 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       out.usage = rememberUsage(data.usage ?? data);
       return;
     case "session_info_update": {
-      const title = typeof data.title === "string" ? data.title.replace(/\s+/g, " ").trim() : "";
+      const rawTitle =
+        typeof data.title === "string"
+          ? data.title
+          : typeof data.name === "string"
+            ? data.name
+            : typeof data.sessionTitle === "string"
+              ? data.sessionTitle
+              : "";
+      const title = rawTitle.replace(/\s+/g, " ").trim();
       if (title) {
         out.sessionTitle = title;
       }
@@ -864,16 +901,31 @@ function describeRawOutput(kind: ToolKind, rawOutput: unknown): Partial<ToolCall
     return {};
   }
   if (isRecord(rawOutput)) {
-    if ("stdout" in rawOutput || "stderr" in rawOutput || "exitCode" in rawOutput) {
+    if (
+      "stdout" in rawOutput ||
+      "stderr" in rawOutput ||
+      "exitCode" in rawOutput ||
+      "exit_code" in rawOutput ||
+      "interleavedOutput" in rawOutput ||
+      "interleaved_output" in rawOutput
+    ) {
       const stdout = typeof rawOutput.stdout === "string" ? rawOutput.stdout : "";
       const stderr = typeof rawOutput.stderr === "string" ? rawOutput.stderr : "";
-      const combined = stdout && stderr ? `${stdout}\n${stderr}` : stdout || stderr;
+      const interleaved =
+        typeof rawOutput.interleavedOutput === "string"
+          ? rawOutput.interleavedOutput
+          : typeof rawOutput.interleaved_output === "string"
+            ? rawOutput.interleaved_output
+            : "";
+      const combined = stdout && stderr ? `${stdout}\n${stderr}` : stdout || stderr || interleaved;
       const patch: Partial<ToolCall> = {};
       if (combined.trim()) {
         patch.output = clipTail(combined);
       }
       if (typeof rawOutput.exitCode === "number") {
         patch.exitCode = rawOutput.exitCode;
+      } else if (typeof rawOutput.exit_code === "number") {
+        patch.exitCode = rawOutput.exit_code;
       }
       return patch;
     }
@@ -991,6 +1043,71 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, 
 // ---------------------------------------------------------------------------
 // Parser-side helpers (tool normalization itself lives in shared/tools.ts)
 // ---------------------------------------------------------------------------
+
+function isCodexReconnectNotice(message: string): boolean {
+  return /^reconnecting\b/i.test(message.trim());
+}
+
+/** MCP result payloads are content blocks; keep readable text, not the whole JSON envelope. */
+function codexMcpOutputText(result: unknown): string {
+  if (result === undefined || result === null) {
+    return "";
+  }
+  if (typeof result === "string") {
+    return result.trim() ? clipHead(result) : "";
+  }
+  if (!isRecord(result)) {
+    return clipHead(compact(result));
+  }
+  const blocks = asArray(result.content);
+  if (blocks.length) {
+    const parts: string[] = [];
+    for (const block of blocks) {
+      if (typeof block === "string" && block.trim()) {
+        parts.push(block);
+        continue;
+      }
+      if (!isRecord(block)) {
+        continue;
+      }
+      if (typeof block.text === "string" && block.text.trim()) {
+        parts.push(block.text);
+      } else if (block.type === "resource_link") {
+        const label = [block.title, block.name, block.uri].find((value) => typeof value === "string" && value.trim()) as string | undefined;
+        if (label) {
+          parts.push(label);
+        }
+      } else if (block.type === "resource" && isRecord(block.resource) && typeof block.resource.text === "string" && block.resource.text.trim()) {
+        parts.push(block.resource.text);
+      } else if (block.type === "image" || block.type === "audio") {
+        parts.push(`[${block.type}]`);
+      }
+    }
+    if (parts.length) {
+      return clipHead(parts.join("\n"));
+    }
+  }
+  if (result.structured_content !== undefined && result.structured_content !== null) {
+    return clipHead(compact(result.structured_content));
+  }
+  return clipHead(compact(result));
+}
+
+function codexMcpErrorText(error: unknown): string {
+  if (error === undefined || error === null) {
+    return "";
+  }
+  if (typeof error === "string") {
+    return firstLine(error);
+  }
+  if (isRecord(error)) {
+    if (typeof error.message === "string" && error.message.trim()) {
+      return firstLine(error.message);
+    }
+    return firstLine(compact(error));
+  }
+  return firstLine(compact(error));
+}
 
 /** codex wraps every command in an explicit pwsh call on Windows; show what the agent meant. */
 function unwrapPwsh(command: string): string {

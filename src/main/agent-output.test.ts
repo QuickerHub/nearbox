@@ -534,6 +534,76 @@ function collect(parser: ReturnType<typeof createOutputParser>, steps: (() => Re
   return { events, sessionId, modelLabel, sessionTitle, result, isError, usage };
 }
 
+
+test("codex todo_list updates stream plan progress instead of staying frozen", () => {
+  const parser = createOutputParser("codex");
+  const all = feedAll(parser, [
+    '{"type":"item.started","item":{"id":"item_8","type":"todo_list","items":[{"text":"Scan docs","completed":false},{"text":"Write cheatsheet","completed":false}]}}',
+    '{"type":"item.updated","item":{"id":"item_8","type":"todo_list","items":[{"text":"Scan docs","completed":true},{"text":"Write cheatsheet","completed":false}]}}',
+    '{"type":"item.completed","item":{"id":"item_8","type":"todo_list","items":[{"text":"Scan docs","completed":true},{"text":"Write cheatsheet","completed":true}]}}',
+  ]);
+  const tools = all.events.map((event) => event.tool).filter(Boolean);
+  assert.equal(tools.length, 3);
+  assert.equal(tools[0]?.status, "running");
+  assert.equal(tools[0]?.output, "☐ Scan docs\n☐ Write cheatsheet");
+  assert.equal(tools[1]?.status, "running");
+  assert.equal(tools[1]?.output, "☑ Scan docs\n☐ Write cheatsheet");
+  assert.equal(tools[2]?.status, "ok");
+  assert.equal(tools[2]?.output, "☑ Scan docs\n☑ Write cheatsheet");
+});
+
+test("codex mcp_tool_call keeps text content and error.message, not JSON envelopes", () => {
+  const parser = createOutputParser("codex");
+  const all = feedAll(parser, [
+    '{"type":"item.completed","item":{"id":"item_5","type":"mcp_tool_call","server":"docs","tool":"search","arguments":{"q":"exec"},"result":{"content":[{"type":"text","text":"Found 3 matches."}],"structured_content":{"matches":3}},"error":null,"status":"completed"}}',
+    '{"type":"item.completed","item":{"id":"item_6","type":"mcp_tool_call","server":"docs","tool":"search","arguments":{"q":"exec"},"result":null,"error":{"message":"tool timeout"},"status":"failed"}}',
+  ]);
+  const tools = all.events.map((event) => event.tool).filter(Boolean);
+  assert.equal(tools[0]?.subject, "docs · search");
+  assert.equal(tools[0]?.status, "ok");
+  assert.equal(tools[0]?.output, "Found 3 matches.");
+  assert.equal(tools[1]?.status, "error");
+  assert.equal(tools[1]?.error, "tool timeout");
+});
+
+test("codex reconnect notices and item errors stay non-fatal warnings", () => {
+  const parser = createOutputParser("codex");
+  const reconnect = parser.feed('{"type":"error","message":"Reconnecting... 1/5"}');
+  assert.equal(reconnect.isError, undefined);
+  assert.equal(reconnect.events[0]?.kind, "stderr");
+  assert.match(reconnect.events[0]?.text ?? "", /Reconnecting/);
+  const hard = parser.feed('{"type":"error","message":"stream error: broken pipe"}');
+  assert.equal(hard.isError, true);
+  const warn = parser.feed('{"type":"item.completed","item":{"id":"item_9","type":"error","message":"command output truncated"}}');
+  assert.equal(warn.isError, undefined);
+  assert.equal(warn.events[0]?.kind, "stderr");
+  assert.equal(warn.events[0]?.text, "command output truncated");
+});
+
+test("claude duration_api_ms and ACP session name still surface", () => {
+  const claude = createOutputParser("claude");
+  const claudeAll = feedAll(claude, [
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}',
+    '{"type":"result","subtype":"success","is_error":false,"duration_api_ms":2400,"result":"ok","usage":{"input_tokens":10,"output_tokens":1}}',
+  ]);
+  assert.match(claudeAll.events.at(-1)?.text ?? "", /2 秒/);
+  const grok = createOutputParser("grok");
+  const titled = pushAll(grok, [{ sessionUpdate: "session_info_update", name: "  Plan  review  " }]);
+  assert.equal(titled.sessionTitle, "Plan review");
+  const interleaved = pushAll(grok, [
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "shell-1",
+      title: "echo",
+      kind: "execute",
+      status: "completed",
+      rawOutput: { interleavedOutput: "hello from acp\n", exit_code: 0 },
+    },
+  ]);
+  assert.equal(interleaved.events[0]?.tool?.output?.trim(), "hello from acp");
+  assert.equal(interleaved.events[0]?.tool?.exitCode, 0);
+});
+
 test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(400), "400 毫秒");
   assert.equal(formatMsDuration(1200), "1 秒");
