@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { AcpConnection, type AcpModel, choosePermission, mapCursorModel, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
+import { AcpConnection, type AcpModel, choosePermission, mapCursorModel, RpcError, sessionCloseAdvertised, sessionUpdateOf, type RpcIncomingRequest } from "./acp.ts";
 
 /** A fake agent on the other end of the pipes. */
 function pipes() {
@@ -115,6 +115,27 @@ test("permission policy: full access allows, safe mode asks before commands", ()
   assert.deepEqual(choosePermission("safe", { kind: "edit" }, options), { action: "select", optionId: "allow-once", rejected: false });
   // Some CLIs only offer "always"; full access still has to pick it or every command dies.
   assert.deepEqual(choosePermission("full", { kind: "execute" }, [{ optionId: "x", kind: "allow_always" }]), { action: "select", optionId: "x", rejected: false });
+});
+
+
+test("sessionUpdateOf reads nested, stringified, or flattened update bodies", () => {
+  assert.deepEqual(sessionUpdateOf({ sessionId: "s", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" } } }), {
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "hi" },
+  });
+  assert.deepEqual(
+    sessionUpdateOf({
+      sessionId: "s",
+      update: JSON.stringify({ sessionUpdate: "tool_call", toolCallId: "t1", kind: "execute" }),
+    }),
+    { sessionUpdate: "tool_call", toolCallId: "t1", kind: "execute" },
+  );
+  assert.deepEqual(sessionUpdateOf({ sessionId: "s", sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "…" } }), {
+    sessionUpdate: "agent_thought_chunk",
+    content: { type: "text", text: "…" },
+  });
+  assert.deepEqual(sessionUpdateOf({ session_id: "s", type: "text", data: "hi" }), { type: "text", data: "hi" });
+  assert.equal(sessionUpdateOf({ sessionId: "s" }), null);
 });
 
 const PRESETS: AcpModel[] = [
