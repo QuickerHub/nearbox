@@ -529,7 +529,7 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
         contextWindow: contextWindowFromModelUsage(data.modelUsage),
         costUsd: typeof data.total_cost_usd === "number" ? data.total_cost_usd : undefined,
       });
-      const duration = typeof data.duration_ms === "number" ? formatDuration(data.duration_ms) : "";
+      const duration = typeof data.duration_ms === "number" ? formatMsDuration(data.duration_ms) : "";
       events.push({ kind: "result", text: formatOutcome(isError ? "失败" : "完成", { duration, usage: out.usage ?? usage() }) });
       return;
     }
@@ -1051,15 +1051,20 @@ export function truncate(value: string, max: number): string {
   return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
-function formatDuration(ms: number): string {
+/** CLI result duration_ms → Chinese units (matches RunBlock / dock). */
+export function formatMsDuration(ms: number): string {
   if (ms < 1000) {
-    return `${ms}ms`;
+    return `${ms} 毫秒`;
   }
   const seconds = Math.round(ms / 1000);
   if (seconds < 60) {
-    return `${seconds}s`;
+    return `${seconds} 秒`;
   }
-  return `${Math.floor(seconds / 60)}m${seconds % 60}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes} 分 ${seconds % 60} 秒`;
+  }
+  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
 }
 
 function formatOutcome(status: string, extras: { duration?: string; usage?: TokenUsage; costUsd?: number }): string {

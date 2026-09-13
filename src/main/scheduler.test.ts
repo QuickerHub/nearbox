@@ -89,3 +89,18 @@ test("activeDescendants follows the chain and skips finished runs", () => {
     ["child", "grandchild"],
   );
 });
+
+test("null/empty parentRunId does not mark a parent as waiting", () => {
+  const runs = [
+    run("top", { status: "running", parentRunId: "" }),
+    run("nullish", { status: "running", parentRunId: null as unknown as string }),
+    run("queued", { projectId: "p2" }),
+  ];
+  // Empty/null parent means top-level: both occupy concurrency slots (not "waiting").
+  assert.equal(nextRunnable(runs, 2), undefined);
+  assert.equal(nextRunnable(runs, 3)?.id, "queued");
+  assert.deepEqual(
+    activeDescendants(runs, "top").map((item) => item.id),
+    [],
+  );
+});

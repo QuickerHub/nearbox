@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { AGENT_KINDS, AGENT_LABELS, type AgentKind, type HostSnapshot, isRunActive } from "@shared/protocol";
+import { AGENT_KINDS, AGENT_LABELS, type AgentKind, type HostSnapshot } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatRelative } from "../lib/format";
+import { countProjectRuns } from "../lib/projectRuns";
 import { Icon } from "./Icons";
 
 interface ProjectsBlockProps {
@@ -82,8 +83,7 @@ export function ProjectsBlock({ snapshot, client }: ProjectsBlockProps): JSX.Ele
       ) : (
         <div className="project-list">
           {projects.map((project) => {
-            const running = snapshot.runs.filter((run) => run.projectId === project.id && isRunActive(run)).length;
-            const total = snapshot.runs.filter((run) => run.projectId === project.id).length;
+            const { active: running, total } = countProjectRuns(snapshot.runs, project.id);
             return (
               <article className="project-card" key={project.id}>
                 <div className="project-card__head">
