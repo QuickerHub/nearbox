@@ -541,3 +541,70 @@ test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(125_000), "2 分 5 秒");
   assert.equal(formatMsDuration(3_725_000), "1 小时 2 分");
 });
+
+test("claude stream-json type error is a stderr failure, not a raw dump", () => {
+  const parser = createOutputParser("claude");
+  const all = feedAll(parser, [
+    '{"type":"error","error":{"type":"authentication_error","message":"Invalid API key · Please run /login"}}',
+  ]);
+  assert.equal(all.isError, true);
+  assert.equal(all.events[0]?.kind, "stderr");
+  assert.equal(all.events[0]?.text, "Invalid API key · Please run /login");
+});
+
+test("codex reasoning summary and content-shaped agent_message are not dropped", () => {
+  const parser = createOutputParser("codex");
+  const all = feedAll(parser, [
+    '{"type":"item.completed","item":{"id":"r1","type":"reasoning","summary":[{"type":"summary_text","text":"Need to inspect the login form."},{"text":"Then patch the button."}]}}',
+    '{"type":"item.completed","item":{"id":"m1","type":"agent_message","content":"PONG"}}',
+    '{"type":"item.completed","item":{"id":"t1","type":"todo_list","items":[{"text":"fix login","status":"done"},{"content":"write tests","status":"in_progress"}],"status":"completed"}}',
+  ]);
+  const thinking = all.events.find((event) => event.kind === "thinking");
+  assert.equal(thinking?.text, "Need to inspect the login form.\nThen patch the button.");
+  assert.equal(all.result, "PONG");
+  const todo = all.events.find((event) => event.tool?.kind === "todo")?.tool;
+  assert.equal(todo?.output, "☑ fix login\n◐ write tests");
+});
+
+test("codex turn.failed with a string error does not dump the whole event", () => {
+  const parser = createOutputParser("codex");
+  const all = feedAll(parser, ['{"type":"turn.failed","error":"model overloaded"}']);
+  assert.equal(all.isError, true);
+  assert.equal(all.result, "model overloaded");
+  assert.equal(all.events.at(-1)?.text, "失败: model overloaded");
+});
+
+test("ACP tool content as type text or a bare string becomes output", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    { sessionUpdate: "tool_call", toolCallId: "t1", title: "Read", kind: "read", status: "completed", content: [{ type: "text", text: "const a = 1" }] },
+    { sessionUpdate: "tool_call", toolCallId: "t2", title: "Read", kind: "read", status: "completed", content: "hello from string" },
+    { sessionUpdate: "tool_call", toolCallId: "t3", title: "Read", kind: "read", status: "completed", content: [{ type: "content", content: "plain inner" }] },
+    { sessionUpdate: "tool_call_update", toolCallId: "p1", status: "complete", rawInput: { command: "echo hi" } },
+    { sessionUpdate: "plan", entries: [{ content: "ship it", status: "complete" }, { content: "working", status: "inProgress" }] },
+    { sessionUpdate: "error", data: { code: 7, message: "host unreachable" } },
+  ]);
+  const last = (id: string) => all.events.filter((event) => event.tool?.id === id).map((event) => event.tool!).at(-1);
+  assert.equal(last("t1")?.output, "const a = 1");
+  assert.equal(last("t2")?.output, "hello from string");
+  assert.equal(last("t3")?.output, "plain inner");
+  assert.equal(last("p1")?.status, "ok");
+  const plan = all.events.find((event) => event.tool?.id === "plan")?.tool;
+  assert.equal(plan?.output, "☑ ship it\n◐ working");
+  const err = all.events.find((event) => event.kind === "stderr");
+  assert.equal(all.isError, true);
+  assert.match(err?.text ?? "", /host unreachable/);
+});
+
+test("opencode complete/failed tool states map onto ok/error", () => {
+  const parser = createOutputParser("opencode");
+  const all = feedAll(parser, [
+    '{"type":"tool","part":{"id":"a","tool":"bash","state":{"status":"complete","input":{"command":"echo hi"},"output":"hi"}}}',
+    '{"type":"tool","part":{"id":"b","tool":"bash","state":{"status":"failed","input":{"command":"false"},"error":"exit 1"}}}',
+  ]);
+  const tools = all.events.map((event) => event.tool).filter(Boolean);
+  assert.equal(tools[0]?.status, "ok");
+  assert.equal(tools[0]?.output, "hi");
+  assert.equal(tools[1]?.status, "error");
+  assert.equal(tools[1]?.error, "exit 1");
+});

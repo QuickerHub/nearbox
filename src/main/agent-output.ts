@@ -20,6 +20,7 @@ import {
   firstLine,
   isRecord,
   MAX_TOOL_INPUT,
+  todoMark,
   toolKindOf,
 } from "../shared/tools.ts";
 
@@ -534,6 +535,11 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
       events.push({ kind: "result", text: formatOutcome(isError ? "失败" : "完成", { duration, usage: out.usage ?? usage() }) });
       return;
     }
+    case "error": {
+      out.isError = true;
+      sink.push(events, "stderr", eventErrorText(data));
+      return;
+    }
     default:
       sink.push(events, "raw", compact(data));
   }
@@ -558,7 +564,7 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
     return;
   }
   if (type === "turn.failed") {
-    const error = isRecord(data.error) ? String(data.error.message ?? compact(data.error)) : compact(data);
+    const error = eventErrorText(data);
     out.isError = true;
     out.result = error;
     events.push({ kind: "result", text: `失败: ${error}` });
@@ -566,7 +572,7 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
   }
   if (type === "error") {
     out.isError = true;
-    sink.push(events, "stderr", typeof data.message === "string" ? data.message : compact(data));
+    sink.push(events, "stderr", eventErrorText(data));
     return;
   }
   if (type.startsWith("item.")) {
@@ -577,17 +583,21 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
     const itemStatus = String(item.status ?? "");
     const status: ToolStatus = itemStatus === "failed" ? "error" : phase === "completed" || itemStatus === "completed" ? "ok" : "running";
     switch (itemType) {
-      case "agent_message":
-        if (phase === "completed" && typeof item.text === "string") {
-          sink.push(events, "text", item.text);
-          out.result = item.text;
+      case "agent_message": {
+        const text = phase === "completed" ? codexItemText(item) : "";
+        if (text) {
+          sink.push(events, "text", text);
+          out.result = text;
         }
         return;
-      case "reasoning":
-        if (phase === "completed" && typeof item.text === "string") {
-          sink.push(events, "thinking", item.text);
+      }
+      case "reasoning": {
+        const text = phase === "completed" ? codexReasoningText(item) : "";
+        if (text) {
+          sink.push(events, "thinking", text);
         }
         return;
+      }
       case "command_execution": {
         const command = String(item.command ?? "");
         const exitCode = typeof item.exit_code === "number" ? item.exit_code : undefined;
@@ -647,7 +657,7 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
         }
         const todos = asArray(item.items)
           .filter(isRecord)
-          .map((todo) => `${todo.completed ? "☑" : "☐"} ${String(todo.text ?? "")}`);
+          .map((todo) => `${todoMark(todo.status, todo.completed)} ${String(todo.text ?? todo.content ?? todo.title ?? "")}`);
         sink.tool(events, track(id, { name: itemType, kind: "todo", status, subject: `${todos.length} 项`, output: todos.join("\n") || undefined }));
         return;
       }
@@ -706,8 +716,7 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
         return;
       }
       const lines = entries.map((entry) => {
-        const status = String(entry.status ?? "");
-        const mark = status === "completed" ? "☑" : status === "in_progress" ? "◐" : "☐";
+        const mark = todoMark(entry.status, entry.completed);
         return `${mark} ${String(entry.content ?? "")}`;
       });
       sink.tool(events, track("plan", { name: "plan", kind: "todo", status: "ok", subject: `${lines.length} 项`, output: lines.join("\n") }));
@@ -727,7 +736,7 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
           files: described.files ?? files,
           subject: described.subject ?? (files?.length === 1 ? basenameOf(files[0]!) : undefined) ?? title,
           status: acpStatus(String(data.status ?? "")),
-          ...describeAcpContent(asArray(data.content)),
+          ...describeAcpContent(acpContentItems(data.content)),
           ...describeRawOutput(described.kind, data.rawOutput),
         }),
       );
@@ -743,7 +752,7 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       const files = acpLocations(data);
       const kindHint = typeof data.kind === "string" ? acpKind(data.kind, title ?? "") : previous?.kind ?? acpKind("", title ?? "");
       const redescribed = rawInput || title ? describeArgs(title ?? previous?.name ?? "tool", rawInput ?? {}, undefined, kindHint) : undefined;
-      const content = describeAcpContent(asArray(data.content));
+      const content = describeAcpContent(acpContentItems(data.content));
       const output = describeRawOutput(redescribed?.kind ?? previous?.kind ?? "other", data.rawOutput);
       const hasNews = Boolean(content.output || content.diff || output.output || output.error || output.exitCode !== undefined || redescribed || files);
       // Empty updates are progress ticks; only emit when there is something new to show.
@@ -797,7 +806,7 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
     }
     case "error":
       out.isError = true;
-      sink.push(events, "stderr", String(data.message ?? data.data ?? compact(data)));
+      sink.push(events, "stderr", eventErrorText(data));
       return;
     default:
       sink.push(events, "raw", compact(data));
@@ -834,7 +843,7 @@ function acpKind(kind: string, title: string): ToolKind {
 
 /** ACP statuses, plus "rejected" which the runner adds when it refuses a permission request. */
 function acpStatus(status: string): ToolStatus {
-  if (status === "completed") {
+  if (status === "completed" || status === "complete" || status === "success") {
     return "ok";
   }
   if (status === "failed" || status === "error") {
@@ -899,6 +908,12 @@ function describeAcpContent(content: unknown[]): Partial<ToolCall> {
   const outputs: string[] = [];
   const files: string[] = [];
   for (const item of content) {
+    if (typeof item === "string") {
+      if (item.trim()) {
+        outputs.push(item);
+      }
+      continue;
+    }
     if (!isRecord(item)) {
       continue;
     }
@@ -917,10 +932,10 @@ function describeAcpContent(content: unknown[]): Partial<ToolCall> {
         patch.linesAdded = counts.added;
         patch.linesRemoved = counts.removed;
       }
-    } else if (item.type === "content") {
-      const inner = isRecord(item.content) ? item.content : item;
-      if (typeof inner.text === "string" && inner.text.trim()) {
-        outputs.push(inner.text);
+    } else {
+      const text = acpContentText(item);
+      if (text) {
+        outputs.push(text);
       }
     }
   }
@@ -960,7 +975,12 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, 
     const input = isRecord(state.input) ? state.input : isRecord(part.input) ? part.input : {};
     const id = String(part.callID ?? part.callId ?? part.id ?? `tool-${events.length}`);
     const stateStatus = String(state.status ?? "");
-    const status: ToolStatus = stateStatus === "completed" ? "ok" : stateStatus === "error" ? "error" : "running";
+    const status: ToolStatus =
+      stateStatus === "completed" || stateStatus === "complete" || stateStatus === "success" || stateStatus === "done"
+        ? "ok"
+        : stateStatus === "error" || stateStatus === "failed"
+          ? "error"
+          : "running";
     const described = describeArgs(name, input);
     const metadata = isRecord(state.metadata) ? state.metadata : {};
     const output = typeof state.output === "string" ? state.output : undefined;
@@ -1003,6 +1023,88 @@ function unwrapPwsh(command: string): string {
     return bash[1]!.replace(/'\\''/g, "'");
   }
   return command;
+}
+
+function eventErrorText(data: Record<string, unknown>): string {
+  const nested = isRecord(data.error) ? data.error : undefined;
+  for (const candidate of [data.message, data.error, nested?.message, data.data]) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  if (nested) {
+    return compact(nested);
+  }
+  if (isRecord(data.message)) {
+    return compact(data.message);
+  }
+  if (isRecord(data.data)) {
+    if (typeof data.data.message === "string" && data.data.message.trim()) {
+      return data.data.message.trim();
+    }
+    return compact(data.data);
+  }
+  if (data.data !== undefined && data.data !== null && typeof data.data !== "string") {
+    return compact(data.data);
+  }
+  return compact(data);
+}
+
+function codexItemText(item: Record<string, unknown>): string {
+  if (typeof item.text === "string" && item.text) {
+    return item.text;
+  }
+  if (typeof item.content === "string" && item.content) {
+    return item.content;
+  }
+  return asArray(item.content).map(textOf).filter(Boolean).join("\n");
+}
+
+function codexReasoningText(item: Record<string, unknown>): string {
+  if (typeof item.text === "string" && item.text.trim()) {
+    return item.text;
+  }
+  const parts: string[] = [];
+  for (const entry of asArray(item.summary)) {
+    if (typeof entry === "string" && entry.trim()) {
+      parts.push(entry);
+    } else if (isRecord(entry) && typeof entry.text === "string" && entry.text.trim()) {
+      parts.push(entry.text);
+    }
+  }
+  return parts.join("\n");
+}
+
+function acpContentItems(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value ? [value] : [];
+  }
+  if (isRecord(value)) {
+    return [value];
+  }
+  return [];
+}
+
+function acpContentText(item: Record<string, unknown>): string {
+  if (item.type === "content") {
+    if (typeof item.content === "string" && item.content.trim()) {
+      return item.content;
+    }
+    const inner = isRecord(item.content) ? item.content : item;
+    if (typeof inner.text === "string" && inner.text.trim()) {
+      return inner.text;
+    }
+  }
+  if ((item.type === "text" || item.type === "output" || item.type === undefined) && typeof item.text === "string" && item.text.trim()) {
+    return item.text;
+  }
+  if (typeof item.content === "string" && item.content.trim()) {
+    return item.content;
+  }
+  return "";
 }
 
 function toolLine(call: ToolCall): string {

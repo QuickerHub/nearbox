@@ -319,6 +319,88 @@ interface ActivePrompt {
   requestId: number;
 }
 
+/**
+ * Session ids on the ACP wire: some stacks send camelCase, some snake_case,
+ * and a few stringify the JSON-RPC field as `sessionID`.
+ */
+export function acpSessionIdOf(...records: Array<Record<string, unknown> | undefined | null>): string {
+  for (const record of records) {
+    if (!record) {
+      continue;
+    }
+    for (const key of ["sessionId", "session_id", "sessionID"] as const) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) {
+        return value.trim();
+      }
+    }
+  }
+  return "";
+}
+
+/** One row from `session/list`, including `session_id` / `id` and `items` shapes. */
+export function listedSessionOf(item: unknown): ListedSession | null {
+  if (!item || typeof item !== "object") {
+    return null;
+  }
+  const record = item as Record<string, unknown>;
+  const sessionId =
+    acpSessionIdOf(record) || (typeof record.id === "string" && record.id.trim() ? record.id.trim() : "");
+  if (!sessionId) {
+    return null;
+  }
+  const cwd = typeof record.cwd === "string" ? record.cwd : typeof record.workingDirectory === "string" ? record.workingDirectory : "";
+  const updatedAt =
+    typeof record.updatedAt === "string"
+      ? record.updatedAt
+      : typeof record.updated_at === "string"
+        ? record.updated_at
+        : undefined;
+  return { sessionId, cwd, updatedAt };
+}
+
+export function acpModelsOf(models: unknown): { list: AcpModel[]; currentModelId?: string } {
+  if (!models || typeof models !== "object") {
+    return { list: [] };
+  }
+  const record = models as Record<string, unknown>;
+  const available = Array.isArray(record.availableModels)
+    ? record.availableModels
+    : Array.isArray(record.models)
+      ? record.models
+      : [];
+  const list: AcpModel[] = [];
+  for (const item of available) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const row = item as Record<string, unknown>;
+    const modelId =
+      typeof row.modelId === "string" && row.modelId.trim()
+        ? row.modelId.trim()
+        : typeof row.id === "string" && row.id.trim()
+          ? row.id.trim()
+          : "";
+    if (!modelId) {
+      continue;
+    }
+    const name =
+      typeof row.name === "string" && row.name.trim()
+        ? row.name.trim()
+        : typeof row.label === "string" && row.label.trim()
+          ? row.label.trim()
+          : modelId;
+    list.push({ modelId, name });
+  }
+  const current =
+    typeof record.currentModelId === "string" && record.currentModelId.trim()
+      ? record.currentModelId.trim()
+      : typeof record.current_model_id === "string" && record.current_model_id.trim()
+        ? record.current_model_id.trim()
+        : undefined;
+  return { list, currentModelId: current };
+}
+
 /** True when initialize advertised `sessionCapabilities.close` (`{}` or truthy). */
 export function sessionCloseAdvertised(agentCapabilities: unknown): boolean {
   if (!agentCapabilities || typeof agentCapabilities !== "object") {
@@ -448,7 +530,7 @@ export class AgentHost extends EventEmitter {
     this.touch();
     const result = await this.connection.request<Record<string, unknown>>("session/new", { cwd, mcpServers: [] }, SESSION_TIMEOUT_MS);
     this.listedSessions = null;
-    const session = this.remember(String(result.sessionId ?? ""), cwd, result);
+    const session = this.remember(acpSessionIdOf(result), cwd, result);
     if (!session.sessionId) {
       throw new Error("Agent 没有返回会话 id");
     }
@@ -466,14 +548,11 @@ export class AgentHost extends EventEmitter {
     await this.ready;
     const result = await this.connection.request<Record<string, unknown>>("session/list", {}, SET_MODEL_TIMEOUT_MS);
     const out: ListedSession[] = [];
-    for (const item of Array.isArray(result?.sessions) ? result.sessions : []) {
-      if (item && typeof item === "object" && typeof (item as { sessionId?: unknown }).sessionId === "string") {
-        const record = item as { sessionId: string; cwd?: unknown; updatedAt?: unknown };
-        out.push({
-          sessionId: record.sessionId,
-          cwd: typeof record.cwd === "string" ? record.cwd : "",
-          updatedAt: typeof record.updatedAt === "string" ? record.updatedAt : undefined,
-        });
+    const rows = Array.isArray(result?.sessions) ? result.sessions : Array.isArray(result?.items) ? result.items : [];
+    for (const item of rows) {
+      const listed = listedSessionOf(item);
+      if (listed) {
+        out.push(listed);
       }
     }
     const sessions = out.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
@@ -605,24 +684,14 @@ export class AgentHost extends EventEmitter {
   }
 
   private remember(sessionId: string, cwd: string, result: Record<string, unknown>): AcpSession {
-    const models = result.models && typeof result.models === "object" ? (result.models as Record<string, unknown>) : undefined;
-    if (models) {
-      const available = Array.isArray(models.availableModels) ? models.availableModels : [];
-      const list: AcpModel[] = [];
-      for (const item of available) {
-        if (item && typeof item === "object" && typeof (item as { modelId?: unknown }).modelId === "string") {
-          const record = item as { modelId: string; name?: unknown };
-          list.push({ modelId: record.modelId, name: typeof record.name === "string" ? record.name : record.modelId });
-        }
-      }
-      if (list.length) {
-        this.models = list;
-      }
+    const parsed = acpModelsOf(result.models);
+    if (parsed.list.length) {
+      this.models = parsed.list;
     }
     const session: AcpSession = {
       sessionId,
       cwd,
-      currentModelId: models && typeof models.currentModelId === "string" ? models.currentModelId : undefined,
+      currentModelId: parsed.currentModelId,
       lastUsedAt: Date.now(),
     };
     if (sessionId) {
@@ -651,7 +720,7 @@ export class AgentHost extends EventEmitter {
     if (method !== "session/update") {
       return;
     }
-    const sessionId = String(params.sessionId ?? "");
+    const sessionId = acpSessionIdOf(params);
     // History replayed by session/load is not part of any turn.
     if (this.loading.has(sessionId)) {
       return;
@@ -673,7 +742,7 @@ export class AgentHost extends EventEmitter {
   }
 
   private async answerPermission(request: RpcIncomingRequest): Promise<void> {
-    const sessionId = String(request.params.sessionId ?? "");
+    const sessionId = acpSessionIdOf(request.params);
     const active = this.prompts.get(sessionId);
     const toolCall = request.params.toolCall && typeof request.params.toolCall === "object" ? (request.params.toolCall as Record<string, unknown>) : {};
     const options = Array.isArray(request.params.options)
@@ -878,7 +947,9 @@ export function describePermission(toolCall: Record<string, unknown>): { toolCal
   const raw = toolCall.rawInput && typeof toolCall.rawInput === "object" ? (toolCall.rawInput as Record<string, unknown>) : {};
   const command = [raw.command, toolCall.command, raw.commandLine].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim();
   const title = [toolCall.title, command, toolCall.kind].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim() ?? "命令";
-  return { toolCallId: String(toolCall.toolCallId ?? ""), title, command };
+  const idRaw = toolCall.toolCallId ?? toolCall.tool_call_id;
+  const toolCallId = typeof idRaw === "string" ? idRaw.trim() : String(toolCall.toolCallId ?? "");
+  return { toolCallId, title, command };
 }
 
 /**

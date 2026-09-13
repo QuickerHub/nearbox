@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { AcpConnection, type AcpModel, choosePermission, mapCursorModel, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
+import { AcpConnection, acpModelsOf, acpSessionIdOf, type AcpModel, choosePermission, describePermission, listedSessionOf, mapCursorModel, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
 
 /** A fake agent on the other end of the pipes. */
 function pipes() {
@@ -153,4 +153,38 @@ test("list-models aliases map to ACP presets only when they mean the same config
   assert.equal(mapCursorModel("claude-4.5-sonnet-thinking", PRESETS), "claude-sonnet-4-5[thinking=true,context=200k]");
   assert.equal(mapCursorModel("no-such-model", PRESETS), undefined);
   assert.equal(mapCursorModel("", PRESETS), undefined);
+});
+
+test("acpSessionIdOf and listedSessionOf accept snake_case and items shapes", () => {
+  assert.equal(acpSessionIdOf({ session_id: "s-1" }), "s-1");
+  assert.equal(acpSessionIdOf({ sessionID: "s-2" }), "s-2");
+  assert.equal(acpSessionIdOf({ sessionId: "s-3" }), "s-3");
+  assert.equal(acpSessionIdOf({ session_id: "  " }, { sessionID: "s-4" }), "s-4");
+  assert.deepEqual(listedSessionOf({ session_id: "s-1", cwd: "/tmp", updated_at: "2026-09-13" }), {
+    sessionId: "s-1",
+    cwd: "/tmp",
+    updatedAt: "2026-09-13",
+  });
+  assert.equal(listedSessionOf({ id: "s-9", workingDirectory: "/proj" })?.sessionId, "s-9");
+  assert.equal(listedSessionOf({ id: "s-9", workingDirectory: "/proj" })?.cwd, "/proj");
+  assert.equal(listedSessionOf({ title: "no id" }), null);
+});
+
+test("acpModelsOf reads id/label and models[] when availableModels/modelId are absent", () => {
+  const parsed = acpModelsOf({
+    models: [{ id: "grok-4.6", label: "Grok 4.6" }, { modelId: "auto", name: "Auto" }, { id: "" }],
+    current_model_id: "grok-4.6",
+  });
+  assert.deepEqual(parsed.list, [
+    { modelId: "grok-4.6", name: "Grok 4.6" },
+    { modelId: "auto", name: "Auto" },
+  ]);
+  assert.equal(parsed.currentModelId, "grok-4.6");
+  assert.deepEqual(acpModelsOf(undefined).list, []);
+});
+
+test("describePermission keeps a snake_case tool_call_id", () => {
+  assert.equal(describePermission({ tool_call_id: "call-9", title: "npm test", kind: "execute" }).toolCallId, "call-9");
+  assert.equal(describePermission({ toolCallId: "call-1", tool_call_id: "ignored" }).toolCallId, "call-1");
+  assert.equal(describePermission({ title: "x" }).toolCallId, "");
 });
