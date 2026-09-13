@@ -334,6 +334,8 @@ export interface AgentRun {
   usage?: TokenUsage;
   /** Present only while a warm turn is waiting for you to allow or reject a command. */
   pendingPermission?: PendingPermission;
+  /** How many more permission asks wait behind `pendingPermission` (FIFO). */
+  pendingPermissionQueued?: number;
 }
 
 export type RunEventKind = "status" | "thinking" | "text" | "tool" | "stderr" | "raw" | "result";

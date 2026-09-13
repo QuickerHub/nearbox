@@ -5,6 +5,8 @@ import { Icon, TOOL_ICONS } from "./Icons";
 
 interface AskProps {
   pending?: PendingPermission;
+  /** Asks waiting behind `pending`. */
+  queued?: number;
   onResolve?(optionId: string): void;
 }
 
@@ -13,10 +15,10 @@ interface AskProps {
  * into its details, terminals as small cards, edits with a diff, and runs of
  * lookups folded into a single "读取了 4 个文件".
  */
-export const ToolRow = memo(function ToolRow({ tool: recorded, pending, onResolve }: { tool: ToolCall } & AskProps): JSX.Element {
+export const ToolRow = memo(function ToolRow({ tool: recorded, pending, queued, onResolve }: { tool: ToolCall } & AskProps): JSX.Element {
   const tool = useMemo(() => displayTool(recorded), [recorded]);
   if (tool.kind === "shell") {
-    return <ShellCard tool={tool} pending={pending} onResolve={onResolve} />;
+    return <ShellCard tool={tool} pending={pending} queued={queued} onResolve={onResolve} />;
   }
   if (tool.kind === "edit" || tool.kind === "write" || tool.kind === "delete") {
     return <FileChangeRow tool={tool} />;
@@ -24,7 +26,7 @@ export const ToolRow = memo(function ToolRow({ tool: recorded, pending, onResolv
   return <GenericRow tool={tool} />;
 });
 
-export const ToolGroupRow = memo(function ToolGroupRow({ kind, tools, pending, onResolve }: { kind: ToolKind; tools: ToolCall[] } & AskProps): JSX.Element {
+export const ToolGroupRow = memo(function ToolGroupRow({ kind, tools, pending, queued, onResolve }: { kind: ToolKind; tools: ToolCall[] } & AskProps): JSX.Element {
   const waiting = Boolean(pending && tools.some((tool) => tool.id === pending.toolCallId));
   const [open, setOpen] = useState(waiting);
   useEffect(() => {
@@ -46,7 +48,7 @@ export const ToolGroupRow = memo(function ToolGroupRow({ kind, tools, pending, o
       {open ? (
         <div className="trow-group__body">
           {tools.map((tool) => (
-            <ToolRow key={tool.id} tool={tool} pending={pending} onResolve={onResolve} />
+            <ToolRow key={tool.id} tool={tool} pending={pending} queued={queued} onResolve={onResolve} />
           ))}
         </div>
       ) : null}
@@ -54,13 +56,23 @@ export const ToolGroupRow = memo(function ToolGroupRow({ kind, tools, pending, o
   );
 });
 
-export function PermissionAsk({ pending, onResolve }: { pending: PendingPermission; onResolve(optionId: string): void }): JSX.Element {
+export function PermissionAsk({
+  pending,
+  queued = 0,
+  onResolve,
+}: {
+  pending: PendingPermission;
+  /** Asks waiting behind this one; shown as a subtle hint. */
+  queued?: number;
+  onResolve(optionId: string): void;
+}): JSX.Element {
   const [busy, setBusy] = useState(false);
   return (
     <div className="perm-ask">
       <div className="perm-ask__text">
         <strong>要执行这条命令吗？</strong>
         <code>{pending.command ?? pending.title}</code>
+        {queued > 0 ? <span className="perm-ask__more">还有 {queued} 条等待确认</span> : null}
       </div>
       <div className="perm-ask__actions">
         {pending.options.map((option) => (
@@ -133,7 +145,7 @@ function FileChangeRow({ tool }: { tool: ToolCall }): JSX.Element {
   );
 }
 
-function ShellCard({ tool, pending, onResolve }: { tool: ToolCall } & AskProps): JSX.Element {
+function ShellCard({ tool, pending, queued, onResolve }: { tool: ToolCall } & AskProps): JSX.Element {
   const awaiting = Boolean(pending && pending.toolCallId === tool.id && onResolve);
   const running = tool.status === "running" && !awaiting;
   const failed = tool.status === "error";
@@ -175,7 +187,7 @@ function ShellCard({ tool, pending, onResolve }: { tool: ToolCall } & AskProps):
         {awaiting ? <span className="trow__status trow__status--ask">等待确认</span> : <StatusTag tool={tool} />}
         {expandable ? <Chevron open={open} /> : null}
       </button>
-      {awaiting && pending && onResolve ? <PermissionAsk pending={pending} onResolve={onResolve} /> : null}
+      {awaiting && pending && onResolve ? <PermissionAsk pending={pending} queued={queued} onResolve={onResolve} /> : null}
       {open && body ? (
         <div className="shell__body">
           {output ? (

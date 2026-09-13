@@ -1899,6 +1899,11 @@ a:has(> .icon:only-child) {
   overflow-wrap: anywhere;
 }
 
+.perm-ask__more {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .perm-ask__actions {
   display: flex;
   gap: 6px;
@@ -2106,6 +2111,12 @@ a:has(> .icon:only-child) {
 
 .md > * + * {
   margin-top: 6px;
+}
+
+.md__stream-tail {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .md p {
