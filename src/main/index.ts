@@ -30,6 +30,7 @@ import {
   trayHostLabel,
   trayPhonesLabel,
   trayStatusSignature,
+  trayTooltip,
 } from "./tray-status";
 
 process.on("uncaughtException", (error) => {
@@ -177,6 +178,7 @@ function refreshTrayMenu(): void {
     return;
   }
   lastTraySignature = signature;
+  tray.setToolTip(trayTooltip(running, queued, phones));
   const menu = Menu.buildFromTemplate([
     { label: "打开 Nearbox", click: () => showWindow() },
     { type: "separator" },

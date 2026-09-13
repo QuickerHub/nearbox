@@ -5,11 +5,16 @@ import type { AgentRun } from "./protocol";
 
 /** Follow `resumedFromRunId` links from `runId` back to the newest run that recorded a session id. */
 export function sessionIdAlongChain(runs: readonly AgentRun[], runId: string | undefined): string | undefined {
+  if (!runId) {
+    return undefined;
+  }
+  // Map once: composer/plan call this on every tick while chains stay short.
+  const byId = new Map(runs.map((run) => [run.id, run] as const));
   const seen = new Set<string>();
-  let current = runId;
+  let current: string | undefined = runId;
   while (current && !seen.has(current)) {
     seen.add(current);
-    const run = runs.find((item) => item.id === current);
+    const run = byId.get(current);
     if (!run) {
       return undefined;
     }
@@ -27,8 +32,12 @@ export function sessionIdAlongChain(runs: readonly AgentRun[], runId: string | u
  * produce one.
  */
 export function canContinueRun(runs: readonly AgentRun[], run: AgentRun): boolean {
-  const active = run.status === "queued" || run.status === "running";
-  return active || Boolean(sessionIdAlongChain(runs, run.id));
+  return isRunActive(run) || Boolean(sessionIdAlongChain(runs, run.id));
+}
+
+/** Queued or running — shared by composer, list, scheduler, snapshots. */
+export function isRunActive(run: Pick<AgentRun, "status">): boolean {
+  return run.status === "queued" || run.status === "running";
 }
 
 /**
@@ -41,14 +50,27 @@ export function hasParentRunId(run: Pick<AgentRun, "parentRunId">): boolean {
 
 /** Queued/running turn that blocks the composer; delegated children do not. */
 export function isTopLevelActiveRun(run: Pick<AgentRun, "status" | "parentRunId">): boolean {
-  return (run.status === "queued" || run.status === "running") && !hasParentRunId(run);
+  return isRunActive(run) && !hasParentRunId(run);
+}
+
+/** First top-level queued/running turn for a task (composer, plan, dock). */
+export function topLevelActiveRun<T extends Pick<AgentRun, "taskId" | "status" | "parentRunId">>(
+  runs: readonly T[],
+  taskId: string,
+): T | undefined {
+  for (const run of runs) {
+    if (run.taskId === taskId && isTopLevelActiveRun(run)) {
+      return run;
+    }
+  }
+  return undefined;
 }
 
 /** Count queued+running without allocating a filtered array (document title, badges). */
 export function countActiveRuns(runs: readonly Pick<AgentRun, "status">[]): number {
   let count = 0;
   for (const run of runs) {
-    if (run.status === "queued" || run.status === "running") {
+    if (isRunActive(run)) {
       count += 1;
     }
   }
