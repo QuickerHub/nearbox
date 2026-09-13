@@ -18,6 +18,7 @@ import {
   type ToolCall,
   inferContextWindow,
   mergeUsage,
+  sameUsage,
 } from "@shared/protocol";
 import {
   type AcpSession,
@@ -798,7 +799,7 @@ export class RunManager extends EventEmitter {
         usage.contextWindow = inferContextWindow(state.run.model, state.run.modelLabel);
       }
       const next = mergeUsage(state.run.usage, usage);
-      if (JSON.stringify(state.run.usage) !== JSON.stringify(next)) {
+      if (!sameUsage(state.run.usage, next)) {
         state.run.usage = next;
         changed = true;
       }

@@ -8,6 +8,7 @@ import {
   inferContextWindow,
   mergeUsage,
   parseUsage,
+  sameUsage,
 } from "./usage.ts";
 
 test("parseUsage accepts snake_case, camelCase and nested usage objects", () => {
@@ -77,4 +78,14 @@ test("mergeUsage keeps the richer of two reports", () => {
   assert.equal(merged.outputTokens, 40);
   assert.equal(merged.contextWindow, 200_000);
   assert.equal(merged.costUsd, 0.01);
+});
+
+test("sameUsage compares fields without JSON.stringify", () => {
+  assert.equal(sameUsage(undefined, undefined), true);
+  assert.equal(sameUsage(undefined, { inputTokens: 1, outputTokens: 0 }), false);
+  const a = { inputTokens: 100, outputTokens: 5, cacheReadTokens: 10, contextWindow: 200_000 };
+  assert.equal(sameUsage(a, { ...a }), true);
+  assert.equal(sameUsage(a, { inputTokens: 100, outputTokens: 5, contextWindow: 200_000, cacheReadTokens: 10 }), true);
+  assert.equal(sameUsage(a, { ...a, outputTokens: 6 }), false);
+  assert.equal(sameUsage(a, mergeUsage(a, { inputTokens: 100, outputTokens: 5 })), true);
 });
