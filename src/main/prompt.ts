@@ -8,8 +8,19 @@ export interface PromptAttachment {
   mediaType: string;
 }
 
+/** Same allowlist as `IMAGE_TYPES` in protocol — keep in sync; prompt stays import-free. */
+const IMAGE_MEDIA_TYPES = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "image/heic",
+  "image/heif",
+]);
+
 function isImageMediaType(mediaType: string): boolean {
-  return /^image\//i.test(mediaType.trim());
+  const value = mediaType.split(";")[0]?.trim().toLowerCase() ?? "";
+  return IMAGE_MEDIA_TYPES.has(value);
 }
 
 /**

@@ -104,3 +104,19 @@ test("null/empty parentRunId does not mark a parent as waiting", () => {
     [],
   );
 });
+
+test("activeDescendants ignores cyclic parent chains and never includes self", () => {
+  const runs = [
+    run("a", { status: "running", parentRunId: "b" }),
+    run("b", { status: "running", parentRunId: "a" }),
+  ];
+  // Cycle walk stops via the seen set; a run is never listed as its own descendant.
+  assert.deepEqual(
+    activeDescendants(runs, "a").map((item) => item.id),
+    ["b"],
+  );
+  assert.deepEqual(
+    activeDescendants(runs, "b").map((item) => item.id),
+    ["a"],
+  );
+});

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { remoteCwdPreflight, remoteDevicePreflight } from "./remote-preflight.ts";
-import { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain.ts";
+import { assertSafeRemotePath, describeTarget, explainSshFailure, extractNearboxJson } from "./ssh-explain.ts";
 
 test("remote device preflight: missing agent and missing home", () => {
   const missingAgent = remoteDevicePreflight({
@@ -59,4 +59,24 @@ test("assertSafeRemotePath rejects empty and control characters", () => {
   assert.throws(() => assertSafeRemotePath(""), /路径不合法/);
   assert.throws(() => assertSafeRemotePath("a\nb"), /路径不合法/);
   assert.doesNotThrow(() => assertSafeRemotePath("C:\\Users\\cea\\proj"));
+});
+
+test("explainSshFailure treats Authentication failed like a pubkey problem", () => {
+  assert.match(
+    explainSshFailure({ host: "pc", user: "cea" }, "Authentication failed."),
+    /免密登录/,
+  );
+  assert.match(
+    explainSshFailure({ host: "pc" }, "Unable to authenticate"),
+    /免密登录/,
+  );
+});
+
+test("extractNearboxJson tolerates leading logs and trailing chatter", () => {
+  const body = { nearbox: 1, hostName: 'dev"box', home: "/home/cea" };
+  const json = JSON.stringify(body);
+  assert.deepEqual(extractNearboxJson(`warn: skip\n${json}\nok`), body);
+  assert.deepEqual(extractNearboxJson(`prefix ${json} trailing`), body);
+  assert.equal(extractNearboxJson('{"nearbox":0}'), null);
+  assert.equal(extractNearboxJson("no json here"), null);
 });

@@ -2,9 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type DevicePlatform, type RemoteDevice, type RemoteDirListing } from "@shared/protocol";
 import { COMMAND_NAMES } from "./agents";
 import { killTree as killLocal } from "./kill";
-import { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
+import { assertSafeRemotePath, describeTarget, explainSshFailure, extractNearboxJson } from "./ssh-explain";
 
-export { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
+export { assertSafeRemotePath, describeTarget, explainSshFailure, extractNearboxJson } from "./ssh-explain";
 
 /**
  * Everything Nearbox does on another computer goes through the local `ssh`
@@ -187,7 +187,7 @@ foreach($n in @(${AGENT_NAMES.map(psQuote).join(",")})){$c=Get-Command $n -Comma
 // Extra dirs the supported CLIs install into; login shells usually add them, non-interactive ssh does not.
 const POSIX_PATH = 'PATH="$HOME/.local/bin:$HOME/.cursor/bin:$HOME/.codex/bin:$HOME/.grok/bin:$HOME/.opencode/bin:$HOME/.npm-global/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"';
 
-const POSIX_PROBE = `${POSIX_PATH}; printf "{\\"nearbox\\":1,\\"uname\\":\\"%s\\",\\"hostName\\":\\"%s\\",\\"user\\":\\"%s\\",\\"home\\":\\"%s\\",\\"agents\\":{" "$(uname -s 2>/dev/null)" "$(hostname 2>/dev/null)" "$(id -un 2>/dev/null)" "$HOME"; s=""; for n in ${AGENT_NAMES.join(" ")}; do p=$(command -v "$n" 2>/dev/null); if [ -n "$p" ]; then printf "%s\\"%s\\":\\"%s\\"" "$s" "$n" "$p"; s=","; fi; done; printf "}}\\n"`;
+const POSIX_PROBE = `${POSIX_PATH}; esc() { printf '%s' "$1" | sed -e 's/\\\\/\\\\\\\\/g' -e 's/"/\\\\"/g' | tr -d '\\000-\\037'; }; printf "{\\"nearbox\\":1,\\"uname\\":\\"%s\\",\\"hostName\\":\\"%s\\",\\"user\\":\\"%s\\",\\"home\\":\\"%s\\",\\"agents\\":{" "$(esc "$(uname -s 2>/dev/null)")" "$(esc "$(hostname 2>/dev/null)")" "$(esc "$(id -un 2>/dev/null)")" "$(esc "$HOME")"; s=""; for n in ${AGENT_NAMES.join(" ")}; do p=$(command -v "$n" 2>/dev/null); if [ -n "$p" ]; then printf "%s\\"%s\\":\\"%s\\"" "$s" "$(esc "$n")" "$(esc "$p")"; s=","; fi; done; printf "}}\\n"`;
 
 function agentsFromMap(found: Record<string, string>): AgentInfo[] {
   return AGENT_KINDS.map((kind) => {
@@ -204,21 +204,7 @@ function agentsFromMap(found: Record<string, string>): AgentInfo[] {
 }
 
 function extractJson(stdout: string): Record<string, unknown> | null {
-  for (const line of stdout.split(/\r?\n/).reverse()) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("{")) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (parsed && typeof parsed === "object" && (parsed as Record<string, unknown>).nearbox === 1) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      // keep looking
-    }
-  }
-  return null;
+  return extractNearboxJson(stdout);
 }
 
 /**

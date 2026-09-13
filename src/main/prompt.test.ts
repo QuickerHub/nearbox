@@ -62,3 +62,13 @@ test("a delegated prompt says who is asking and where to work; follow-ups carry 
   assert.match(first, /项目「nearbox」（D:\\source\\nearbox）/);
   assert.equal(buildDelegatedPrompt("再检查一遍", "Cursor Agent", project, true), "再检查一遍");
 });
+
+test("imagePaths follows the shared image allowlist (not every image/*)", () => {
+  const svg: PromptAttachment = { name: "icon.svg", path: "/tmp/icon.svg", mediaType: "image/svg+xml" };
+  const bmp: PromptAttachment = { name: "x.bmp", path: "/tmp/x.bmp", mediaType: "image/bmp" };
+  const pngParams: PromptAttachment = { name: "a.png", path: "/tmp/a.png", mediaType: "image/png; charset=binary" };
+  assert.deepEqual(imagePaths([svg, bmp, pngParams, log]), ["/tmp/a.png"]);
+  const section = attachmentSection([svg, pngParams], false).join("\n");
+  assert.match(section, /- 文件：\/tmp\/icon\.svg/);
+  assert.match(section, /- 图片：\/tmp\/a\.png/);
+});

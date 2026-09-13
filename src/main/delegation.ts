@@ -26,8 +26,9 @@ export async function installDelegationBin(userData: string, electron: string, c
   await mkdir(binDir, { recursive: true });
   const sh = ["#!/bin/sh", `ELECTRON_RUN_AS_NODE=1 exec "${toShellPath(electron)}" "${toShellPath(cliScript)}" "$@"`, ""].join("\n");
   await writeFile(join(binDir, "nearbox"), sh, "utf8");
+  // Git Bash on Windows also needs the execute bit to run the extensionless script.
+  await chmod(join(binDir, "nearbox"), 0o755);
   if (!IS_WINDOWS) {
-    await chmod(join(binDir, "nearbox"), 0o755);
     return binDir;
   }
   const cmd = ["@echo off", "setlocal", 'set "ELECTRON_RUN_AS_NODE=1"', `"${electron}" "${cliScript}" %*`, "exit /b %ERRORLEVEL%", ""].join("\r\n");

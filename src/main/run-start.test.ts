@@ -51,6 +51,10 @@ test("warm fallback status strings stay stable", () => {
   assert.match(warmFallbackStatus("host-down"), /常驻进程这次没起来/);
   assert.match(warmFallbackStatus("models-unknown"), /还没学到模型列表/);
   assert.match(warmFallbackStatus("model-unsupported", "gpt-x"), /gpt-x/);
+  assert.equal(
+    warmFallbackStatus("model-unsupported"),
+    "常驻会话不支持所选模型，本轮改用单独进程运行。",
+  );
   assert.match(warmFallbackStatus("legacy-session"), /改为新会话/);
   assert.match(warmFallbackStatus("session-error", "boom"), /boom/);
   assert.match(warmFallbackStatus("session-error"), /未知错误/);

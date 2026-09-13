@@ -62,5 +62,6 @@ export function nextRunnable(runs: readonly AgentRun[], limit: number): AgentRun
 /** Active runs started (directly or through further delegation) by `runId`. */
 export function activeDescendants(runs: readonly AgentRun[], runId: string): AgentRun[] {
   const byId = new Map(runs.map((run) => [run.id, run] as const));
-  return runs.filter((run) => isRunActive(run) && hasParentRunId(run) && isAncestor(byId, runId, run));
+  // Never treat a run as its own descendant (cyclic parentRunId chains).
+  return runs.filter((run) => run.id !== runId && isRunActive(run) && hasParentRunId(run) && isAncestor(byId, runId, run));
 }
