@@ -2,7 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type DevicePlatform, type RemoteDevice, type RemoteDirListing } from "@shared/protocol";
 import { COMMAND_NAMES } from "./agents";
 import { killTree as killLocal } from "./kill";
+import { exceedsSshExecBudget, MAX_SSH_EXEC_BYTES } from "./ssh-exec-budget";
 import { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
+
+export { exceedsSshExecBudget, MAX_SSH_EXEC_BYTES } from "./ssh-exec-budget";
 
 export { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
 
@@ -84,7 +87,7 @@ export function sshSpawn(target: SshTarget, command: string): ChildProcess {
 export function sshExec(
   target: SshTarget,
   command: string,
-  options: { stdin?: string | Buffer; timeoutMs?: number } = {},
+  options: { stdin?: string | Buffer; timeoutMs?: number; maxBytes?: number } = {},
 ): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     let child: ChildProcess;
@@ -96,7 +99,10 @@ export function sshExec(
     }
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
     let settled = false;
+    const maxBytes = options.maxBytes ?? MAX_SSH_EXEC_BYTES;
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
@@ -104,8 +110,28 @@ export function sshExec(
         reject(new Error(`连接 ${describeTarget(target)} 超时。`));
       }
     }, options.timeoutMs ?? HELPER_TIMEOUT_MS);
-    child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
+    const onChunk = (side: "stdout" | "stderr", chunk: Buffer) => {
+      if (settled) {
+        return;
+      }
+      const used = stdoutBytes + stderrBytes;
+      if (exceedsSshExecBudget(used, chunk.length, maxBytes)) {
+        settled = true;
+        clearTimeout(timer);
+        killLocal(child);
+        reject(new Error(`连接 ${describeTarget(target)} 的返回内容过大。`));
+        return;
+      }
+      if (side === "stdout") {
+        stdoutBytes += chunk.length;
+        stdout.push(chunk);
+      } else {
+        stderrBytes += chunk.length;
+        stderr.push(chunk);
+      }
+    };
+    child.stdout?.on("data", (chunk: Buffer) => onChunk("stdout", chunk));
+    child.stderr?.on("data", (chunk: Buffer) => onChunk("stderr", chunk));
     child.on("error", (error) => {
       if (!settled) {
         settled = true;

@@ -14,6 +14,32 @@ export interface InputSink {
   dispose(): void;
 }
 
+/** How long we wait for PowerShell to print NB_READY before giving up. */
+export const INJECTOR_READY_TIMEOUT_MS = 20_000;
+
+/** Hostile / broken stdout before NB_READY must not fill memory. */
+export const MAX_INJECTOR_BANNER_BYTES = 4096;
+
+/** Append a stdout chunk; `done` when NB_READY appears or the buffer is full. */
+export function appendInjectorBanner(
+  previous: string,
+  chunk: Buffer | string,
+  maxBytes = MAX_INJECTOR_BANNER_BYTES,
+): { banner: string; ready: boolean; overflow: boolean } {
+  const piece = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+  if (!piece) {
+    return {
+      banner: previous,
+      ready: previous.includes("NB_READY"),
+      overflow: previous.length >= maxBytes,
+    };
+  }
+  const room = Math.max(0, maxBytes - previous.length);
+  const next = room > 0 ? previous + piece.slice(0, room) : previous;
+  const overflow = next.length >= maxBytes && !next.includes("NB_READY");
+  return { banner: next, ready: next.includes("NB_READY"), overflow };
+}
+
 // C# compiled once via Add-Type. Only user32 is needed, so it works on stock
 // Windows PowerShell without extra assemblies. "NB_READY" tells us the loop is up.
 const CSHARP = String.raw`
@@ -79,6 +105,7 @@ class WindowsInputInjector implements InputSink {
   private isReady = false;
   private pending: string[] = [];
   private disposed = false;
+  private readyTimer: NodeJS.Timeout | null = null;
 
   ready(): Promise<boolean> {
     return this.start();
@@ -101,6 +128,21 @@ class WindowsInputInjector implements InputSink {
       return this.readyPromise;
     }
     this.readyPromise = new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (ok: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (this.readyTimer) {
+          clearTimeout(this.readyTimer);
+          this.readyTimer = null;
+        }
+        if (!ok) {
+          this.teardown();
+        }
+        resolve(ok);
+      };
       let child: ChildProcessWithoutNullStreams;
       try {
         const encoded = Buffer.from(BOOTSTRAP, "utf16le").toString("base64");
@@ -109,31 +151,40 @@ class WindowsInputInjector implements InputSink {
           stdio: ["pipe", "pipe", "pipe"],
         });
       } catch {
-        resolve(false);
+        finish(false);
         return;
       }
       this.child = child;
       let banner = "";
+      this.readyTimer = setTimeout(() => finish(false), INJECTOR_READY_TIMEOUT_MS);
       const onData = (chunk: Buffer) => {
-        banner += chunk.toString("utf8");
-        if (banner.includes("NB_READY")) {
+        const next = appendInjectorBanner(banner, chunk);
+        banner = next.banner;
+        if (next.ready) {
           child.stdout.off("data", onData);
           this.isReady = true;
           if (this.pending.length) {
             this.writeNow(this.pending);
             this.pending = [];
           }
-          resolve(true);
+          finish(true);
+          return;
+        }
+        if (next.overflow) {
+          child.stdout.off("data", onData);
+          finish(false);
         }
       };
       child.stdout.on("data", onData);
       child.stderr.on("data", () => undefined);
-      child.on("error", () => {
-        this.teardown();
-        resolve(false);
-      });
+      child.on("error", () => finish(false));
       child.on("exit", () => {
-        this.teardown();
+        // Exit before NB_READY must settle ready() — otherwise callers hang forever.
+        if (!this.isReady) {
+          finish(false);
+        } else {
+          this.teardown();
+        }
       });
     });
     return this.readyPromise;
@@ -150,6 +201,10 @@ class WindowsInputInjector implements InputSink {
   private teardown(): void {
     this.isReady = false;
     this.readyPromise = null;
+    if (this.readyTimer) {
+      clearTimeout(this.readyTimer);
+      this.readyTimer = null;
+    }
     const child = this.child;
     this.child = null;
     if (child) {

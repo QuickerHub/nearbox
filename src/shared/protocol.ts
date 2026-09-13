@@ -625,6 +625,15 @@ export const FORBIDDEN_EXTENSIONS = [
   ".reg",
   ".url",
   ".apk",
+  // Windows search / settings / diagnostics / ClickOnce / scriptlet / scheduled task / JNLP
+  ".search-ms",
+  ".settingcontent-ms",
+  ".diagcab",
+  ".application",
+  ".wsc",
+  ".sct",
+  ".job",
+  ".jnlp",
 ];
 
 export function isImageMediaType(mediaType: string | undefined): boolean {

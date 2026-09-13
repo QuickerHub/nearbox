@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import test from "node:test";
 import { promisify } from "node:util";
-import { createInputInjector } from "./input-win.ts";
+import { appendInjectorBanner, createInputInjector, MAX_INJECTOR_BANNER_BYTES } from "./input-win.ts";
 import { moveCommand } from "./remote-input.ts";
 
 const execFileAsync = promisify(execFile);
@@ -74,4 +74,19 @@ test("unsupported platforms get a silent no-op sink", () => {
   assert.equal(injector.supported, false);
   injector.send(["M 0 0"]);
   injector.dispose();
+});
+
+test("appendInjectorBanner caps stdout before NB_READY", () => {
+  const first = appendInjectorBanner("", "hello", 8);
+  assert.equal(first.banner, "hello");
+  assert.equal(first.ready, false);
+  assert.equal(first.overflow, false);
+  const overflow = appendInjectorBanner("hello", "world!!!", 8);
+  assert.equal(overflow.banner, "hellowor");
+  assert.equal(overflow.ready, false);
+  assert.equal(overflow.overflow, true);
+  const ready = appendInjectorBanner("", "noise NB_READY more");
+  assert.equal(ready.ready, true);
+  assert.equal(ready.overflow, false);
+  assert.ok(MAX_INJECTOR_BANNER_BYTES >= 1024);
 });

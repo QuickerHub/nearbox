@@ -53,6 +53,15 @@ const FORBIDDEN_EXTENSIONS = [
   ".reg",
   ".url",
   ".apk",
+  // Windows search / settings / diagnostics / ClickOnce / scriptlet / scheduled task / JNLP
+  ".search-ms",
+  ".settingcontent-ms",
+  ".diagcab",
+  ".application",
+  ".wsc",
+  ".sct",
+  ".job",
+  ".jnlp",
 ];
 
 export function sanitizeFileName(raw: string | undefined, fallback: string): string {
