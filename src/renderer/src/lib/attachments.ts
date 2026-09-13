@@ -112,3 +112,21 @@ export function titleForFiles(files: readonly Pick<FileMeta, "name" | "mediaType
   const images = files.filter((file) => /^image\//i.test(file.mediaType)).length;
   return images === files.length ? `${files.length} 张图片` : `${files.length} 个文件`;
 }
+
+/** Images vs other files in one pass (FileStrip). `isImage` matches `isImageFile` on the UI side. */
+export function partitionImages<T>(
+  files: readonly T[],
+  isImage: (file: T) => boolean,
+): { images: T[]; others: T[] } {
+  const images: T[] = [];
+  const others: T[] = [];
+  for (const file of files) {
+    if (isImage(file)) {
+      images.push(file);
+    } else {
+      others.push(file);
+    }
+  }
+  return { images, others };
+}
+

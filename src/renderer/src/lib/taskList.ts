@@ -88,15 +88,25 @@ export function seenMarker(run: AgentRun | undefined): string {
 
 const ATTENTION_RANK: Record<AttentionReason, number> = { permission: 0, failed: 1, finished: 2 };
 
-/** First active run waiting on permission, per task (matches `.find` order). */
-function pendingPermissionByTask(runs: readonly AgentRun[]): Map<string, AgentRun> {
-  const map = new Map<string, AgentRun>();
+/**
+ * Latest top-level turn + first pending-permission run per task, in one walk
+ * (attentionFor used to call latestTurns + a second permission pass).
+ */
+function attentionIndexes(runs: readonly AgentRun[]): {
+  latest: Map<string, AgentRun>;
+  waiting: Map<string, AgentRun>;
+} {
+  const latest = new Map<string, AgentRun>();
+  const waiting = new Map<string, AgentRun>();
   for (const run of runs) {
-    if (isRunActive(run) && run.pendingPermission && !map.has(run.taskId)) {
-      map.set(run.taskId, run);
+    if (!hasParentRunId(run)) {
+      latest.set(run.taskId, run);
+    }
+    if (isRunActive(run) && run.pendingPermission && !waiting.has(run.taskId)) {
+      waiting.set(run.taskId, run);
     }
   }
-  return map;
+  return { latest, waiting };
 }
 
 /**
@@ -106,8 +116,7 @@ function pendingPermissionByTask(runs: readonly AgentRun[]): Map<string, AgentRu
  * are not news.
  */
 export function attentionFor(tasks: readonly Task[], runs: readonly AgentRun[], seen: Readonly<Record<string, string>>): AttentionItem[] {
-  const latest = latestTurns(runs);
-  const waitingByTask = pendingPermissionByTask(runs);
+  const { latest, waiting: waitingByTask } = attentionIndexes(runs);
   const items: AttentionItem[] = [];
   for (const task of tasks) {
     const waiting = waitingByTask.get(task.id);
@@ -192,6 +201,8 @@ function matchesQuery(task: Task, needle: string): boolean {
 function section(key: string, kind: TaskSection["kind"], tasks: Task[], active: ReadonlyMap<string, AgentRun>, project?: Project): TaskSection {
   let running = 0;
   let queued = 0;
+  const open: Task[] = [];
+  const done: Task[] = [];
   for (const task of tasks) {
     const run = active.get(task.id);
     if (run?.status === "running") {
@@ -199,10 +210,6 @@ function section(key: string, kind: TaskSection["kind"], tasks: Task[], active: 
     } else if (run) {
       queued += 1;
     }
-  }
-  const open: Task[] = [];
-  const done: Task[] = [];
-  for (const task of tasks) {
     if (task.status === "done") {
       done.push(task);
     } else {
