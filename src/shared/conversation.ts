@@ -31,9 +31,16 @@ export function canContinueRun(runs: readonly AgentRun[], run: AgentRun): boolea
   return active || Boolean(sessionIdAlongChain(runs, run.id));
 }
 
+/**
+ * True when this run was started via `nearbox ask` (has a real parent id).
+ * Treat null/"" like missing — matches plan/taskList `!parentRunId` and survives odd JSON.
+ */
+export function hasParentRunId(run: Pick<AgentRun, "parentRunId">): boolean {
+  return Boolean(run.parentRunId);
+}
+
 /** Queued/running turn that blocks the composer; delegated children do not. */
 export function isTopLevelActiveRun(run: Pick<AgentRun, "status" | "parentRunId">): boolean {
-  // Treat null/"" like missing — matches plan/taskList `!parentRunId` and survives odd JSON.
-  return (run.status === "queued" || run.status === "running") && !run.parentRunId;
+  return (run.status === "queued" || run.status === "running") && !hasParentRunId(run);
 }
 

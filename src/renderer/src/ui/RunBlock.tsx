@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AGENT_LABELS, type AgentKind, type AgentRun, formatContextUsage, isRunActive } from "@shared/protocol";
+import { AGENT_LABELS, type AgentKind, type AgentRun, formatContextUsage, hasParentRunId, isRunActive } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatDuration, formatRelative } from "../lib/format";
 import { useRunEvents } from "../lib/useRunEvents";
@@ -58,7 +58,8 @@ export function RunBlock({ run, client, opensConversation, delegatedFrom, projec
   // A generated prompt hides behind "提示词"; what the user typed (or attached) is always a bubble.
   const typed = run.message !== undefined || Boolean(run.attachments?.length);
 
-  const delegated = run.parentRunId !== undefined;
+  // null/"" are not delegated — same rule as composer busy / plan / taskList.
+  const delegated = hasParentRunId(run);
 
   return (
     <article className={`run run--${run.status}${delegated ? " run--delegated" : ""}`}>
