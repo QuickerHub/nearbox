@@ -36,7 +36,8 @@ import {
   type TaskInput,
   type TaskPatch,
 } from "@shared/protocol";
-import { receiveToInbox } from "./files";
+import { receiveToInbox, safeInboxSegment, uploadNameFromQuery } from "./files";
+import { isPathInside } from "./path-inside";
 import { countOnlinePhones, reuseMapValues } from "./snapshot-devices";
 import { recentRuns } from "./snapshot-runs";
 import type { TaskHub } from "./hub";
@@ -425,6 +426,9 @@ export class LanServer extends EventEmitter {
   }
 
   forgetDevice(deviceId: string): void {
+    if (!deviceId || deviceId === "desktop") {
+      throw new Error("不能解除这台电脑自己。");
+    }
     for (const [token, session] of this.sessions) {
       if (session.device.id === deviceId) {
         this.sessions.delete(token);
@@ -775,10 +779,10 @@ export class LanServer extends EventEmitter {
 
   /** Stream the request body into the sender's inbox folder. */
   private async receiveFile(req: http.IncomingMessage, url: URL, session: PairedSession): Promise<{ file: FileMeta; stored: StoredFile }> {
-    const fileName = decodeURIComponent(url.searchParams.get("name") ?? "file");
+    const fileName = uploadNameFromQuery(url.searchParams.get("name"));
     const mediaType = req.headers["content-type"] || "application/octet-stream";
     const maxBytes = isImageMediaType(mediaType) ? this.limits.maxImageBytes : this.limits.maxFileBytes;
-    const deviceDir = join(this.inboxDir, safeSegment(session.device.name));
+    const deviceDir = join(this.inboxDir, safeInboxSegment(session.device.name));
     const saved = await receiveToInbox({
       request: req,
       inboxDir: deviceDir,
@@ -816,7 +820,7 @@ export class LanServer extends EventEmitter {
     }
     const relative = pathname === "/" ? "/index.html" : pathname;
     const target = resolvePath(root, `.${relative}`);
-    if (!target.startsWith(resolvePath(root))) {
+    if (!isPathInside(root, target)) {
       res.writeHead(403).end();
       return;
     }
@@ -1148,11 +1152,6 @@ function stringList(value: unknown): string[] | undefined {
     return undefined;
   }
   return value.filter((item): item is string => typeof item === "string" && item.length > 0);
-}
-
-function safeSegment(name: string): string {
-  const cleaned = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "phone";
-  return cleaned.slice(0, 60);
 }
 
 async function readJson<T>(req: http.IncomingMessage): Promise<T> {

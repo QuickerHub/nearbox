@@ -191,10 +191,15 @@ class LanScanner(
             if (name.isEmpty() || host.isEmpty()) {
                 return null
             }
+            // Same 1..65535 rule as shared parseDiscover — optInt can yield 0 / junk.
+            val port = info.optInt("port", fallbackPort)
+            if (port !in 1..65535) {
+                return null
+            }
             return FoundHost(
                 name = name,
                 connectHost = connectHost,
-                port = info.optInt("port", fallbackPort),
+                port = port,
                 version = info.optString("version", ""),
                 token = info.optString("token").ifBlank { info.optString("pin") }.ifBlank { null },
                 pin = info.optString("pin").ifBlank { null },

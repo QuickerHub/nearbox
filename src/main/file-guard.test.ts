@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertAllowedFile, sanitizeFileName } from "./file-guard.ts";
+import { assertAllowedFile, sanitizeFileName, safeInboxSegment, uploadNameFromQuery } from "./file-guard.ts";
 
 test("sanitizeFileName strips path and reserved Windows names", () => {
   assert.equal(sanitizeFileName("..\\..\\secret.txt", "file"), "secret.txt");
@@ -18,4 +18,20 @@ test("assertAllowedFile rejects executables and scripts", () => {
   assert.throws(() => assertAllowedFile("app.apk", "application/vnd.android.package-archive"), /可执行文件或脚本/);
   assert.doesNotThrow(() => assertAllowedFile("note.md", "text/markdown"));
   assert.doesNotThrow(() => assertAllowedFile("shot.png", "image/png"));
+});
+
+test("safeInboxSegment blocks empty and dot segments", () => {
+  assert.equal(safeInboxSegment(""), "phone");
+  assert.equal(safeInboxSegment(".."), "phone");
+  assert.equal(safeInboxSegment("."), "phone");
+  assert.equal(safeInboxSegment("Android 手机"), "Android 手机");
+  assert.equal(safeInboxSegment('a/b\\c'), "a_b_c");
+});
+
+test("uploadNameFromQuery does not double-decode", () => {
+  assert.equal(uploadNameFromQuery("100%done.jpg"), "100%done.jpg");
+  assert.equal(uploadNameFromQuery("photo%20.jpg"), "photo%20.jpg");
+  assert.equal(uploadNameFromQuery("café.png"), "café.png");
+  assert.equal(uploadNameFromQuery(""), "file");
+  assert.equal(uploadNameFromQuery(null), "file");
 });
