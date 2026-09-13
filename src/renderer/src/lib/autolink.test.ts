@@ -46,3 +46,15 @@ test("angle-bracket autolinks work and javascript hrefs stay text", () => {
   ]);
   assert.ok(splitInline("[x](javascript:alert(1))").every((piece) => piece.type !== "link"));
 });
+
+test("markdown images become ordinary http links without a leading bang", () => {
+  assert.deepEqual(splitInline("见 ![截图](https://example.com/a.png) 这里"), [
+    { type: "text", text: "见 " },
+    { type: "link", href: "https://example.com/a.png", text: "截图" },
+    { type: "text", text: " 这里" },
+  ]);
+  assert.deepEqual(splitInline("![](https://example.com/x.png)"), [
+    { type: "link", href: "https://example.com/x.png", text: "https://example.com/x.png" },
+  ]);
+  assert.ok(splitInline("![x](javascript:alert(1))").every((piece) => piece.type !== "link"));
+});

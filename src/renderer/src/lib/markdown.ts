@@ -72,8 +72,26 @@ export function parseBlocks(text: string): MdBlock[] {
     if (LIST.test(line)) {
       const ordered = ORDERED.test(line);
       const items: string[] = [];
-      while (index < lines.length && LIST.test(lines[index] ?? "")) {
-        items.push((lines[index] ?? "").replace(LIST, ""));
+      while (index < lines.length) {
+        const next = lines[index] ?? "";
+        if (!next.trim()) {
+          // Loose lists: blank lines between same-marker items stay one list
+          // (otherwise each chunk becomes its own <ol> and restarts at 1).
+          let look = index + 1;
+          while (look < lines.length && !(lines[look] ?? "").trim()) {
+            look += 1;
+          }
+          const peek = lines[look] ?? "";
+          if (look < lines.length && LIST.test(peek) && ORDERED.test(peek) === ordered) {
+            index = look;
+            continue;
+          }
+          break;
+        }
+        if (!LIST.test(next)) {
+          break;
+        }
+        items.push(next.replace(LIST, ""));
         index += 1;
       }
       blocks.push({ type: "list", ordered, items });

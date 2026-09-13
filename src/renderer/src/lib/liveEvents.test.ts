@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { drainLiveBatch, mergeCatchUpHistory, queueLiveEvent } from "./liveEvents.ts";
+import { appendCatchUpEvents, drainLiveBatch, mergeCatchUpHistory, queueLiveEvent } from "./liveEvents.ts";
 
 test("mergeCatchUpHistory appends only buffered seqs after history", () => {
   const history = [{ seq: 1 }, { seq: 2 }];
@@ -76,4 +76,19 @@ test("mergeCatchUpHistory with empty history is the HTTP-failure promote path", 
     [1, 2, 3],
   );
   assert.equal(caught.lastSeq, 3);
+});
+
+test("appendCatchUpEvents fills reconnect gaps without duplicating", () => {
+  const merged = appendCatchUpEvents([{ seq: 1 }, { seq: 2 }], [{ seq: 2 }, { seq: 4 }, { seq: 3 }]);
+  assert.deepEqual(
+    merged.events.map((event) => event.seq),
+    [1, 2, 3, 4],
+  );
+  assert.equal(merged.lastSeq, 4);
+  const empty = appendCatchUpEvents([{ seq: 5 }], []);
+  assert.deepEqual(
+    empty.events.map((event) => event.seq),
+    [5],
+  );
+  assert.equal(empty.lastSeq, 5);
 });

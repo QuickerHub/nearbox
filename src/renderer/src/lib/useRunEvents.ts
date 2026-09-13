@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { RunEvent } from "@shared/protocol";
 import type { ClientHandle } from "./client";
-import { drainLiveBatch, mergeCatchUpHistory, queueLiveEvent } from "./liveEvents";
+import { appendCatchUpEvents, drainLiveBatch, mergeCatchUpHistory, queueLiveEvent } from "./liveEvents";
 
 /** Coalesce streamed events so the transcript rebuilds a few times a second, not per token. */
 const LIVE_FLUSH_MS = 50;
@@ -59,6 +59,35 @@ export function useRunEvents(client: ClientHandle, runId: string | undefined, en
         flushTimer = window.setTimeout(flushLive, LIVE_FLUSH_MS);
       }
     });
+
+    const unsubscribeReconnect = client.onReconnect(() => {
+      if (disposed || !caughtUp) {
+        return;
+      }
+      const after = lastSeq;
+      void client
+        .runEvents(runId, after)
+        .then((more) => {
+          if (disposed || !more.length) {
+            return;
+          }
+          // Drop anything the HTTP catch-up already covers from the live batch.
+          const covered = new Set(more.map((event) => event.seq));
+          let tip = lastSeq;
+          for (const event of more) {
+            if (event.seq > tip) {
+              tip = event.seq;
+            }
+          }
+          lastSeq = tip;
+          liveBatch = liveBatch.filter((event) => !covered.has(event.seq) && event.seq > lastSeq);
+          setEvents((current) => appendCatchUpEvents(current ?? [], more).events);
+        })
+        .catch(() => {
+          // Keep showing what we have; the next live event or reconnect can retry.
+        });
+    });
+
     void client
       .runEvents(runId, 0)
       .then((history) => {
@@ -79,6 +108,7 @@ export function useRunEvents(client: ClientHandle, runId: string | undefined, en
         window.clearTimeout(flushTimer);
       }
       unsubscribe();
+      unsubscribeReconnect();
     };
   }, [client, runId, enabled]);
 

@@ -36,6 +36,8 @@ export interface ClientHandle {
   snapshot: HostSnapshot;
   dispose(): void;
   subscribeRun(runId: string, listener: (event: RunEvent) => void): () => void;
+  /** Fires after the main WS reconnects (not on the first open). */
+  onReconnect(listener: () => void): () => void;
 
   capture(text: string): Promise<Task>;
   createTask(input: TaskInput): Promise<Task>;
@@ -148,9 +150,11 @@ export async function connectClient(
   onSnapshot(state);
 
   const runListeners = new Map<string, Set<(event: RunEvent) => void>>();
+  const reconnectListeners = new Set<() => void>();
   let socket: WebSocket | null = null;
   let disposed = false;
   let retry = 0;
+  let socketOpened = false;
 
   const send = (payload: unknown) => {
     if (socket?.readyState === WebSocket.OPEN) {
@@ -165,10 +169,17 @@ export async function connectClient(
     const next = new WebSocket(wsUrl(origin, token));
     socket = next;
     next.addEventListener("open", () => {
+      const reconnected = socketOpened;
+      socketOpened = true;
       retry = 0;
       onStatus(null);
       for (const runId of runListeners.keys()) {
         send({ type: "subscribe-run", runId });
+      }
+      if (reconnected) {
+        for (const listener of reconnectListeners) {
+          listener();
+        }
       }
     });
     next.addEventListener("message", (event) => {
@@ -230,6 +241,12 @@ export async function connectClient(
           runListeners.delete(runId);
           send({ type: "unsubscribe-run", runId });
         }
+      };
+    },
+    onReconnect: (listener) => {
+      reconnectListeners.add(listener);
+      return () => {
+        reconnectListeners.delete(listener);
       };
     },
     capture: (text) => post("/api/capture", { id: newId(), text }),

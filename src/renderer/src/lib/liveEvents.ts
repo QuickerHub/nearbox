@@ -38,6 +38,40 @@ export function mergeCatchUpHistory<T extends Sequenced>(
   };
 }
 
+
+/**
+ * Append events fetched after a WS reconnect. Drops seqs already on screen and
+ * keeps order so a gap left during the dropout is filled without duplicates.
+ */
+export function appendCatchUpEvents<T extends Sequenced>(
+  current: readonly T[],
+  more: readonly T[],
+): { events: T[]; lastSeq: number } {
+  if (!more.length) {
+    return { events: [...current], lastSeq: current[current.length - 1]?.seq ?? 0 };
+  }
+  const seen = new Set<number>();
+  for (const event of current) {
+    seen.add(event.seq);
+  }
+  const extra: T[] = [];
+  for (const event of more) {
+    if (seen.has(event.seq)) {
+      continue;
+    }
+    seen.add(event.seq);
+    extra.push(event);
+  }
+  if (extra.length > 1) {
+    extra.sort((a, b) => a.seq - b.seq);
+  }
+  const events = extra.length ? [...current, ...extra] : [...current];
+  return {
+    events,
+    lastSeq: events[events.length - 1]?.seq ?? 0,
+  };
+}
+
 /**
  * Queue one live event for the next flush. Returns false when the seq is stale
  * or already sitting in the current batch (duplicate while a timer is pending).
