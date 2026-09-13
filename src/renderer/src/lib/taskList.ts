@@ -192,12 +192,23 @@ function section(key: string, kind: TaskSection["kind"], tasks: Task[], active: 
       queued += 1;
     }
   }
+  const open: Task[] = [];
+  const done: Task[] = [];
+  for (const task of tasks) {
+    if (task.status === "done") {
+      done.push(task);
+    } else {
+      open.push(task);
+    }
+  }
+  open.sort(byRecent);
+  done.sort(byCompleted);
   return {
     key,
     kind,
     project,
-    open: tasks.filter((task) => task.status !== "done").sort(byRecent),
-    done: tasks.filter((task) => task.status === "done").sort(byCompleted),
+    open,
+    done,
     running,
     queued,
   };
