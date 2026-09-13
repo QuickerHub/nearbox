@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { cursorStateDbPath, readCursorIdeModels } from "./cursor-ide-state.ts";
+import { cursorStateDbPath, readCursorIdeModels, resolveConfigHome } from "./cursor-ide-state.ts";
 
 const APPLICATION_USER_KEY =
   "src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser";
@@ -43,4 +43,12 @@ test("readCursorIdeModels pulls the toggle list from applicationUser", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+
+test("resolveConfigHome ignores blank APPDATA / XDG values", () => {
+  assert.equal(resolveConfigHome(undefined, "/fallback"), "/fallback");
+  assert.equal(resolveConfigHome("", "/fallback"), "/fallback");
+  assert.equal(resolveConfigHome("   ", "/fallback"), "/fallback");
+  assert.equal(resolveConfigHome("/real", "/fallback"), "/real");
 });

@@ -156,14 +156,25 @@ export class AppUpdater {
       throw new Error(`无法检查更新（${response.status}）`);
     }
     const release = (await response.json()) as GithubRelease;
+    this.clearStaleReady();
+    const latest = release.tag_name ? stripTagPrefix(release.tag_name) : null;
+    const installerReady = Boolean(this.readyFile && this.readyVersion && latest && this.readyVersion === latest);
     this.snapshot = {
       ...statusFromRelease(release, this.options.currentVersion, this.options.packaged),
       checking: false,
       downloading: false,
-      progress: this.readyVersion && this.readyVersion === stripTagPrefix(release.tag_name ?? "") ? 1 : 0,
+      progress: installerReady ? 1 : 0,
       checkedAt: new Date((this.options.now ?? Date.now)()).toISOString(),
     };
     return this.status();
+  }
+
+  /** Drop a remembered installer when the file was deleted out from under us. */
+  private clearStaleReady(): void {
+    if (this.readyFile && !existsSync(this.readyFile)) {
+      this.readyFile = null;
+      this.readyVersion = null;
+    }
   }
 
   private async install(): Promise<void> {
@@ -182,6 +193,7 @@ export class AppUpdater {
   }
 
   private async download(version: string, url: string): Promise<string> {
+    this.clearStaleReady();
     if (this.readyFile && this.readyVersion === version && existsSync(this.readyFile)) {
       return this.readyFile;
     }

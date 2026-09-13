@@ -18,6 +18,12 @@ import type {
 
 const ABS_MAX = 65535;
 const WHEEL_STEP = 120;
+/** Cap pasted text so one control message cannot enqueue millions of keystrokes. */
+export const MAX_TEXT_CHARS = 4096;
+/** Cap combo chords (modifier spam from a buggy client). */
+export const MAX_COMBO_CODES = 16;
+/** Wheel notches beyond this are almost certainly malformed. */
+const MAX_WHEEL_NOTCHES = 50;
 
 const BUTTON_CODE: Record<RemoteButton, number> = { left: 1, right: 2, middle: 3 };
 
@@ -42,13 +48,18 @@ export function buttonCommand(button: RemoteButton, down: boolean): string {
 }
 
 /** notches > 0 scrolls the wheel forward (content up), matching a physical mouse. */
+export function clampWheelNotches(notches: number): number {
+  const value = Number.isFinite(notches) ? notches : 0;
+  return value < -MAX_WHEEL_NOTCHES ? -MAX_WHEEL_NOTCHES : value > MAX_WHEEL_NOTCHES ? MAX_WHEEL_NOTCHES : value;
+}
+
 export function wheelCommand(notches: number): string | null {
-  const delta = Math.round((Number.isFinite(notches) ? notches : 0) * WHEEL_STEP);
+  const delta = Math.round(clampWheelNotches(notches) * WHEEL_STEP);
   return delta === 0 ? null : `W ${delta}`;
 }
 
 export function hWheelCommand(notches: number): string | null {
-  const delta = Math.round((Number.isFinite(notches) ? notches : 0) * WHEEL_STEP);
+  const delta = Math.round(clampWheelNotches(notches) * WHEEL_STEP);
   return delta === 0 ? null : `H ${delta}`;
 }
 
@@ -59,7 +70,8 @@ export function keyCommand(vk: number, down: boolean, extended: boolean): string
 /** One Unicode keystroke per UTF-16 code unit; surrogate pairs pass through untouched. */
 export function textCommands(value: string): string[] {
   const out: string[] = [];
-  for (let i = 0; i < value.length; i += 1) {
+  const limit = Math.min(value.length, MAX_TEXT_CHARS);
+  for (let i = 0; i < limit; i += 1) {
     out.push(`U ${value.charCodeAt(i)}`);
   }
   return out;
@@ -166,7 +178,10 @@ export function codeToVk(code: string): VkMapping | null {
 }
 
 function comboCommands(codes: string[]): string[] {
-  const resolved = codes.map(codeToVk).filter((item): item is VkMapping => item !== null);
+  const resolved = codes
+    .slice(0, MAX_COMBO_CODES)
+    .map(codeToVk)
+    .filter((item): item is VkMapping => item !== null);
   if (!resolved.length) {
     return [];
   }
@@ -359,7 +374,9 @@ export function parseControlMessage(raw: string): RemoteControlToHost | null {
         ? { t: "combo", codes: msg.codes as string[] }
         : null;
     case "text":
-      return typeof msg.value === "string" ? { t: "text", value: msg.value } : null;
+      return typeof msg.value === "string"
+        ? { t: "text", value: msg.value.length > MAX_TEXT_CHARS ? msg.value.slice(0, MAX_TEXT_CHARS) : msg.value }
+        : null;
     case "config": {
       const out: RemoteControlToHost = {
         t: "config",

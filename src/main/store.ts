@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { rename } from "node:fs/promises";
+import { join } from "node:path";
 import {
   AGENT_KINDS,
   type AgentKind,
@@ -16,7 +16,10 @@ import {
   type Task,
   type TaskNote,
 } from "@shared/protocol";
+import { stripBom } from "./json-bom";
 import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { normalizeFilesMap } from "./store-files";
+import { writeJsonAtomic } from "./store-write";
 import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
@@ -88,7 +91,8 @@ export class Store {
       return emptyState();
     }
     try {
-      const raw = JSON.parse(readFileSync(this.file, "utf8")) as Partial<PersistedState>;
+      const text = stripBom(readFileSync(this.file, "utf8"));
+      const raw = JSON.parse(text) as Partial<PersistedState>;
       const base = emptyState();
       return {
         version: 1,
@@ -97,7 +101,7 @@ export class Store {
         runs: Array.isArray(raw.runs) ? raw.runs.map(normalizeRun) : base.runs,
         sessions: Array.isArray(raw.sessions) ? raw.sessions : base.sessions,
         remoteDevices: Array.isArray(raw.remoteDevices) ? raw.remoteDevices.map(normalizeDevice) : base.remoteDevices,
-        files: raw.files && typeof raw.files === "object" ? raw.files : base.files,
+        files: normalizeFilesMap(raw.files),
         settings: {
           ...base.settings,
           ...(raw.settings ?? {}),
@@ -142,10 +146,7 @@ export class Store {
     // again, so one disk blip would permanently stop persistence until restart.
     this.writing = enqueueWrite(this.writing, async () => {
       try {
-        await mkdir(dirname(this.file), { recursive: true });
-        const tmp = `${this.file}.tmp`;
-        await writeFile(tmp, payload, "utf8");
-        await rename(tmp, this.file);
+        await writeJsonAtomic(this.file, payload);
       } catch (error) {
         this.dirty = true;
         throw error;

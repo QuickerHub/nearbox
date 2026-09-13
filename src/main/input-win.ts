@@ -72,6 +72,14 @@ function powershellPath(): string {
   return join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }
 
+/** Give up when PowerShell never prints NB_READY (wedged host, missing user32). */
+export const INPUT_READY_TIMEOUT_MS = 20_000;
+
+export interface WindowsInputInjectorOptions {
+  /** Override for tests — keep production default. */
+  readyTimeoutMs?: number;
+}
+
 class WindowsInputInjector implements InputSink {
   readonly supported = true;
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -79,6 +87,12 @@ class WindowsInputInjector implements InputSink {
   private isReady = false;
   private pending: string[] = [];
   private disposed = false;
+  private readyTimer: NodeJS.Timeout | null = null;
+  private readonly readyTimeoutMs: number;
+
+  constructor(options: WindowsInputInjectorOptions = {}) {
+    this.readyTimeoutMs = options.readyTimeoutMs ?? INPUT_READY_TIMEOUT_MS;
+  }
 
   ready(): Promise<boolean> {
     return this.start();
@@ -96,11 +110,27 @@ class WindowsInputInjector implements InputSink {
     void this.start();
   }
 
+  private clearReadyTimer(): void {
+    if (this.readyTimer) {
+      clearTimeout(this.readyTimer);
+      this.readyTimer = null;
+    }
+  }
+
   private start(): Promise<boolean> {
     if (this.readyPromise) {
       return this.readyPromise;
     }
     this.readyPromise = new Promise<boolean>((resolve) => {
+      let settled = false;
+      const settle = (ok: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        this.clearReadyTimer();
+        resolve(ok);
+      };
       let child: ChildProcessWithoutNullStreams;
       try {
         const encoded = Buffer.from(BOOTSTRAP, "utf16le").toString("base64");
@@ -109,10 +139,18 @@ class WindowsInputInjector implements InputSink {
           stdio: ["pipe", "pipe", "pipe"],
         });
       } catch {
-        resolve(false);
+        settle(false);
         return;
       }
       this.child = child;
+      // Wedged helper that never exits and never prints NB_READY — do not hang ready() forever.
+      this.readyTimer = setTimeout(() => {
+        this.readyTimer = null;
+        this.pending = [];
+        this.teardown();
+        settle(false);
+      }, this.readyTimeoutMs);
+      this.readyTimer.unref?.();
       let banner = "";
       const onData = (chunk: Buffer) => {
         banner += chunk.toString("utf8");
@@ -123,14 +161,14 @@ class WindowsInputInjector implements InputSink {
             this.writeNow(this.pending);
             this.pending = [];
           }
-          resolve(true);
+          settle(true);
         }
       };
       child.stdout.on("data", onData);
       child.stderr.on("data", () => undefined);
       child.on("error", () => {
         this.teardown();
-        resolve(false);
+        settle(false);
       });
       child.on("exit", () => {
         this.teardown();
@@ -150,6 +188,7 @@ class WindowsInputInjector implements InputSink {
   private teardown(): void {
     this.isReady = false;
     this.readyPromise = null;
+    // Keep readyTimer armed: exit/dispose must not strand ready() — the timeout settles it.
     const child = this.child;
     this.child = null;
     if (child) {
@@ -167,6 +206,8 @@ class WindowsInputInjector implements InputSink {
     this.teardown();
   }
 }
+
+export { WindowsInputInjector };
 
 class NoopInjector implements InputSink {
   readonly supported = false;

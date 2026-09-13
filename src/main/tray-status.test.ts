@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   countRunStatuses,
+  sanitizeCount,
   trayAgentLabel,
   trayHostLabel,
   trayPhonesLabel,
@@ -46,3 +47,11 @@ test("trayTooltip joins Chinese status rows", () => {
   assert.equal(trayTooltip(1, 2, 3), "Nearbox · Agent：1 运行中 · 2 排队 · 3 台手机在线");
 });
 
+
+test("sanitizeCount rejects non-finite and negative tray tallies", () => {
+  assert.equal(sanitizeCount(-3), 0);
+  assert.equal(sanitizeCount(Number.NaN), 0);
+  assert.equal(sanitizeCount(2.9), 2);
+  assert.equal(trayPhonesLabel(-1), "没有手机在线");
+  assert.equal(trayAgentLabel(-1, Number.NaN), "Agent 空闲");
+});
