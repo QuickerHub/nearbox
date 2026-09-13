@@ -1,8 +1,9 @@
-import { createWriteStream, existsSync } from "node:fs";
+import { createWriteStream, existsSync, openSync, readSync, closeSync } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AppUpdateStatus } from "@shared/protocol";
 import { isNewerVersion, stripTagPrefix } from "../shared/version.ts";
+import { hasWindowsPeMzHeader } from "./updater-pe.ts";
 
 export const DEFAULT_RELEASE_REPO = "QuickerHub/nearbox";
 const STALE_MS = 60 * 60 * 1000;
@@ -214,9 +215,27 @@ export class AppUpdater {
       await unlink(dest).catch(() => undefined);
       throw error;
     }
+    if (!installerLooksLikePe(dest)) {
+      await unlink(dest).catch(() => undefined);
+      throw new Error("下载的安装包不是有效的 Windows 可执行文件。");
+    }
     this.readyFile = dest;
     this.readyVersion = version;
     this.snapshot = { ...this.snapshot, downloading: false, progress: 1 };
     return dest;
+  }
+}
+
+/** Read the DOS stub magic without pulling the whole installer into memory. */
+function installerLooksLikePe(filePath: string): boolean {
+  const fd = openSync(filePath, "r");
+  try {
+    const buf = Buffer.alloc(2);
+    const n = readSync(fd, buf, 0, 2, 0);
+    return n >= 2 && hasWindowsPeMzHeader(buf.subarray(0, n));
+  } catch {
+    return false;
+  } finally {
+    closeSync(fd);
   }
 }

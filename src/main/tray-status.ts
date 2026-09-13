@@ -31,9 +31,24 @@ export function trayPhonesLabel(phones: number): string {
   return phonesOnlineLabel(phones);
 }
 
+/**
+ * LAN picker is IPv4 hostnames/addresses. `#` / `?` would look like a URL
+ * fragment/query in the tray row and must not render as `host:port`.
+ */
+export function sanitizeTrayHostLabel(host: string | undefined): string | undefined {
+  if (typeof host !== "string" || !host) {
+    return undefined;
+  }
+  if (/[#?]/.test(host)) {
+    return undefined;
+  }
+  return host;
+}
+
 /** Host:port row, or the empty-LAN placeholder. */
 export function trayHostLabel(selectedHost: string | undefined, port: number | undefined): string {
-  return selectedHost ? `${selectedHost}:${port}` : "未发现局域网地址";
+  const host = sanitizeTrayHostLabel(selectedHost);
+  return host ? `${host}:${port}` : "未发现局域网地址";
 }
 
 /**
@@ -47,11 +62,10 @@ export function trayStatusSignature(
   running: number,
   queued: number,
 ): string {
-  return `${selectedHost ?? ""}|${port ?? ""}|${phones}|${running}|${queued}`;
+  return `${sanitizeTrayHostLabel(selectedHost) ?? ""}|${port ?? ""}|${phones}|${running}|${queued}`;
 }
 
 /** Hover tooltip: compact Chinese status next to the app name. */
 export function trayTooltip(running: number, queued: number, phones: number): string {
   return `Nearbox · ${trayAgentLabel(running, queued)} · ${phonesOnlineLabel(phones)}`;
 }
-
