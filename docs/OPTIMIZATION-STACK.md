@@ -22,8 +22,9 @@ Merge **FIFO from #2 upward**. Do **not** merge #1 onto main.
 | **#13** | `opt/local-batch-13` | Chinese CLI result durations, shared phone count/label, strip empty `parentRunId` on load, scheduler `hasParentRunId`, project run counts |
 | **#14** | `opt/local-batch-14` | shared `findLast`, Map `sessionIdAlongChain`, project recency helpers, live tray tooltip, one-pass task open/done |
 | **#15** | `opt/local-batch-15` | `topLevelActiveRun` / shared `isRunActive`, attention permission index, one-pass section group, all-project run counts, `firstLine` scan |
+| **#16** | `opt/local-batch-16` | shared Chinese `duration`, `topLevelTurnsForTask`, attention indexes one-pass, `partitionImages`, plan `findLast`, projectRuns `isRunActive` |
 
-Exact order: **#2 → #3 → #4 → #5 → #6 → #7 → #8 → #9 → #10 → #11 → #12 → #13 → #14 → #15**.
+Exact order: **#2 → #3 → #4 → #5 → #6 → #7 → #8 → #9 → #10 → #11 → #12 → #13 → #14 → #15 → #16**.
 
 Each batch branch was cut from the previous (`opt/local-batch-N` from `opt/local-batch-(N-1)`), so merging in order is a fast-forward-friendly stack onto `main`.
 
@@ -31,7 +32,8 @@ Each batch branch was cut from the previous (`opt/local-batch-N` from `opt/local
 
 - **`main`**: #2 → #13 merged (`7e69346` Merge pull request #13). #14 and #15 are **not** on `main`.
 - **#14** (`opt/local-batch-14`): **open**, mergeable, stacked on #13.
-- **#15** (`opt/local-batch-15`): this batch, stacked on #14.
+- **#15** (`opt/local-batch-15`): **open**, stacked on #14.
+- **#16** (`opt/local-batch-16`): this batch, stacked on #15.
 - **#1** (`opt/local-batch-1`): **closed** as superseded (2026-09-13). Keep FIFO permission queue from #2.
 
 ## PR #1 is superseded
@@ -49,4 +51,4 @@ Overlapping fixes (warm session-first model mapping, live event batching, run-st
 
 ## Backlogs
 
-Per-batch next-hour notes live under `docs/backlog-local-batch-*.md` (latest: `docs/backlog-local-batch-15.md` after #15 lands).
+Per-batch next-hour notes live under `docs/backlog-local-batch-*.md` (latest: `docs/backlog-local-batch-16.md` after #16 lands).
