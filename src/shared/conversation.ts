@@ -33,6 +33,7 @@ export function canContinueRun(runs: readonly AgentRun[], run: AgentRun): boolea
 
 /** Queued/running turn that blocks the composer; delegated children do not. */
 export function isTopLevelActiveRun(run: Pick<AgentRun, "status" | "parentRunId">): boolean {
-  return (run.status === "queued" || run.status === "running") && run.parentRunId === undefined;
+  // Treat null/"" like missing — matches plan/taskList `!parentRunId` and survives odd JSON.
+  return (run.status === "queued" || run.status === "running") && !run.parentRunId;
 }
 
