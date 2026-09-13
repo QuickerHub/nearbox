@@ -20,7 +20,14 @@ export function isTransientAgentTransportError(text: string): boolean {
   if (/HTTP\/2 keepalive/i.test(text)) {
     return true;
   }
-  return /RetriableError/i.test(text) && /PING timed out/i.test(text);
+  if (/RetriableError/i.test(text) && /PING timed out/i.test(text)) {
+    return true;
+  }
+  // cursor-agent also surfaces these when the HTTP/2 session dies mid-turn.
+  if (/stream\s+(?:closed|reset)|INTERNAL_ERROR|NGHTTP2_REFUSED_STREAM|ECONNRESET/i.test(text)) {
+    return /http\/2|h2|RetriableError|unavailable|transport/i.test(text);
+  }
+  return false;
 }
 
 /** Same directory cursor-agent uses for cli-config.json. */
@@ -65,7 +72,8 @@ export function ensureCursorAgentHttp1(env: NodeJS.ProcessEnv = process.env, hom
   try {
     let raw: unknown = {};
     if (existsSync(path)) {
-      raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      const file = readFileSync(path, "utf8").replace(/^\uFEFF/, "").trim();
+      raw = file ? (JSON.parse(file) as unknown) : {};
     }
     const { next, changed } = preferHttp1InCliConfig(raw);
     if (changed) {

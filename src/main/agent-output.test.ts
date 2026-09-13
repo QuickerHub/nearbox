@@ -541,3 +541,130 @@ test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(125_000), "2 分 5 秒");
   assert.equal(formatMsDuration(3_725_000), "1 小时 2 分");
 });
+
+test("claude string content, thinking text, and camelCase toolUseId pair", () => {
+  const parser = createOutputParser("claude");
+  const all = feedAll(parser, [
+    JSON.stringify({
+      type: "assistant",
+      message: { content: "plain answer" },
+      session_id: "s1",
+    }),
+    JSON.stringify({
+      type: "assistant",
+      message: {
+        content: [
+          { type: "thinking", text: "ponder" },
+          { type: "tool_use", id: "t1", name: "Bash", input: JSON.stringify({ command: "echo hi" }) },
+        ],
+      },
+      session_id: "s1",
+    }),
+    JSON.stringify({
+      type: "user",
+      message: {
+        content: { type: "tool_result", toolUseId: "t1", content: "hi\n", isError: false },
+      },
+      session_id: "s1",
+    }),
+  ]);
+  assert.equal(all.events.find((event) => event.kind === "text")?.text, "plain answer");
+  assert.equal(all.events.find((event) => event.kind === "thinking")?.text, "ponder");
+  const tools = all.events.filter((event) => event.tool).map((event) => event.tool!);
+  assert.equal(tools[0]?.command, "echo hi");
+  assert.equal(tools[1]?.id, "t1");
+  assert.equal(tools[1]?.status, "ok");
+  assert.equal(tools[1]?.output, "hi\n");
+});
+
+test("JSONL feed keeps a trailing status suffix after the object", () => {
+  const parser = createOutputParser("claude");
+  const all = feedAll(parser, [
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"OK"}]}} [done]',
+  ]);
+  assert.equal(all.events.find((event) => event.kind === "text")?.text, "OK");
+  assert.equal(all.events.some((event) => event.kind === "raw"), false);
+});
+
+test("codex unwraps double-quoted pwsh and argv command arrays", () => {
+  const parser = createOutputParser("codex");
+  const all = pushAll(parser, [
+    {
+      type: "item.completed",
+      item: {
+        id: "c1",
+        type: "command_execution",
+        command: ["npm", "test", "--", "a"],
+        aggregated_output: "ok",
+        exit_code: 0,
+        status: "completed",
+      },
+    },
+    {
+      type: "item.completed",
+      item: {
+        id: "c2",
+        type: "command_execution",
+        command: 'pwsh.exe -Command "Get-ChildItem -Name"',
+        aggregated_output: "a.txt",
+        exitCode: 0,
+        status: "completed",
+      },
+    },
+  ]);
+  const tools = all.events.filter((event) => event.tool).map((event) => event.tool!);
+  assert.equal(tools[0]?.command, "npm test -- a");
+  assert.equal(tools[1]?.command, "Get-ChildItem -Name");
+  assert.equal(tools[1]?.exitCode, 0);
+});
+
+test("opencode accepts sessionId camelCase", () => {
+  const parser = createOutputParser("opencode");
+  const all = feedAll(parser, [
+    JSON.stringify({
+      type: "text",
+      sessionId: "sess-9",
+      part: { type: "text", text: "done", sessionId: "sess-9" },
+    }),
+  ]);
+  assert.equal(all.sessionId, "sess-9");
+  assert.equal(all.result, "done");
+});
+
+test("ACP plan entries accept text/title labels", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    {
+      sessionUpdate: "plan",
+      entries: [
+        { status: "completed", title: "Scan" },
+        { status: "pending", text: "Edit" },
+      ],
+    },
+  ]);
+  const tool = all.events.find((event) => event.tool)?.tool;
+  assert.equal(tool?.kind, "todo");
+  assert.equal(tool?.output, "☑ Scan\n☐ Edit");
+});
+
+test("cursor callId camelCase and string-valued failure bodies", () => {
+  const parser = createOutputParser("cursor");
+  const all = pushAll(parser, [
+    {
+      type: "tool_call",
+      subtype: "completed",
+      callId: "x1",
+      toolCall: {
+        shellToolCall: {
+          args: { command: "false" },
+          result: { failure: "command failed: false" },
+        },
+      },
+    },
+  ]);
+  const tool = all.events.find((event) => event.tool)?.tool;
+  assert.equal(tool?.id, "x1");
+  assert.equal(tool?.status, "error");
+  assert.equal(tool?.error, "command failed: false");
+  assert.equal(tool?.output, "command failed: false");
+});

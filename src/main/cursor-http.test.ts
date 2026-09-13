@@ -31,3 +31,12 @@ test("preferHttp1InCliConfig only writes when the flag is missing or false", () 
     changed: true,
   });
 });
+
+test("HTTP/2 stream resets mid-turn are also transient", () => {
+  assert.equal(
+    isTransientAgentTransportError("RetriableError: [unavailable] HTTP/2 stream closed with error INTERNAL_ERROR"),
+    true,
+  );
+  assert.equal(isTransientAgentTransportError("transport ECONNRESET during HTTP/2 write"), true);
+  assert.equal(isTransientAgentTransportError("ECONNRESET reading file"), false);
+});
