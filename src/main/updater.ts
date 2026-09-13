@@ -1,8 +1,9 @@
-import { createWriteStream, existsSync } from "node:fs";
+import { closeSync, createWriteStream, existsSync, openSync, readSync, statSync } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AppUpdateStatus } from "@shared/protocol";
 import { isNewerVersion, stripTagPrefix } from "../shared/version.ts";
+import { installerLooksUsable } from "./updater-pe.ts";
 
 export const DEFAULT_RELEASE_REPO = "QuickerHub/nearbox";
 const STALE_MS = 60 * 60 * 1000;
@@ -183,7 +184,11 @@ export class AppUpdater {
 
   private async download(version: string, url: string): Promise<string> {
     if (this.readyFile && this.readyVersion === version && existsSync(this.readyFile)) {
-      return this.readyFile;
+      if (cachedInstallerStillValid(this.readyFile)) {
+        return this.readyFile;
+      }
+      this.readyFile = null;
+      this.readyVersion = null;
     }
     await mkdir(this.options.cacheDir, { recursive: true });
     const dest = join(this.options.cacheDir, `Nearbox-${version}-win-x64.exe`);
@@ -214,9 +219,30 @@ export class AppUpdater {
       await unlink(dest).catch(() => undefined);
       throw error;
     }
+    if (!cachedInstallerStillValid(dest)) {
+      await unlink(dest).catch(() => undefined);
+      throw new Error("下载的安装包不是有效的 Windows 可执行文件。");
+    }
     this.readyFile = dest;
     this.readyVersion = version;
     this.snapshot = { ...this.snapshot, downloading: false, progress: 1 };
     return dest;
+  }
+}
+
+/** Read size + DOS stub magic without pulling the whole installer into memory. */
+function cachedInstallerStillValid(filePath: string): boolean {
+  try {
+    const size = statSync(filePath).size;
+    const fd = openSync(filePath, "r");
+    try {
+      const buf = Buffer.alloc(2);
+      const n = readSync(fd, buf, 0, 2, 0);
+      return n >= 2 && installerLooksUsable(size, buf.subarray(0, n));
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
   }
 }

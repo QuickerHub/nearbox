@@ -46,3 +46,9 @@ test("trayTooltip joins Chinese status rows", () => {
   assert.equal(trayTooltip(1, 2, 3), "Nearbox · Agent：1 运行中 · 2 排队 · 3 台手机在线");
 });
 
+
+test("trayHostLabel rejects Unicode format/bidi marks", () => {
+  assert.equal(trayHostLabel("192.168.1.8\u200b", 7788), "未发现局域网地址");
+  assert.equal(trayHostLabel("evil\u202ehost", 7788), "未发现局域网地址");
+  assert.equal(trayHostLabel("  ", 7788), "未发现局域网地址");
+});
