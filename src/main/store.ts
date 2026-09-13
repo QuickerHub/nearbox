@@ -17,6 +17,7 @@ import {
   type TaskNote,
 } from "@shared/protocol";
 import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
   token: string;
@@ -120,7 +121,7 @@ export class Store {
     }
     this.timer = setTimeout(() => {
       this.timer = null;
-      void this.flush();
+      void this.flush().catch(() => undefined);
     }, 150);
   }
 
@@ -137,11 +138,18 @@ export class Store {
       this.state.runs = this.state.runs.slice(-MAX_RUNS_KEPT);
     }
     const payload = JSON.stringify(this.state, null, 2);
-    this.writing = this.writing.then(async () => {
-      await mkdir(dirname(this.file), { recursive: true });
-      const tmp = `${this.file}.tmp`;
-      await writeFile(tmp, payload, "utf8");
-      await rename(tmp, this.file);
+    // A prior failed write leaves `writing` rejected; `.then(write)` would never run
+    // again, so one disk blip would permanently stop persistence until restart.
+    this.writing = enqueueWrite(this.writing, async () => {
+      try {
+        await mkdir(dirname(this.file), { recursive: true });
+        const tmp = `${this.file}.tmp`;
+        await writeFile(tmp, payload, "utf8");
+        await rename(tmp, this.file);
+      } catch (error) {
+        this.dirty = true;
+        throw error;
+      }
     });
     return this.writing;
   }
