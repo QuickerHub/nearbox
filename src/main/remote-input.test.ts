@@ -119,3 +119,18 @@ test("control messages are validated before they reach the injector", () => {
     crop: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
   });
 });
+
+test("config drops non-finite quality/fps/maxWidth", () => {
+  assert.deepEqual(parseControlMessage('{"t":"config","quality":1e999,"fps":30,"maxWidth":1920}'), {
+    t: "config",
+    quality: undefined,
+    fps: 30,
+    maxWidth: 1920,
+  });
+  assert.deepEqual(parseControlMessage('{"t":"config","fps":null,"maxWidth":"nope"}'), {
+    t: "config",
+    quality: undefined,
+    fps: undefined,
+    maxWidth: undefined,
+  });
+});

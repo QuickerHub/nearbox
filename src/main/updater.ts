@@ -1,8 +1,9 @@
-import { createWriteStream, existsSync } from "node:fs";
+import { createWriteStream, existsSync, lstatSync } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AppUpdateStatus } from "@shared/protocol";
-import { isNewerVersion, stripTagPrefix } from "../shared/version.ts";
+import { isNewerVersion } from "../shared/version.ts";
+import { normalizeLatestTag, sanitizeInstallerVersion } from "./updater-version.ts";
 
 export const DEFAULT_RELEASE_REPO = "QuickerHub/nearbox";
 const STALE_MS = 60 * 60 * 1000;
@@ -41,7 +42,7 @@ export function statusFromRelease(release: GithubRelease, current: string, packa
   AppUpdateStatus,
   "current" | "latest" | "newer" | "notes" | "htmlUrl" | "exeUrl" | "apkUrl" | "packaged"
 > {
-  const latest = release.tag_name ? stripTagPrefix(release.tag_name) : null;
+  const latest = normalizeLatestTag(release.tag_name);
   const assets = pickReleaseAssets(release.assets);
   return {
     current,
@@ -131,6 +132,7 @@ export class AppUpdater {
         this.snapshot = {
           ...this.snapshot,
           downloading: false,
+          progress: 0,
           error: error instanceof Error ? error.message : String(error),
         };
       })
@@ -160,7 +162,7 @@ export class AppUpdater {
       ...statusFromRelease(release, this.options.currentVersion, this.options.packaged),
       checking: false,
       downloading: false,
-      progress: this.readyVersion && this.readyVersion === stripTagPrefix(release.tag_name ?? "") ? 1 : 0,
+      progress: this.readyVersion && this.readyVersion === normalizeLatestTag(release.tag_name) ? 1 : 0,
       checkedAt: new Date((this.options.now ?? Date.now)()).toISOString(),
     };
     return this.status();
@@ -182,11 +184,21 @@ export class AppUpdater {
   }
 
   private async download(version: string, url: string): Promise<string> {
-    if (this.readyFile && this.readyVersion === version && existsSync(this.readyFile)) {
+    const safeVersion = sanitizeInstallerVersion(version);
+    if (!safeVersion) {
+      throw new Error("版本号无效，无法下载安装包。");
+    }
+    if (this.readyFile && this.readyVersion === safeVersion && existsSync(this.readyFile)) {
       return this.readyFile;
     }
     await mkdir(this.options.cacheDir, { recursive: true });
-    const dest = join(this.options.cacheDir, `Nearbox-${version}-win-x64.exe`);
+    const dest = join(this.options.cacheDir, `Nearbox-${safeVersion}-win-x64.exe`);
+    if (existsSync(dest)) {
+      const stat = lstatSync(dest);
+      if (stat.isSymbolicLink() || stat.isDirectory()) {
+        throw new Error("安装包缓存路径不是普通文件。");
+      }
+    }
     this.snapshot = { ...this.snapshot, downloading: true, progress: 0, error: undefined };
     const response = await this.fetchImpl(url, { headers: { "User-Agent": "Nearbox" }, redirect: "follow" });
     if (!response.ok || !response.body) {
@@ -215,7 +227,7 @@ export class AppUpdater {
       throw error;
     }
     this.readyFile = dest;
-    this.readyVersion = version;
+    this.readyVersion = safeVersion;
     this.snapshot = { ...this.snapshot, downloading: false, progress: 1 };
     return dest;
   }

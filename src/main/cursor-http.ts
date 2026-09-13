@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveConfigHome } from "./config-home.ts";
 
 // cursor-agent talks to the model over HTTP/2 with a 5 s keepalive ping. A
 // long turn (thinking, tools, a slow hop) that does not answer the ping in
@@ -25,11 +26,11 @@ export function isTransientAgentTransportError(text: string): boolean {
 
 /** Same directory cursor-agent uses for cli-config.json. */
 export function cursorCliConfigPath(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
-  const override = env.CURSOR_CONFIG_DIR?.trim();
+  const override = resolveConfigHome(env.CURSOR_CONFIG_DIR, "");
   if (override) {
     return join(override, "cli-config.json");
   }
-  const xdg = env.XDG_CONFIG_HOME?.trim();
+  const xdg = resolveConfigHome(env.XDG_CONFIG_HOME, "");
   return join(xdg ? join(xdg, "cursor") : join(home, ".cursor"), "cli-config.json");
 }
 

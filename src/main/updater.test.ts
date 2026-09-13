@@ -33,3 +33,9 @@ test("the same tag is not an update", () => {
   const status = statusFromRelease({ tag_name: "v0.6.0", assets: [] }, "0.6.0", true);
   assert.equal(status.newer, false);
 });
+
+test("empty or whitespace tags do not become a blank latest channel", () => {
+  assert.equal(statusFromRelease({ tag_name: "v" }, "0.6.0", true).latest, null);
+  assert.equal(statusFromRelease({ tag_name: "   " }, "0.6.0", true).latest, null);
+  assert.equal(statusFromRelease({ tag_name: "v0.7.0:rc" }, "0.6.0", true).latest, "0.7.0-rc");
+});
