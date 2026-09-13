@@ -8,7 +8,7 @@ import { randomBytes, randomInt } from "node:crypto";
 import { EventEmitter } from "node:events";
 import QRCode from "qrcode";
 import { WebSocket, WebSocketServer } from "ws";
-import { buildDiscoverInfo, DISCOVERY_PORT, type DiscoverInfo } from "@shared/discover";
+import { buildDiscoverInfo, DISCOVERY_PORT, isInviteExpired, liveInvite, type DiscoverInfo } from "@shared/discover";
 import {
   type Actor,
   AGENT_KINDS,
@@ -98,6 +98,8 @@ export class LanServer extends EventEmitter {
   private rcWss: WebSocketServer | null = null;
   private selectedHost = "";
   private invite: InviteInfo | null = null;
+  /** In-flight auto-refresh when the advertised invite has expired. */
+  private inviteRefresh: Promise<void> | null = null;
   private listenError: string | undefined;
   private snapshotTimer: NodeJS.Timeout | null = null;
   private beacon: dgram.Socket | null = null;
@@ -268,7 +270,7 @@ export class LanServer extends EventEmitter {
       hostAddresses: this.hostAddressesForSnapshot(),
       selectedHost: this.selectedHost,
       port: this.port,
-      invite: this.invite,
+      invite: liveInvite(this.invite),
       devices: this.devicesForSnapshot(),
       remoteDevices: this.hub.remoteDevices,
       tasks: this.hub.tasks,
@@ -337,7 +339,9 @@ export class LanServer extends EventEmitter {
     if (!this.selectedHost) {
       return { service: "nearbox", error: this.listenError ?? "电脑还没有局域网地址" };
     }
-    if (!this.invite || inviteExpired(this.invite)) {
+    void this.ensureInviteFresh();
+    const invite = liveInvite(this.invite);
+    if (!invite) {
       return buildDiscoverInfo({
         name: this.hostName,
         host: this.selectedHost,
@@ -350,10 +354,33 @@ export class LanServer extends EventEmitter {
       host: this.selectedHost,
       port: this.port,
       version: this.appVersion,
-      pin: this.invite.pin,
-      token: this.invite.token,
-      url: this.invite.url,
+      pin: invite.pin,
+      token: invite.token,
+      url: invite.url,
     });
+  }
+
+  /**
+   * When the invite has expired (or never existed), mint a new one so Settings /
+   * UDP catch up with `/api/discover`. Concurrent callers share one refresh.
+   * Snapshot omits dead credentials via `liveInvite` until this finishes.
+   */
+  private ensureInviteFresh(): Promise<void> {
+    if (!this.selectedHost) {
+      return Promise.resolve();
+    }
+    if (liveInvite(this.invite)) {
+      return Promise.resolve();
+    }
+    if (!this.inviteRefresh) {
+      this.inviteRefresh = this.refreshInvite()
+        .then(() => undefined)
+        .catch(() => undefined)
+        .finally(() => {
+          this.inviteRefresh = null;
+        });
+    }
+    return this.inviteRefresh;
   }
 
   private startBeacon(): void {
@@ -438,9 +465,7 @@ export class LanServer extends EventEmitter {
         return;
       }
       if (url.pathname === "/api/discover" && method === "GET") {
-        if (this.selectedHost && (!this.invite || inviteExpired(this.invite))) {
-          await this.refreshInvite();
-        }
+        await this.ensureInviteFresh();
         this.writeJson(res, this.discoverInfo());
         return;
       }
@@ -974,6 +999,7 @@ export class LanServer extends EventEmitter {
     }
     this.snapshotTimer = setTimeout(() => {
       this.snapshotTimer = null;
+      void this.ensureInviteFresh();
       const snapshot = this.snapshot();
       const payload = JSON.stringify({ type: "snapshot", snapshot } satisfies HostToClient);
       for (const binding of this.sockets) {
@@ -1018,7 +1044,7 @@ export class LanServer extends EventEmitter {
         runScope: scopedRunId,
       };
     }
-    if (this.invite && (token === this.invite.token || token === this.invite.pin) && !inviteExpired(this.invite)) {
+    if (this.invite && (token === this.invite.token || token === this.invite.pin) && !isInviteExpired(this.invite.expiresAt)) {
       const deviceId = `phone-${randomBytes(6).toString("hex")}`;
       const device: DeviceInfo = {
         id: deviceId,
@@ -1104,9 +1130,6 @@ function bearerToken(req: http.IncomingMessage): string {
   return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
 }
 
-function inviteExpired(invite: InviteInfo): boolean {
-  return Date.parse(invite.expiresAt) <= Date.now();
-}
 
 function phoneNameFromUa(userAgent: string | undefined): string {
   const ua = userAgent ?? "";

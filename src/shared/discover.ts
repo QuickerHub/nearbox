@@ -37,12 +37,33 @@ export function buildDiscoverInfo(input: {
   };
 }
 
+/**
+ * True when an invite's expiresAt is at or before `now`. Used by the host
+ * snapshot and Android-facing discover so a dead PIN is never advertised.
+ */
+export function isInviteExpired(expiresAt: string, now = Date.now()): boolean {
+  const at = Date.parse(expiresAt);
+  return !Number.isFinite(at) || at <= now;
+}
+
+/** Return `invite` only while it is still usable; otherwise null. */
+export function liveInvite<T extends { expiresAt: string }>(invite: T | null | undefined, now = Date.now()): T | null {
+  if (!invite || isInviteExpired(invite.expiresAt, now)) {
+    return null;
+  }
+  return invite;
+}
+
 export function parseDiscover(raw: unknown): DiscoverInfo | null {
   if (!raw || typeof raw !== "object") {
     return null;
   }
   const value = raw as Record<string, unknown>;
   if (value.service !== DISCOVERY_SERVICE) {
+    return null;
+  }
+  // Host may answer { service, error } when it has no LAN address yet; that is not a pairable host.
+  if (typeof value.error === "string" && value.error.trim()) {
     return null;
   }
   const name = typeof value.name === "string" ? value.name.trim() : "";
