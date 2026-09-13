@@ -2,6 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type DevicePlatform, type RemoteDevice, type RemoteDirListing } from "@shared/protocol";
 import { COMMAND_NAMES } from "./agents";
 import { killTree as killLocal } from "./kill";
+import { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
+
+export { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
 
 /**
  * Everything Nearbox does on another computer goes through the local `ssh`
@@ -132,31 +135,6 @@ export function sshExec(
 }
 
 export { killLocal };
-
-export function describeTarget(target: SshTarget): string {
-  const hostPort = target.port ? `${target.host}:${target.port}` : target.host;
-  return target.user ? `${target.user}@${hostPort}` : hostPort;
-}
-
-/** Turn ssh's stderr into one sentence the user can act on. */
-export function explainSshFailure(target: SshTarget, stderr: string): string {
-  const text = stderr.trim();
-  const line = text.split(/\r?\n/).find((item) => item.trim() && !item.startsWith("Warning:")) ?? text;
-  const where = describeTarget(target);
-  if (/Permission denied|Too many authentication failures|No supported authentication/i.test(text)) {
-    return `SSH 免密登录 ${where} 失败（${line}）。请先配置公钥登录，让本机在终端里执行 ssh ${target.host} 时不需要输入密码。`;
-  }
-  if (/Could not resolve hostname|Name or service not known|getaddrinfo/i.test(text)) {
-    return `找不到主机 ${target.host}，请检查地址或 ~/.ssh/config 里的别名。`;
-  }
-  if (/Connection timed out|Connection refused|No route to host|Network is unreachable|Operation timed out|Host is down/i.test(text)) {
-    return `连不上 ${where}（${line}）。请确认那台电脑已开机、和本机在同一网络，并已开启 OpenSSH 服务器。`;
-  }
-  if (/Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED/i.test(text)) {
-    return `${where} 的主机密钥和以前不一样，ssh 拒绝连接。确认是同一台电脑后，删除 ~/.ssh/known_hosts 里的旧记录再试。`;
-  }
-  return line ? `连接 ${where} 失败：${line}` : `连接 ${where} 失败。`;
-}
 
 function describeSpawnError(error: Error): string {
   if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -331,13 +309,6 @@ export function remoteRunPaths(device: Pick<RemoteDevice, "platform" | "home">, 
 export function remoteAttachmentPath(device: Pick<RemoteDevice, "platform" | "home">, fileId: string, name: string): string {
   const safe = name.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").slice(0, 80) || "file";
   return remoteJoin(device, device.home ?? "", ".nearbox", "files", `${fileId.slice(0, 8)}-${safe}`);
-}
-
-/** Reject anything that could not be a single path: control chars break every shell we talk to. */
-export function assertSafeRemotePath(path: string): void {
-  if (!path.trim() || /[\r\n\u0000]/.test(path)) {
-    throw new Error("路径不合法。");
-  }
 }
 
 // ---------------------------------------------------------------------------
