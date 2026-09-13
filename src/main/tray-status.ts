@@ -31,9 +31,25 @@ export function trayPhonesLabel(phones: number): string {
   return phonesOnlineLabel(phones);
 }
 
+/**
+ * LAN picker is host/IP only. Unicode format/bidi marks (ZWSP, RTL override,
+ * BOM) can spoof the tray row without matching C0 controls or /\s/.
+ */
+export function sanitizeTrayHostLabel(host: string | undefined): string | undefined {
+  if (typeof host !== "string") {
+    return undefined;
+  }
+  if (/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/.test(host)) {
+    return undefined;
+  }
+  const cleaned = host.trim().slice(0, 64);
+  return cleaned || undefined;
+}
+
 /** Host:port row, or the empty-LAN placeholder. */
 export function trayHostLabel(selectedHost: string | undefined, port: number | undefined): string {
-  return selectedHost ? `${selectedHost}:${port}` : "未发现局域网地址";
+  const host = sanitizeTrayHostLabel(selectedHost);
+  return host ? `${host}:${port}` : "未发现局域网地址";
 }
 
 /**
@@ -47,7 +63,7 @@ export function trayStatusSignature(
   running: number,
   queued: number,
 ): string {
-  return `${selectedHost ?? ""}|${port ?? ""}|${phones}|${running}|${queued}`;
+  return `${sanitizeTrayHostLabel(selectedHost) ?? ""}|${port ?? ""}|${phones}|${running}|${queued}`;
 }
 
 /** Hover tooltip: compact Chinese status next to the app name. */

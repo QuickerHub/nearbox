@@ -6,6 +6,7 @@ import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type AgentKind, type AgentMo
 import { MODEL_LIST_ARGS, parseModelList } from "./agent-models";
 import { quoteForCmd, type ResolvedCommand } from "./agent-output";
 import { resolveCursorAgentBundle } from "./cursor-bundle.ts";
+import { resolveConfigHome } from "./config-home.ts";
 import { ensureCursorAgentHttp1 } from "./cursor-http.ts";
 
 export {
@@ -44,8 +45,8 @@ export function extraPathEntries(): string[] {
     join(home, ".opencode", "bin"),
   ];
   if (IS_WINDOWS) {
-    const local = process.env.LOCALAPPDATA ?? join(home, "AppData", "Local");
-    const roaming = process.env.APPDATA ?? join(home, "AppData", "Roaming");
+    const local = resolveConfigHome(process.env.LOCALAPPDATA, join(home, "AppData", "Local"));
+    const roaming = resolveConfigHome(process.env.APPDATA, join(home, "AppData", "Roaming"));
     entries.push(
       join(local, "cursor-agent"),
       join(roaming, "npm"),
@@ -174,9 +175,11 @@ function findNode(shimDir: string): string | null {
   if (existsSync(local)) {
     return local;
   }
+  const programFiles = resolveConfigHome(process.env.ProgramFiles, "C:\\Program Files");
+  const localApp = resolveConfigHome(process.env.LOCALAPPDATA, join(homedir(), "AppData", "Local"));
   const candidates = [
-    join(process.env.ProgramFiles ?? "C:\\Program Files", "nodejs", "node.exe"),
-    join(process.env.LOCALAPPDATA ?? "", "Programs", "nodejs", "node.exe"),
+    join(programFiles, "nodejs", "node.exe"),
+    join(localApp, "Programs", "nodejs", "node.exe"),
   ];
   for (const candidate of candidates) {
     if (candidate && existsSync(candidate)) {

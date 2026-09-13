@@ -17,6 +17,7 @@ import {
   type TaskNote,
 } from "@shared/protocol";
 import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { capCatalogModels, trimCatalogString } from "./store-catalog-trim";
 import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
@@ -184,16 +185,18 @@ function normalizeIdeModels(value: unknown): IdeModelPref[] | undefined {
       continue;
     }
     const record = item as Record<string, unknown>;
-    if (typeof record.id !== "string" || !record.id.trim()) {
+    const id = trimCatalogString(record.id);
+    if (!id) {
       continue;
     }
-    const pref: IdeModelPref = { id: record.id, visible: record.visible === true };
-    if (typeof record.label === "string" && record.label.trim()) {
-      pref.label = record.label.trim();
+    const pref: IdeModelPref = { id, visible: record.visible === true };
+    const label = trimCatalogString(record.label);
+    if (label) {
+      pref.label = label;
     }
     out.push(pref);
   }
-  return out.length ? out : undefined;
+  return out.length ? out.slice(0, 500) : undefined;
 }
 
 function normalizeCatalogs(value: unknown): Partial<Record<AgentKind, ModelCatalog>> {
@@ -207,12 +210,34 @@ function normalizeCatalogs(value: unknown): Partial<Record<AgentKind, ModelCatal
       continue;
     }
     const { models, checkedAt, ideModels } = entry as { models?: unknown; checkedAt?: unknown; ideModels?: unknown };
-    if (!Array.isArray(models) || typeof checkedAt !== "string") {
+    const checked = trimCatalogString(checkedAt);
+    if (!Array.isArray(models) || !checked) {
       continue;
     }
-    const clean = models.filter((model): model is AgentModel => Boolean(model) && typeof (model as AgentModel).id === "string" && (model as AgentModel).id.length > 0);
-    if (clean.length) {
-      const catalog: ModelCatalog = { models: clean, checkedAt };
+    const clean: AgentModel[] = [];
+    for (const model of models) {
+      if (!model || typeof model !== "object") {
+        continue;
+      }
+      const row = model as AgentModel;
+      const id = trimCatalogString(row.id);
+      if (!id) {
+        continue;
+      }
+      const next: AgentModel = { ...row, id };
+      if (row.label !== undefined) {
+        const label = trimCatalogString(row.label);
+        if (label) {
+          next.label = label;
+        } else {
+          delete (next as { label?: string }).label;
+        }
+      }
+      clean.push(next);
+    }
+    const capped = capCatalogModels(clean);
+    if (capped.length) {
+      const catalog: ModelCatalog = { models: capped, checkedAt: checked };
       const prefs = normalizeIdeModels(ideModels);
       if (prefs) {
         catalog.ideModels = prefs;
