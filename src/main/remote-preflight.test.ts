@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { remoteCwdPreflight, remoteDevicePreflight } from "./remote-preflight.ts";
-import { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain.ts";
+import { assertSafeRemotePath, describeTarget, explainSshFailure, isSshUser } from "./ssh-explain.ts";
 
 test("remote device preflight: missing agent and missing home", () => {
   const missingAgent = remoteDevicePreflight({
@@ -59,4 +59,12 @@ test("assertSafeRemotePath rejects empty and control characters", () => {
   assert.throws(() => assertSafeRemotePath(""), /路径不合法/);
   assert.throws(() => assertSafeRemotePath("a\nb"), /路径不合法/);
   assert.doesNotThrow(() => assertSafeRemotePath("C:\\Users\\cea\\proj"));
+});
+
+test("isSshUser rejects option-like and blank names", () => {
+  assert.equal(isSshUser("cea"), true);
+  assert.equal(isSshUser("domain\\user"), true);
+  assert.equal(isSshUser("-l"), false);
+  assert.equal(isSshUser("a b"), false);
+  assert.equal(isSshUser(""), false);
 });
