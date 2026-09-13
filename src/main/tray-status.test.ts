@@ -5,6 +5,7 @@ import {
   trayAgentLabel,
   trayHostLabel,
   trayPhonesLabel,
+  trayPortLabel,
   trayStatusSignature,
   trayTooltip,
 } from "./tray-status.ts";
@@ -46,3 +47,12 @@ test("trayTooltip joins Chinese status rows", () => {
   assert.equal(trayTooltip(1, 2, 3), "Nearbox · Agent：1 运行中 · 2 排队 · 3 台手机在线");
 });
 
+
+test("trayPortLabel requires an integer TCP port", () => {
+  assert.equal(trayPortLabel(7788), "7788");
+  assert.equal(trayPortLabel(7788.5), undefined);
+  assert.equal(trayPortLabel(0), undefined);
+  assert.equal(trayPortLabel(Number.NaN), undefined);
+  assert.equal(trayHostLabel("192.168.1.8", undefined), "未发现局域网地址");
+  assert.equal(trayHostLabel("192.168.1.8", 7788.5), "未发现局域网地址");
+});

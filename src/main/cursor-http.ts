@@ -2,6 +2,9 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+/** Cap cli-config.json reads so a hostile multi-MB file cannot OOM warm start. */
+export const MAX_CLI_CONFIG_CHARS = 1024 * 1024;
+
 // cursor-agent talks to the model over HTTP/2 with a 5 s keepalive ping. A
 // long turn (thinking, tools, a slow hop) that does not answer the ping in
 // time dies with RetriableError. Official workaround is HTTP/1.1, which the
@@ -65,7 +68,11 @@ export function ensureCursorAgentHttp1(env: NodeJS.ProcessEnv = process.env, hom
   try {
     let raw: unknown = {};
     if (existsSync(path)) {
-      raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      const text = readFileSync(path, "utf8");
+      if (text.length > MAX_CLI_CONFIG_CHARS) {
+        throw new Error(`cli-config.json too large (${text.length} chars)`);
+      }
+      raw = JSON.parse(text) as unknown;
     }
     const { next, changed } = preferHttp1InCliConfig(raw);
     if (changed) {

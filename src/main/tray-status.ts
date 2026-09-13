@@ -31,9 +31,18 @@ export function trayPhonesLabel(phones: number): string {
   return phonesOnlineLabel(phones);
 }
 
+/** Port for the tray row — must be a real TCP port, not NaN/0/1.5. */
+export function trayPortLabel(port: number | undefined): string | undefined {
+  if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
+    return undefined;
+  }
+  return String(port);
+}
+
 /** Host:port row, or the empty-LAN placeholder. */
 export function trayHostLabel(selectedHost: string | undefined, port: number | undefined): string {
-  return selectedHost ? `${selectedHost}:${port}` : "未发现局域网地址";
+  const portText = trayPortLabel(port);
+  return selectedHost && portText ? `${selectedHost}:${portText}` : "未发现局域网地址";
 }
 
 /**
@@ -47,7 +56,7 @@ export function trayStatusSignature(
   running: number,
   queued: number,
 ): string {
-  return `${selectedHost ?? ""}|${port ?? ""}|${phones}|${running}|${queued}`;
+  return `${selectedHost ?? ""}|${trayPortLabel(port) ?? ""}|${phones}|${running}|${queued}`;
 }
 
 /** Hover tooltip: compact Chinese status next to the app name. */

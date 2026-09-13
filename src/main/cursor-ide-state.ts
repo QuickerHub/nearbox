@@ -5,6 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import { parseCursorIdeModels } from "../shared/cursor-ide-models.ts";
 import type { IdeModelPref } from "../shared/protocol.ts";
 
+/** Refuse to JSON.parse an IDE blob larger than this (chars). */
+export const MAX_APPLICATION_USER_CHARS = 4 * 1024 * 1024;
+
 const APPLICATION_USER_KEY =
   "src.vs.platform.reactivestorage.browser.reactiveStorageServiceImpl.persistentStorage.applicationUser";
 
@@ -34,6 +37,10 @@ export function readCursorIdeModels(dbPath = cursorStateDbPath()): IdeModelPref[
       const raw = row?.value;
       const text = typeof raw === "string" ? raw : raw instanceof Uint8Array ? Buffer.from(raw).toString("utf8") : undefined;
       if (!text) {
+        return undefined;
+      }
+      // A multi-10MB applicationUser blob would JSON.parse into an OOM on warm start.
+      if (text.length > MAX_APPLICATION_USER_CHARS) {
         return undefined;
       }
       return parseCursorIdeModels(JSON.parse(text));

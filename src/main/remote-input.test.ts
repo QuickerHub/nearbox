@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  MAX_KEY_CODE_CHARS,
   clampCrop,
   clampQuality,
   codeToVk,
@@ -118,4 +119,11 @@ test("control messages are validated before they reach the injector", () => {
     maxWidth: 1920,
     crop: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
   });
+});
+
+test("overlong key codes are rejected before they reach the injector", () => {
+  const long = "Key" + "A".repeat(MAX_KEY_CODE_CHARS);
+  assert.equal(codeToVk(long), null);
+  assert.equal(parseControlMessage(JSON.stringify({ t: "key", code: long, down: true })), null);
+  assert.equal(parseControlMessage(JSON.stringify({ t: "combo", codes: [long] })), null);
 });
