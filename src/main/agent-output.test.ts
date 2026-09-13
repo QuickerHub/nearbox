@@ -541,3 +541,21 @@ test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(125_000), "2 分 5 秒");
   assert.equal(formatMsDuration(3_725_000), "1 小时 2 分");
 });
+
+test("ACP end reads stop_reason and treats canceled like cancelled", () => {
+  const refusal = createOutputParser("acp");
+  const refused = refusal.push({ sessionUpdate: "end", stop_reason: "refusal" });
+  assert.equal(refused.isError, true);
+  assert.match(refused.events.at(-1)?.text ?? "", /结束 \(refusal\)/);
+
+  const cancelled = createOutputParser("acp");
+  const stopped = cancelled.push({ sessionUpdate: "end", stop_reason: "canceled" });
+  assert.equal(stopped.isError, false);
+  assert.equal(stopped.events.at(-1)?.text, "已取消");
+
+  // camelCase cancelled still wins when both are present
+  const both = createOutputParser("acp");
+  const preferCamel = both.push({ sessionUpdate: "end", stopReason: "end_turn", stop_reason: "refusal" });
+  assert.equal(preferCamel.isError, false);
+  assert.equal(preferCamel.events.at(-1)?.text, "完成");
+});

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { AcpConnection, type AcpModel, choosePermission, mapCursorModel, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
+import { AcpConnection, type AcpModel, choosePermission, isExecuteTool, mapCursorModel, normalizePermissionOptions, promptStopReason, reviewOptions, RpcError, sessionCloseAdvertised, type RpcIncomingRequest } from "./acp.ts";
 
 /** A fake agent on the other end of the pipes. */
 function pipes() {
@@ -153,4 +153,46 @@ test("list-models aliases map to ACP presets only when they mean the same config
   assert.equal(mapCursorModel("claude-4.5-sonnet-thinking", PRESETS), "claude-sonnet-4-5[thinking=true,context=200k]");
   assert.equal(mapCursorModel("no-such-model", PRESETS), undefined);
   assert.equal(mapCursorModel("", PRESETS), undefined);
+});
+
+test("permission options accept option_id and hyphenated kinds", () => {
+  const options = normalizePermissionOptions([
+    { option_id: "allow-once", kind: "allow-once", name: "Allow" },
+    { optionId: "reject-once", kind: "reject_once" },
+    { option_id: "  ", kind: "allow_always" },
+    null,
+  ]);
+  assert.deepEqual(
+    options.map((option) => ({ optionId: option.optionId, kind: option.kind })),
+    [
+      { optionId: "allow-once", kind: "allow-once" },
+      { optionId: "reject-once", kind: "reject_once" },
+    ],
+  );
+  assert.equal(reviewOptions(options).allow?.optionId, "allow-once");
+  assert.equal(reviewOptions(options).reject?.optionId, "reject-once");
+  assert.deepEqual(choosePermission("full", { kind: "execute" }, options), {
+    action: "select",
+    optionId: "allow-once",
+    rejected: false,
+  });
+});
+
+test("safe mode asks before terminal kind commands", () => {
+  const options = [
+    { optionId: "allow-once", kind: "allow_once" },
+    { optionId: "reject-once", kind: "reject_once" },
+  ];
+  assert.equal(isExecuteTool({ kind: "terminal" }), true);
+  assert.equal(isExecuteTool({ kind: "Execute" }), true);
+  assert.equal(isExecuteTool({ kind: "edit" }), false);
+  assert.deepEqual(choosePermission("safe", { kind: "terminal" }, options), { action: "ask" });
+  assert.deepEqual(choosePermission("safe", { kind: "Shell" }, options), { action: "ask" });
+});
+
+test("promptStopReason reads stop_reason when stopReason is absent", () => {
+  assert.equal(promptStopReason({ stop_reason: "canceled" }), "canceled");
+  assert.equal(promptStopReason({ stopReason: "end_turn", stop_reason: "refusal" }), "end_turn");
+  assert.equal(promptStopReason({}), "end_turn");
+  assert.equal(promptStopReason(undefined), "end_turn");
 });

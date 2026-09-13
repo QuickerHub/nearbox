@@ -781,8 +781,10 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       if (typeof data.sessionId === "string") {
         out.sessionId = data.sessionId;
       }
-      const stop = String(data.stopReason ?? "end_turn");
-      const isError = stop !== "end_turn" && stop !== "max_turns" && stop !== "cancelled";
+      // Agents send stopReason (ACP) or stop_reason; "canceled" is the US spelling of cancel.
+      const stop = acpStopReasonOf(data);
+      const cancelled = stop === "cancelled" || stop === "canceled";
+      const isError = stop !== "end_turn" && stop !== "max_turns" && !cancelled;
       out.isError = isError;
       const costUsd = typeof data.total_cost_usd === "number" ? data.total_cost_usd : undefined;
       out.usage = rememberUsage(data.usage ?? data, {
@@ -791,7 +793,7 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       });
       events.push({
         kind: "result",
-        text: formatOutcome(stop === "cancelled" ? "已取消" : isError ? `结束 (${stop})` : "完成", { usage: out.usage ?? usage(), costUsd }),
+        text: formatOutcome(cancelled ? "已取消" : isError ? `结束 (${stop})` : "完成", { usage: out.usage ?? usage(), costUsd }),
       });
       return;
     }
@@ -802,6 +804,18 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
     default:
       sink.push(events, "raw", compact(data));
   }
+}
+
+
+/** ACP prompt results and synthetic `end` updates: camelCase or snake_case. */
+function acpStopReasonOf(data: Record<string, unknown>): string {
+  if (typeof data.stopReason === "string" && data.stopReason.trim()) {
+    return data.stopReason.trim();
+  }
+  if (typeof data.stop_reason === "string" && data.stop_reason.trim()) {
+    return data.stop_reason.trim();
+  }
+  return "end_turn";
 }
 
 /** Grok puts a chunk's text in `data`; raw ACP wraps it as a content block. */
