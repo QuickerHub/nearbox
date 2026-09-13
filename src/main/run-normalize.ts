@@ -19,3 +19,21 @@ export function stripEmptyParentRunId<T extends ParentRunFields>(run: T): T {
   const { parentRunId: _drop, ...rest } = run;
   return rest as T;
 }
+
+export type PermissionStateFields = {
+  pendingPermission?: unknown;
+  pendingPermissionQueued?: number;
+};
+
+/**
+ * Drop live permission UI fields on disk load. A crash mid-ask leaves them on
+ * the JSON row; the ask can never be answered after restart, and a leftover
+ * `pendingPermissionQueued` without `pendingPermission` is especially confusing.
+ */
+export function stripTransientPermissionState<T extends PermissionStateFields>(
+  run: T,
+): Omit<T, "pendingPermission" | "pendingPermissionQueued"> {
+  const { pendingPermission: _pending, pendingPermissionQueued: _queued, ...rest } = run;
+  return rest;
+}
+
