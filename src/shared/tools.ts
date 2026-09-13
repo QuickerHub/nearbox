@@ -145,11 +145,25 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
     return { status: "ok" };
   }
   const outcome = Object.keys(result)[0] ?? "success";
-  const body = isRecord(result[outcome]) ? (result[outcome] as Record<string, unknown>) : {};
+  const rawBody = result[outcome];
+  const body = isRecord(rawBody) ? (rawBody as Record<string, unknown>) : {};
   const status: ToolStatus = outcome === "success" ? "ok" : outcome === "rejected" ? "rejected" : "error";
   const patch: Partial<ToolCall> = { status };
   if (status === "rejected") {
-    patch.error = pickString(body, ["reason", "message"]) || "命令被拒绝";
+    patch.error =
+      pickString(body, ["reason", "message"]) ||
+      (typeof rawBody === "string" && rawBody.trim() ? rawBody.trim() : "") ||
+      "命令被拒绝";
+    return patch;
+  }
+  // Some CLIs put a plain string under success/failure instead of a structured body.
+  if (typeof rawBody === "string" && rawBody.trim()) {
+    if (status === "error") {
+      patch.error = firstLine(rawBody);
+      patch.output = kind === "shell" ? clipTail(rawBody) : clipHead(rawBody);
+      return patch;
+    }
+    patch.output = kind === "shell" ? clipTail(rawBody) : clipHead(rawBody);
     return patch;
   }
   switch (kind) {
@@ -218,7 +232,11 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
   }
   if (status === "error") {
     const nested = isRecord(body.error) ? pickString(body.error, ["error", "message"]) : "";
-    patch.error = nested || pickString(body, ["error", "message", "reason", "stderr"]) || `${outcome}`;
+    patch.error =
+      nested ||
+      pickString(body, ["error", "message", "reason", "stderr"]) ||
+      (typeof rawBody === "string" && rawBody.trim() ? rawBody.trim() : "") ||
+      `${outcome}`;
     if (kind === "shell" && !patch.output && patch.error) {
       patch.output = clipTail(patch.error);
     }

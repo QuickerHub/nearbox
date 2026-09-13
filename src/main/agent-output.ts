@@ -384,15 +384,7 @@ export function createOutputParser(kind: OutputDialect): OutputParser {
     if (!trimmed) {
       return { events: [] };
     }
-    let data: Record<string, unknown> | null = null;
-    if (trimmed.startsWith("{")) {
-      try {
-        const parsed = JSON.parse(trimmed) as unknown;
-        data = isRecord(parsed) ? parsed : null;
-      } catch {
-        data = null;
-      }
-    }
+    const data = parseJsonLine(trimmed);
     if (!data) {
       const out: ParseResult = { events: [] };
       sink.push(out.events, "raw", trimmed);
@@ -453,14 +445,17 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
     case "user": {
       // Claude Code reports tool results as user messages; the initial prompt echo carries nothing new.
       const message = isRecord(data.message) ? data.message : {};
-      for (const block of asArray(message.content)) {
+      for (const block of contentBlocks(message.content)) {
         if (!isRecord(block) || block.type !== "tool_result") {
           continue;
         }
-        const id = String(block.tool_use_id ?? "");
+        const id = String(block.tool_use_id ?? block.toolUseId ?? "").trim();
+        if (!id) {
+          continue;
+        }
         const text = typeof block.content === "string" ? block.content : asArray(block.content).map(textOf).join("\n");
         const previous = tools.get(id);
-        const isError = Boolean(block.is_error);
+        const isError = Boolean(block.is_error ?? block.isError);
         sink.tool(
           events,
           track(id, {
@@ -488,29 +483,33 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
       if (message.usage || message.tokenUsage) {
         out.usage = rememberUsage(message);
       }
-      for (const block of asArray(message.content)) {
+      for (const block of contentBlocks(message.content)) {
         if (!isRecord(block)) {
           continue;
         }
         if (block.type === "text" && typeof block.text === "string") {
           sink.push(events, "text", block.text);
-        } else if (block.type === "thinking" && typeof block.thinking === "string") {
-          sink.push(events, "thinking", block.thinking);
+        } else if (block.type === "thinking") {
+          const thinking =
+            typeof block.thinking === "string" ? block.thinking : typeof block.text === "string" ? block.text : "";
+          if (thinking) {
+            sink.push(events, "thinking", thinking);
+          }
         } else if (block.type === "tool_use") {
           const name = String(block.name ?? "tool");
-          const args = isRecord(block.input) ? block.input : {};
-          sink.tool(events, track(String(block.id ?? `tool-${events.length}`), describeArgs(name, args)));
+          const args = toolInputOf(block.input);
+          sink.tool(events, track(String(block.id ?? block.toolUseId ?? `tool-${events.length}`), describeArgs(name, args)));
         }
       }
       return;
     }
     case "tool_call": {
       const subtype = String(data.subtype ?? "");
-      const call = isRecord(data.tool_call) ? data.tool_call : {};
+      const call = isRecord(data.tool_call) ? data.tool_call : isRecord(data.toolCall) ? data.toolCall : {};
       const rawName = Object.keys(call).find((key) => key.endsWith("ToolCall")) ?? Object.keys(call)[0] ?? "tool";
       const payload = isRecord(call[rawName]) ? (call[rawName] as Record<string, unknown>) : {};
-      const args = isRecord(payload.args) ? payload.args : {};
-      const id = String(data.call_id ?? payload.toolCallId ?? args.toolCallId ?? `tool-${events.length}`);
+      const args = toolInputOf(payload.args ?? payload.arguments);
+      const id = String(data.call_id ?? data.callId ?? payload.toolCallId ?? args.toolCallId ?? `tool-${events.length}`);
       if (subtype === "started") {
         sink.tool(events, track(id, describeArgs(rawName, args, typeof payload.description === "string" ? payload.description : undefined)));
       } else if (subtype === "completed") {
@@ -589,8 +588,13 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
         }
         return;
       case "command_execution": {
-        const command = String(item.command ?? "");
-        const exitCode = typeof item.exit_code === "number" ? item.exit_code : undefined;
+        const command = commandTextOf(item.command ?? item.cmd);
+        const exitCode =
+          typeof item.exit_code === "number"
+            ? item.exit_code
+            : typeof item.exitCode === "number"
+              ? item.exitCode
+              : undefined;
         const output = typeof item.aggregated_output === "string" ? item.aggregated_output : "";
         sink.tool(
           events,
@@ -708,7 +712,8 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       const lines = entries.map((entry) => {
         const status = String(entry.status ?? "");
         const mark = status === "completed" ? "☑" : status === "in_progress" ? "◐" : "☐";
-        return `${mark} ${String(entry.content ?? "")}`;
+        const label = String(entry.content ?? entry.text ?? entry.title ?? "");
+        return `${mark} ${label}`;
       });
       sink.tool(events, track("plan", { name: "plan", kind: "todo", status: "ok", subject: `${lines.length} 项`, output: lines.join("\n") }));
       return;
@@ -939,10 +944,12 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, 
   const type = String(data.type ?? "");
   const events = out.events;
   const part = isRecord(data.part) ? data.part : isRecord(data.properties) ? data.properties : data;
-  if (typeof data.sessionID === "string") {
-    out.sessionId = data.sessionID;
-  } else if (typeof part.sessionID === "string") {
-    out.sessionId = part.sessionID;
+  const sessionId =
+    [data.sessionID, data.sessionId, data.session_id, part.sessionID, part.sessionId, part.session_id].find(
+      (value): value is string => typeof value === "string" && value.trim().length > 0,
+    ) ?? "";
+  if (sessionId) {
+    out.sessionId = sessionId.trim();
   }
   const partType = String(part.type ?? type);
   if (partType === "text" && typeof part.text === "string") {
@@ -994,13 +1001,22 @@ function parseOpencode(data: Record<string, unknown>, out: ParseResult, { sink, 
 
 /** codex wraps every command in an explicit pwsh call on Windows; show what the agent meant. */
 function unwrapPwsh(command: string): string {
-  const match = /^"?(?:[A-Za-z]:\\[^"]*\\)?(?:pwsh|powershell)(?:\.exe)?"?\s+-Command\s+'([\s\S]*)'\s*$/i.exec(command.trim());
-  if (match) {
-    return match[1]!.replace(/''/g, "'");
+  const trimmed = command.trim();
+  const pwshSingle = /^"?(?:[A-Za-z]:\\[^"]*\\)?(?:pwsh|powershell)(?:\.exe)?"?\s+-(?:Command|c)\s+'([\s\S]*)'\s*$/i.exec(trimmed);
+  if (pwshSingle) {
+    return pwshSingle[1]!.replace(/''/g, "'");
   }
-  const bash = /^(?:\/bin\/)?(?:ba)?sh\s+-lc\s+'([\s\S]*)'\s*$/.exec(command.trim());
-  if (bash) {
-    return bash[1]!.replace(/'\\''/g, "'");
+  const pwshDouble = /^"?(?:[A-Za-z]:\\[^"]*\\)?(?:pwsh|powershell)(?:\.exe)?"?\s+-(?:Command|c)\s+"([\s\S]*)"\s*$/i.exec(trimmed);
+  if (pwshDouble) {
+    return pwshDouble[1]!.replace(/\\"/g, '"').replace(/""/g, '"');
+  }
+  const bashSingle = /^(?:\/bin\/)?(?:ba)?sh\s+-(?:lc|c)\s+'([\s\S]*)'\s*$/.exec(trimmed);
+  if (bashSingle) {
+    return bashSingle[1]!.replace(/'\\''/g, "'");
+  }
+  const bashDouble = /^(?:\/bin\/)?(?:ba)?sh\s+-(?:lc|c)\s+"([\s\S]*)"\s*$/.exec(trimmed);
+  if (bashDouble) {
+    return bashDouble[1]!.replace(/\\"/g, '"');
   }
   return command;
 }
@@ -1035,6 +1051,100 @@ function compactPatch<T extends object>(patch: T): T {
     }
   }
   return copy as T;
+}
+
+/** Message.content may be a string, one block, or an array depending on the CLI. */
+function contentBlocks(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value ? [{ type: "text", text: value }] : [];
+  }
+  if (isRecord(value)) {
+    return [value];
+  }
+  return [];
+}
+
+/** tool_use.input / cursor args sometimes arrive as a JSON string. */
+function toolInputOf(value: unknown): Record<string, unknown> {
+  if (isRecord(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return isRecord(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+/** Shell argv may be a string or a list of string/number tokens. */
+function commandTextOf(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value) && value.length) {
+    if (!value.every((item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean")) {
+      return "";
+    }
+    return value.map(String).join(" ");
+  }
+  return "";
+}
+
+/**
+ * One JSON object from a CLI stdout line. Tolerates trailing log noise after the
+ * object (common when a wrapper prints a status suffix on the same line).
+ */
+function parseJsonLine(line: string): Record<string, unknown> | null {
+  if (!line.startsWith("{")) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    // fall through: may be trailing chatter after a complete object
+  }
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (inString) {
+      if (escape) {
+        escape = false;
+      } else if (ch === "\\") {
+        escape = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      depth += 1;
+    } else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          const parsed = JSON.parse(line.slice(0, i + 1)) as unknown;
+          return isRecord(parsed) ? parsed : null;
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 function textOf(block: unknown): string {
