@@ -117,6 +117,11 @@ test("a run one agent delegated to another is not a conversation the user can pi
   const runs = [parent, delegated];
   // Picking Codex on this task starts Codex's own conversation rather than continuing Cursor's sub-task.
   assert.equal(planSend(input({ task: task(), runs })).action, "note-run");
+  // A still-running child alone must not block continuing the parent's finished conversation.
+  const orphanChild = run({ id: "r3", agent: "grok", status: "running", parentRunId: "r1", sessionId: undefined });
+  const afterParent = planSend(input({ task: task(), runs: [parent, orphanChild], agent: "cursor", agentLabel: "Cursor" }));
+  assert.equal(afterParent.action, "reply");
+  assert.equal(afterParent.queued, false);
   const cursor = planSend(input({ task: task(), runs, agent: "cursor", agentLabel: "Cursor" }));
   assert.equal(cursor.action, "reply");
   assert.equal(cursor.resumeRunId, "r1");
