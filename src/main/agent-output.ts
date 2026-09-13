@@ -750,8 +750,13 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
       if (!hasNews && (data.status === undefined || (previous && acpStatus(String(data.status)) === previous.status))) {
         return;
       }
-      // A call the client refused, or that reported its own failure, stays that way when the agent later marks it completed.
-      if ((previous?.status === "rejected" || previous?.status === "error") && !hasNews && data.status === "completed") {
+      // Client refusal / prior failure is sticky: the agent often still emits
+      // "completed" (sometimes with output). Keep the terminal outcome.
+      const incomingStatus = data.status === undefined ? previous?.status ?? "running" : acpStatus(String(data.status));
+      const stickyTerminal =
+        (previous?.status === "rejected" || previous?.status === "error") &&
+        (data.status === "completed" || incomingStatus === "ok");
+      if (stickyTerminal && !hasNews) {
         return;
       }
       const patch: Partial<ToolCall> & Pick<ToolCall, "name" | "kind"> = {
@@ -761,8 +766,12 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
         ...(files ? { files, subject: files.length === 1 ? basenameOf(files[0]!) : `${basenameOf(files[0]!)} 等 ${files.length} 个文件` } : {}),
         ...output,
         ...content,
-        status: data.status === undefined ? previous?.status ?? "running" : acpStatus(String(data.status)),
-        error: typeof data.error === "string" && data.error ? data.error : output.error,
+        status: stickyTerminal ? previous!.status : incomingStatus,
+        error: stickyTerminal
+          ? previous?.error || (typeof data.error === "string" && data.error ? data.error : output.error)
+          : typeof data.error === "string" && data.error
+            ? data.error
+            : output.error,
       };
       if (redescribed?.subject) {
         patch.subject = redescribed.subject;
