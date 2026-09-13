@@ -21,7 +21,7 @@ export function toolKindOf(rawName: string): ToolKind {
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[\s-]+/g, "_")
     .toLowerCase();
-  if (/^(shell|bash|run_command|run_terminal_cmd|command_execution|execute|terminal|powershell|cmd|exec)$/.test(id)) {
+  if (/^(shell|bash|run_command|run_terminal_cmd|run_shell_command|shell_command|execute_command|command_execution|execute|terminal|powershell|cmd|exec)$/.test(id)) {
     return "shell";
   }
   if (/^(read|read_file|readfile|view|cat|view_file|read_files)$/.test(id)) {
@@ -30,7 +30,7 @@ export function toolKindOf(rawName: string): ToolKind {
   if (/^(write|write_file|writefile|create_file|create|save_file)$/.test(id)) {
     return "write";
   }
-  if (/^(edit|edit_file|editfile|str_replace|strreplace|str_replace_editor|apply_patch|multi_edit|multiedit|search_replace|patch|notebook_edit)$/.test(id)) {
+  if (/^(edit|edit_file|editfile|str_replace|strreplace|str_replace_editor|replace_in_file|apply_patch|multi_edit|multiedit|search_replace|patch|notebook_edit)$/.test(id)) {
     return "edit";
   }
   if (/^(delete|delete_file|deletefile|remove|rm)$/.test(id)) {
@@ -60,7 +60,7 @@ export function toolKindOf(rawName: string): ToolKind {
   return "other";
 }
 
-const PATH_KEYS = ["path", "file_path", "filePath", "target_file", "targetFile", "relativeWorkspacePath", "relative_workspace_path", "file", "filename", "notebook_path"];
+const PATH_KEYS = ["path", "file_path", "filePath", "target_file", "targetFile", "target", "relativeWorkspacePath", "relative_workspace_path", "file", "filename", "notebook_path"];
 const DIR_KEYS = ["targetDirectory", "target_directory", "workingDirectory", "working_directory", "cwd", "dir", "directory", "path"];
 const PATTERN_KEYS = ["globPattern", "glob_pattern", "pattern", "query", "regex", "search"];
 const WEB_KEYS = ["query", "url", "search_term", "searchTerm", "q"];
@@ -80,7 +80,7 @@ export function describeArgs(
   }
   switch (kind) {
     case "shell": {
-      const command = pickString(args, ["command", "cmd", "script"]);
+      const command = pickString(args, ["command", "cmd", "script", "commandLine", "command_line"]);
       call.command = command || undefined;
       call.subject = command || undefined;
       call.cwd = pickString(args, DIR_KEYS.filter((key) => key !== "path")) || undefined;
@@ -154,11 +154,16 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
   }
   switch (kind) {
     case "shell": {
-      const stdout = pickString(body, ["interleavedOutput", "stdout", "output"]);
+      const stdout = pickString(body, ["interleavedOutput", "stdout", "output", "aggregated_output", "aggregatedOutput"]);
       const stderr = pickString(body, ["stderr"]);
       const combined = stdout && stderr && !stdout.includes(stderr) ? `${stdout}\n${stderr}` : stdout || stderr;
       patch.output = combined.trim() ? clipTail(combined) : undefined;
-      patch.exitCode = typeof body.exitCode === "number" ? body.exitCode : undefined;
+      patch.exitCode =
+        typeof body.exitCode === "number"
+          ? body.exitCode
+          : typeof body.exit_code === "number"
+            ? body.exit_code
+            : undefined;
       if (status === "ok" && patch.exitCode !== undefined && patch.exitCode !== 0) {
         patch.status = "error";
       }
@@ -169,7 +174,12 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
     }
     case "edit":
     case "write": {
-      const raw = typeof body.diffString === "string" ? body.diffString.trim() : "";
+      const raw =
+        typeof body.diffString === "string"
+          ? body.diffString.trim()
+          : typeof body.diff === "string"
+            ? body.diff.trim()
+            : "";
       if (raw) {
         // Refine before clipping: a whole-file dump is huge, the real hunk usually is not.
         const refined = refineRewriteDiff(raw);

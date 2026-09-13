@@ -541,3 +541,52 @@ test("formatMsDuration uses Chinese units", () => {
   assert.equal(formatMsDuration(125_000), "2 分 5 秒");
   assert.equal(formatMsDuration(3_725_000), "1 小时 2 分");
 });
+
+test("snake_case ACP content diffs keep the hunk and file path", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "d1",
+      title: "Edit",
+      kind: "edit",
+      status: "completed",
+      content: [{ type: "diff", file: "src/x.ts", old_text: "a\n", new_text: "b\n" }],
+    },
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "d2",
+      title: "Edit",
+      kind: "edit",
+      status: "completed",
+      content: [{ type: "diff", uri: "file:///home/cea/y.ts", oldText: "1\n", newText: "2\n" }],
+    },
+  ]);
+  const d1 = all.events.find((event) => event.tool?.id === "d1")?.tool;
+  assert.equal(d1?.subject, "x.ts");
+  assert.deepEqual(d1?.files, ["src/x.ts"]);
+  assert.ok(d1?.diff?.includes("-a"));
+  assert.ok(d1?.diff?.includes("+b"));
+  const d2 = all.events.find((event) => event.tool?.id === "d2")?.tool;
+  assert.equal(d2?.subject, "y.ts");
+  assert.deepEqual(d2?.files, ["/home/cea/y.ts"]);
+  assert.ok(d2?.diff?.includes("-1"));
+});
+
+test("ACP tool rawInput commandLine becomes a shell command subject", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "c1",
+      title: "Run",
+      kind: "execute",
+      status: "pending",
+      rawInput: { commandLine: "ls -la" },
+    },
+  ]);
+  const tool = all.events.find((event) => event.tool?.id === "c1")?.tool;
+  assert.equal(tool?.kind, "shell");
+  assert.equal(tool?.command, "ls -la");
+  assert.equal(tool?.subject, "ls -la");
+});

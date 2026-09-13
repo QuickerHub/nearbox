@@ -894,6 +894,37 @@ function prettyJson(value: unknown): string {
   }
 }
 
+
+/** Path on an ACP content diff: path / file / uri (file:// stripped). */
+function acpDiffPath(item: Record<string, unknown>): string {
+  for (const key of ["path", "file", "filename"] as const) {
+    const value = item[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  if (typeof item.uri === "string" && item.uri.trim()) {
+    return stripFileUri(item.uri.trim());
+  }
+  return "";
+}
+
+function stripFileUri(value: string): string {
+  if (!/^file:/i.test(value)) {
+    return value;
+  }
+  try {
+    const parsed = new URL(value);
+    let path = decodeURIComponent(parsed.pathname || "");
+    if (/^\/[A-Za-z]:\//.test(path)) {
+      path = path.slice(1);
+    }
+    return path || value;
+  } catch {
+    return value.replace(/^file:\/\/\/?/i, "");
+  }
+}
+
 function describeAcpContent(content: unknown[]): Partial<ToolCall> {
   const patch: Partial<ToolCall> = {};
   const outputs: string[] = [];
@@ -903,13 +934,16 @@ function describeAcpContent(content: unknown[]): Partial<ToolCall> {
       continue;
     }
     if (item.type === "diff") {
-      const path = String(item.path ?? "");
+      const path = acpDiffPath(item);
       if (path) {
         files.push(path);
       }
       // ACP describes an edit as the whole file before and after; the diff is ours to work out.
-      const oldText = typeof item.oldText === "string" ? item.oldText : "";
-      const newText = typeof item.newText === "string" ? item.newText : "";
+      // Some agents use snake_case (old_text / new_text) instead of camelCase.
+      const oldText =
+        typeof item.oldText === "string" ? item.oldText : typeof item.old_text === "string" ? item.old_text : "";
+      const newText =
+        typeof item.newText === "string" ? item.newText : typeof item.new_text === "string" ? item.new_text : "";
       const diff = unifiedDiff(oldText, newText);
       if (diff) {
         patch.diff = clipHead(diff);
