@@ -373,7 +373,10 @@ export function parseControlMessage(raw: string): RemoteControlToHost | null {
       return out;
     }
     case "ping":
-      return { t: "ping", ts: typeof msg.ts === "number" ? msg.ts : undefined };
+      return {
+        t: "ping",
+        ts: typeof msg.ts === "number" && Number.isFinite(msg.ts) ? msg.ts : undefined,
+      };
     default:
       return null;
   }

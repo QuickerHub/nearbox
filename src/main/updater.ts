@@ -3,6 +3,7 @@ import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AppUpdateStatus } from "@shared/protocol";
 import { isNewerVersion, stripTagPrefix } from "../shared/version.ts";
+import { isCheckFresh, isReleaseJsonTooLarge } from "./updater-fresh.ts";
 
 export const DEFAULT_RELEASE_REPO = "QuickerHub/nearbox";
 const STALE_MS = 60 * 60 * 1000;
@@ -101,7 +102,7 @@ export class AppUpdater {
     }
     const checkedAt = this.snapshot.checkedAt ? Date.parse(this.snapshot.checkedAt) : 0;
     const now = (this.options.now ?? Date.now)();
-    if (!force && checkedAt && now - checkedAt < STALE_MS && !this.snapshot.error) {
+    if (!force && isCheckFresh(checkedAt, now, STALE_MS) && !this.snapshot.error) {
       return this.status();
     }
     this.snapshot = { ...this.snapshot, checking: true, error: undefined };
@@ -155,7 +156,15 @@ export class AppUpdater {
     if (!response.ok) {
       throw new Error(`无法检查更新（${response.status}）`);
     }
-    const release = (await response.json()) as GithubRelease;
+    const declared = Number(response.headers.get("content-length") ?? 0);
+    if (declared > 0 && isReleaseJsonTooLarge(declared)) {
+      throw new Error("更新信息过大，已取消检查。");
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (isReleaseJsonTooLarge(buffer.byteLength)) {
+      throw new Error("更新信息过大，已取消检查。");
+    }
+    const release = JSON.parse(buffer.toString("utf8")) as GithubRelease;
     this.snapshot = {
       ...statusFromRelease(release, this.options.currentVersion, this.options.packaged),
       checking: false,

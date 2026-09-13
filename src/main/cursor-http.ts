@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -51,6 +51,34 @@ export function preferHttp1InCliConfig(raw: unknown): { next: Record<string, unk
   return { next: config, changed: true };
 }
 
+/**
+ * Empty files must not hit JSON.parse (throws → ensure warns every warm start).
+ * Symlinks / directories must not be followed or overwritten.
+ */
+export function readCliConfigFile(path: string): unknown {
+  if (!existsSync(path)) {
+    return {};
+  }
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    throw new Error("cli-config.json is not a regular file");
+  }
+  if (stat.size === 0) {
+    return {};
+  }
+  return JSON.parse(readFileSync(path, "utf8")) as unknown;
+}
+
+export function writeCliConfigFile(path: string, next: Record<string, unknown>): void {
+  if (existsSync(path)) {
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error("cli-config.json is not a regular file");
+    }
+  }
+  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+}
+
 let ensured = false;
 
 /**
@@ -63,13 +91,10 @@ export function ensureCursorAgentHttp1(env: NodeJS.ProcessEnv = process.env, hom
   }
   const path = cursorCliConfigPath(env, home);
   try {
-    let raw: unknown = {};
-    if (existsSync(path)) {
-      raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    }
+    const raw = readCliConfigFile(path);
     const { next, changed } = preferHttp1InCliConfig(raw);
     if (changed) {
-      writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+      writeCliConfigFile(path, next);
     }
     ensured = true;
     return changed;
