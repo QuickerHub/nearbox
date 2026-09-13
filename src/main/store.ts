@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import {
   AGENT_KINDS,
@@ -17,6 +17,7 @@ import {
   type TaskNote,
 } from "@shared/protocol";
 import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { serializeState, stateTempPath } from "./store-serialize";
 import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
@@ -137,23 +138,34 @@ export class Store {
     if (this.state.runs.length > MAX_RUNS_KEPT) {
       this.state.runs = this.state.runs.slice(-MAX_RUNS_KEPT);
     }
-    const payload = JSON.stringify(this.state, null, 2);
+    let payload: string;
+    try {
+      // If stringify throws (unexpected cycle / BigInt), dirty must stay set or
+      // the mutation is lost until the next unrelated save().
+      payload = serializeState(this.state);
+    } catch (error) {
+      this.dirty = true;
+      throw error;
+    }
     // A prior failed write leaves `writing` rejected; `.then(write)` would never run
     // again, so one disk blip would permanently stop persistence until restart.
     this.writing = enqueueWrite(this.writing, async () => {
+      const tmp = stateTempPath(this.file);
       try {
         await mkdir(dirname(this.file), { recursive: true });
-        const tmp = `${this.file}.tmp`;
         await writeFile(tmp, payload, "utf8");
         await rename(tmp, this.file);
       } catch (error) {
         this.dirty = true;
+        await unlink(tmp).catch(() => undefined);
         throw error;
       }
     });
     return this.writing;
   }
 }
+
+
 
 function normalizeTask(task: Task): Task {
   return {

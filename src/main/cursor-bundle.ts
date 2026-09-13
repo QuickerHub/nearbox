@@ -29,7 +29,14 @@ export function resolveCursorAgentBundle(shimDir: string): CursorBundle | null {
   if (!existsSync(versionsDir)) {
     return null;
   }
-  const versions = readdirSync(versionsDir, { withFileTypes: true })
+  let entries;
+  try {
+    entries = readdirSync(versionsDir, { withFileTypes: true });
+  } catch {
+    // versionsDir can vanish or stop being a directory between existsSync and readdir.
+    return null;
+  }
+  const versions = entries
     .filter((entry) => entry.isDirectory() && /^\d{4}\.\d{1,2}\.\d{1,2}/.test(entry.name))
     .map((entry) => entry.name)
     .filter((name) => existsSync(join(versionsDir, name, "node.exe")) && existsSync(join(versionsDir, name, "index.js")))

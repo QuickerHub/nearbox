@@ -72,6 +72,9 @@ function powershellPath(): string {
   return join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }
 
+/** Cap queued commands while PowerShell is starting so a wedged injector cannot balloon memory. */
+const MAX_PENDING_COMMANDS = 512;
+
 class WindowsInputInjector implements InputSink {
   readonly supported = true;
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -93,6 +96,9 @@ class WindowsInputInjector implements InputSink {
       return;
     }
     this.pending.push(...commands);
+    if (this.pending.length > MAX_PENDING_COMMANDS) {
+      this.pending = this.pending.slice(-MAX_PENDING_COMMANDS);
+    }
     void this.start();
   }
 
@@ -140,8 +146,15 @@ class WindowsInputInjector implements InputSink {
   }
 
   private writeNow(commands: string[]): void {
+    const stdin = this.child?.stdin;
+    // After an early close, stdin may exist but not be writable; writing then
+    // throws asynchronously as an unhandled error on some Node builds.
+    if (!stdin || stdin.destroyed || !stdin.writable) {
+      this.teardown();
+      return;
+    }
     try {
-      this.child?.stdin.write(`${commands.join("\n")}\n`);
+      stdin.write(`${commands.join("\n")}\n`);
     } catch {
       this.teardown();
     }
@@ -180,6 +193,8 @@ class NoopInjector implements InputSink {
     /* nothing to tear down */
   }
 }
+
+export { MAX_PENDING_COMMANDS };
 
 export function createInputInjector(): InputSink {
   return process.platform === "win32" ? new WindowsInputInjector() : new NoopInjector();

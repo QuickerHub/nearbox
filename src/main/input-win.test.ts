@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import test from "node:test";
 import { promisify } from "node:util";
-import { createInputInjector } from "./input-win.ts";
+import { createInputInjector, MAX_PENDING_COMMANDS } from "./input-win.ts";
 import { moveCommand } from "./remote-input.ts";
 
 const execFileAsync = promisify(execFile);
@@ -74,4 +74,9 @@ test("unsupported platforms get a silent no-op sink", () => {
   assert.equal(injector.supported, false);
   injector.send(["M 0 0"]);
   injector.dispose();
+});
+
+test("MAX_PENDING_COMMANDS stays a finite positive cap", () => {
+  assert.equal(Number.isFinite(MAX_PENDING_COMMANDS) && MAX_PENDING_COMMANDS > 0, true);
+  assert.ok(MAX_PENDING_COMMANDS <= 4096);
 });

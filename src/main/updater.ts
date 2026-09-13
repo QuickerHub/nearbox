@@ -1,5 +1,5 @@
 import { createWriteStream, existsSync } from "node:fs";
-import { mkdir, unlink } from "node:fs/promises";
+import { mkdir, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AppUpdateStatus } from "@shared/protocol";
 import { isNewerVersion, stripTagPrefix } from "../shared/version.ts";
@@ -186,7 +186,8 @@ export class AppUpdater {
       return this.readyFile;
     }
     await mkdir(this.options.cacheDir, { recursive: true });
-    const dest = join(this.options.cacheDir, `Nearbox-${version}-win-x64.exe`);
+    const dest = installerPath(this.options.cacheDir, version);
+    const partial = `${dest}.partial`;
     this.snapshot = { ...this.snapshot, downloading: true, progress: 0, error: undefined };
     const response = await this.fetchImpl(url, { headers: { "User-Agent": "Nearbox" }, redirect: "follow" });
     if (!response.ok || !response.body) {
@@ -194,7 +195,7 @@ export class AppUpdater {
     }
     const total = Number(response.headers.get("content-length") ?? 0);
     const reader = response.body.getReader();
-    const file = createWriteStream(dest);
+    const file = createWriteStream(partial);
     try {
       let received = 0;
       for (;;) {
@@ -206,12 +207,25 @@ export class AppUpdater {
         await new Promise<void>((resolve, reject) => {
           file.write(value, (error) => (error ? reject(error) : resolve()));
         });
-        this.snapshot = { ...this.snapshot, downloading: true, progress: total ? received / total : 0 };
+        this.snapshot = {
+          ...this.snapshot,
+          downloading: true,
+          progress: total > 0 ? Math.min(1, received / total) : 0,
+        };
       }
       await new Promise<void>((resolve, reject) => file.end((error: NodeJS.ErrnoException | null | undefined) => (error ? reject(error) : resolve())));
+      // A premature close would otherwise leave a truncated .exe marked ready.
+      if (total > 0 && received !== total) {
+        throw new Error(`下载不完整（${received}/${total}）`);
+      }
+      if (received === 0) {
+        throw new Error("下载失败（空文件）");
+      }
+      await unlink(dest).catch(() => undefined);
+      await rename(partial, dest);
     } catch (error) {
       file.destroy();
-      await unlink(dest).catch(() => undefined);
+      await unlink(partial).catch(() => undefined);
       throw error;
     }
     this.readyFile = dest;
@@ -219,4 +233,22 @@ export class AppUpdater {
     this.snapshot = { ...this.snapshot, downloading: false, progress: 1 };
     return dest;
   }
+}
+
+/**
+ * Keep installer filenames free of path separators so a weird release tag cannot
+ * write outside the cache directory (`Nearbox-1.0.0/../../evil-win-x64.exe`).
+ */
+export function sanitizeInstallerVersion(version: string): string {
+  const safe = version.trim().replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return safe || "unknown";
+}
+
+export function installerFileName(version: string): string {
+  return `Nearbox-${sanitizeInstallerVersion(version)}-win-x64.exe`;
+}
+
+/** `cacheDir/Nearbox-<safe>-win-x64.exe` — safe name has no separators, so join cannot escape. */
+export function installerPath(cacheDir: string, version: string): string {
+  return join(cacheDir, installerFileName(version));
 }
