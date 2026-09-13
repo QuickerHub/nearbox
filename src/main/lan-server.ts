@@ -37,6 +37,8 @@ import {
   type TaskPatch,
 } from "@shared/protocol";
 import { receiveToInbox } from "./files";
+import { inviteMintStillCurrent } from "./invite-mint";
+import { removeStaleStagingParts } from "./staging";
 import { countOnlinePhones, reuseMapValues } from "./snapshot-devices";
 import { recentRuns } from "./snapshot-runs";
 import type { TaskHub } from "./hub";
@@ -98,8 +100,10 @@ export class LanServer extends EventEmitter {
   private rcWss: WebSocketServer | null = null;
   private selectedHost = "";
   private invite: InviteInfo | null = null;
-  /** In-flight auto-refresh when the advertised invite has expired. */
-  private inviteRefresh: Promise<void> | null = null;
+  /** Bumped when selectedHost changes so an in-flight QR mint cannot publish a torn url/host. */
+  private inviteEpoch = 0;
+  /** Coalesce concurrent refreshInvite calls that share the same host epoch. */
+  private inviteMint: { epoch: number; promise: Promise<InviteInfo> } | null = null;
   private listenError: string | undefined;
   private snapshotTimer: NodeJS.Timeout | null = null;
   private beacon: dgram.Socket | null = null;
@@ -146,6 +150,8 @@ export class LanServer extends EventEmitter {
   async start(): Promise<void> {
     await mkdir(this.inboxDir, { recursive: true });
     await mkdir(this.stagingDir, { recursive: true });
+    // Crashed / aborted uploads leave *.part behind; sweep anything older than an hour.
+    await removeStaleStagingParts(this.stagingDir, 60 * 60_000).catch(() => undefined);
     const addresses = this.hostAddressesForSnapshot(true);
     const preferred = this.hub.settings.preferredHost;
     this.selectedHost = (preferred && addresses.includes(preferred) ? preferred : addresses[0]) ?? "";
@@ -305,34 +311,61 @@ export class LanServer extends EventEmitter {
     this.selectedHost = host;
     this.hub.settings.preferredHost = host;
     this.hub.store.save();
+    // Invalidate any QR mint that captured the previous adapter mid-flight.
+    this.inviteEpoch += 1;
+    this.invite = null;
     await this.refreshInvite();
     return this.snapshot();
   }
 
   async refreshInvite(): Promise<InviteInfo> {
-    if (!this.selectedHost) {
+    const epoch = this.inviteEpoch;
+    if (this.inviteMint && this.inviteMint.epoch === epoch) {
+      return this.inviteMint.promise;
+    }
+    const promise = this.mintInvite(epoch).finally(() => {
+      if (this.inviteMint?.promise === promise) {
+        this.inviteMint = null;
+      }
+    });
+    this.inviteMint = { epoch, promise };
+    return promise;
+  }
+
+  private async mintInvite(epoch: number): Promise<InviteInfo> {
+    const host = this.selectedHost;
+    if (!host) {
       throw new Error("没有可用的局域网地址。");
     }
     const token = randomBytes(18).toString("base64url");
     const pin = String(randomInt(0, 1_000_000)).padStart(6, "0");
-    const url = `http://${this.selectedHost}:${this.port}/?t=${token}`;
+    // Snapshot the adapter before awaiting QR encode so url / host / apkUrl stay aligned.
+    const url = `http://${host}:${this.port}/?t=${token}`;
     const qrOptions = { margin: 1, width: 320, color: { dark: "#111827", light: "#ffffff" } };
     const qrDataUrl = await QRCode.toDataURL(url, qrOptions);
-    const apkUrl = this.apkPath ? `http://${this.selectedHost}:${this.port}/app/nearbox.apk` : undefined;
+    const apkUrl = this.apkPath ? `http://${host}:${this.port}/app/nearbox.apk` : undefined;
     const apkQrDataUrl = apkUrl ? await QRCode.toDataURL(apkUrl, qrOptions) : undefined;
-    this.invite = {
+    const invite: InviteInfo = {
       url,
       token,
       pin,
       expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(),
-      host: this.selectedHost,
+      host,
       port: this.port,
       qrDataUrl,
       apkUrl,
       apkQrDataUrl,
     };
+    if (!inviteMintStillCurrent({ epoch, currentEpoch: this.inviteEpoch, host, selectedHost: this.selectedHost })) {
+      // Settings picked another adapter (or wifi hop cleared the host) while we encoded.
+      if (this.inviteEpoch !== epoch) {
+        return this.refreshInvite();
+      }
+      throw new Error("没有可用的局域网地址。");
+    }
+    this.invite = invite;
     this.scheduleSnapshot();
-    return this.invite;
+    return invite;
   }
 
   discoverInfo(): DiscoverInfo | { service: "nearbox"; error: string } {
@@ -372,15 +405,10 @@ export class LanServer extends EventEmitter {
     if (liveInvite(this.invite)) {
       return Promise.resolve();
     }
-    if (!this.inviteRefresh) {
-      this.inviteRefresh = this.refreshInvite()
-        .then(() => undefined)
-        .catch(() => undefined)
-        .finally(() => {
-          this.inviteRefresh = null;
-        });
-    }
-    return this.inviteRefresh;
+    // refreshInvite already coalesces per inviteEpoch.
+    return this.refreshInvite()
+      .then(() => undefined)
+      .catch(() => undefined);
   }
 
   private startBeacon(): void {
@@ -435,6 +463,8 @@ export class LanServer extends EventEmitter {
         binding.socket.close();
       }
     }
+    // Main /ws is closed above; /rc sockets live on the remote hub and must be dropped too.
+    this.remote?.dropDevice(deviceId);
     this.deleteDevice(deviceId);
     this.persistSessions();
     this.scheduleSnapshot();
