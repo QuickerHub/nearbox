@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AGENT_KINDS, type AgentAccess, type AgentKind, type HostSnapshot, isRunActive, isTopLevelActiveRun, modelsNeedRefresh, splitCapture, type Task } from "@shared/protocol";
+import { AGENT_KINDS, type AgentAccess, type AgentKind, type HostSnapshot, countActiveRuns, isTopLevelActiveRun, modelsNeedRefresh, splitCapture, type Task } from "@shared/protocol";
 import { titleForFiles } from "./lib/attachments";
 import { connectClient, pairWithPin, type ClientHandle } from "./lib/client";
 import { conversationRun, type SendPlan } from "./lib/plan";
@@ -186,7 +186,7 @@ export function App(): JSX.Element {
     if (!snapshot) {
       return;
     }
-    const active = snapshot.runs.filter(isRunActive).length;
+    const active = countActiveRuns(snapshot.runs);
     document.title = active ? `(${active}) Nearbox` : "Nearbox";
   }, [snapshot]);
 

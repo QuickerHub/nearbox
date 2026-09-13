@@ -1,3 +1,4 @@
+import { hasParentRunId } from "../../../shared/conversation.ts";
 import type { AgentKind, AgentRun, Project, Task, TaskStatus } from "../../../shared/protocol";
 
 // How the task list is organised: what needs the user, what is running, and
@@ -38,7 +39,7 @@ function byCompleted(a: Task, b: Task): number {
 export function latestTurns(runs: readonly AgentRun[]): Map<string, AgentRun> {
   const map = new Map<string, AgentRun>();
   for (const run of runs) {
-    if (!run.parentRunId) {
+    if (!hasParentRunId(run)) {
       map.set(run.taskId, run);
     }
   }
@@ -51,7 +52,7 @@ export function latestTurns(runs: readonly AgentRun[]): Map<string, AgentRun> {
  */
 export function activeRuns(runs: readonly AgentRun[]): Map<string, AgentRun> {
   const map = new Map<string, AgentRun>();
-  const score = (run: AgentRun) => (run.status === "running" ? 2 : 0) + (run.parentRunId ? 0 : 1);
+  const score = (run: AgentRun) => (run.status === "running" ? 2 : 0) + (hasParentRunId(run) ? 0 : 1);
   for (const run of runs) {
     if (!isActive(run)) {
       continue;

@@ -18,8 +18,9 @@ Merge **FIFO from #2 upward**. Do **not** merge #1 onto main.
 | **#9** | `opt/local-batch-9` | hung-prompt ACP smoke, snapshot `runs` reuse ≤120, live-event catch-up helpers |
 | **#10** | `opt/local-batch-10` | devices/hostAddresses snapshot reuse, Chinese run duration, `isTopLevelActiveRun` null-safety, file sanitize tests |
 | **#11** | `opt/local-batch-11` | tray run-count/labels + skip unchanged Menu, `hasParentRunId` / RunBlock null-safety, dock duration dedupe |
+| **#12** | `opt/local-batch-12` | `sameUsage` hot path, remote status reuse, agent-detect identity, `lastOutputLine` scan, `countActiveRuns` + hasParentRunId sweep |
 
-Exact order: **#2 → #3 → #4 → #5 → #6 → #7 → #8 → #9 → #10 → #11**.
+Exact order: **#2 → #3 → #4 → #5 → #6 → #7 → #8 → #9 → #10 → #11 → #12**.
 
 Each batch branch was cut from the previous (`opt/local-batch-N` from `opt/local-batch-(N-1)`), so merging in order is a fast-forward-friendly stack onto `main`.
 
@@ -33,9 +34,9 @@ Overlapping fixes (warm session-first model mapping, live event batching, run-st
 
 ## Still out of scope for this stack
 
-- **Remote desktop (decision 0010)** — pending human call; lean toward「看一眼、点一下」noted in #8. No product expansion in these PRs.
-- **Full WebSocket snapshot-patch protocol** — needs a designed `HostToClient` patch + client merge. Discover / `nearbox://` stay untouched. #10 only reuses the devices array and caches LAN addresses **without** changing the wire format.
+- **Remote desktop (decision 0010)** — pending human call; lean toward「看一眼、点一下」noted in #8. No product expansion in these PRs. #12 only caches `RemoteStatus` identity / skips `getPrimaryDisplay` on unchanged controller rows.
+- **Full WebSocket snapshot-patch protocol** — needs a designed `HostToClient` patch + client merge. Discover / `nearbox://` stay untouched. Host-side identity reuse for devices/runs/LAN/agents/remote is already in place without a wire change.
 
 ## Backlogs
 
-Per-batch next-hour notes live under `docs/backlog-local-batch-*.md` (latest: `docs/backlog-local-batch-11.md` after #11 lands).
+Per-batch next-hour notes live under `docs/backlog-local-batch-*.md` (latest: `docs/backlog-local-batch-12.md` after #12 lands).

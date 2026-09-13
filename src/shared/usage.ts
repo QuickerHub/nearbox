@@ -83,6 +83,26 @@ export function usageDetail(usage: TokenUsage): string {
   return bits.join(" · ");
 }
 
+/** True when both sides carry the same token fields (missing optional ≡ undefined). */
+export function sameUsage(a: TokenUsage | undefined, b: TokenUsage | undefined): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b) {
+    return false;
+  }
+  return (
+    a.inputTokens === b.inputTokens &&
+    a.outputTokens === b.outputTokens &&
+    a.cacheReadTokens === b.cacheReadTokens &&
+    a.cacheWriteTokens === b.cacheWriteTokens &&
+    a.reasoningTokens === b.reasoningTokens &&
+    a.totalTokens === b.totalTokens &&
+    a.contextWindow === b.contextWindow &&
+    a.costUsd === b.costUsd
+  );
+}
+
 export function mergeUsage(previous: TokenUsage | undefined, next: TokenUsage): TokenUsage {
   if (!previous) {
     return next;

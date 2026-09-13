@@ -1,4 +1,4 @@
-import { canContinueRun, isTopLevelActiveRun } from "../../../shared/conversation.ts";
+import { canContinueRun, hasParentRunId, isTopLevelActiveRun } from "../../../shared/conversation.ts";
 import type { AgentInfo, AgentKind, AgentRun, Task } from "../../../shared/protocol";
 
 /**
@@ -59,7 +59,7 @@ export interface PlanInput {
 export function conversationRun(runs: readonly AgentRun[], taskId: string, agent: AgentKind, projectId: string): AgentRun | undefined {
   for (let index = runs.length - 1; index >= 0; index -= 1) {
     const run = runs[index]!;
-    if (run.taskId === taskId && run.agent === agent && run.projectId === projectId && !run.parentRunId) {
+    if (run.taskId === taskId && run.agent === agent && run.projectId === projectId && !hasParentRunId(run)) {
       return run;
     }
   }

@@ -649,6 +649,7 @@ export {
   inferContextWindow,
   mergeUsage,
   parseUsage,
+  sameUsage,
   usageDetail,
   usageRatio,
 } from "./usage";
@@ -658,7 +659,7 @@ export function isRunActive(run: Pick<AgentRun, "status">): boolean {
   return run.status === "queued" || run.status === "running";
 }
 
-export { canContinueRun, hasParentRunId, isTopLevelActiveRun, sessionIdAlongChain } from "./conversation";
+export { canContinueRun, countActiveRuns, hasParentRunId, isTopLevelActiveRun, sessionIdAlongChain } from "./conversation";
 export { parseCursorIdeModels } from "./cursor-ide-models";
 export { BUILTIN_MODELS, canListModels, filterModels, modelLabel, modelsForAgent, modelsNeedRefresh, normalizeModelId } from "./models";
 export {

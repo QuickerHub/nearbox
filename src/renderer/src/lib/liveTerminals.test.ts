@@ -63,5 +63,8 @@ test("labels and the last output line are what the dock shows", () => {
   assert.equal(terminalTitle({ command: "npm test" }), "npm test");
   assert.equal(lastOutputLine("a\n\n  building…  \n"), "building…");
   assert.equal(lastOutputLine(""), "");
+  assert.equal(lastOutputLine("a\r\nb\r\n  c  \r\n\r\n"), "c");
+  assert.equal(lastOutputLine("only"), "only");
+  assert.equal(lastOutputLine("   \n\t"), "");
   assert.equal(formatTerminalDuration("2026-09-07T00:00:00.000Z", "2026-09-07T00:01:05.000Z"), "1 分 5 秒");
 });

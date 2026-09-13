@@ -14,7 +14,7 @@ import {
   nativeImage,
   shell,
 } from "electron";
-import { AGENT_LABELS, type AgentRun, DEFAULT_PORT, type HostSettings, RUN_STATUS_LABELS } from "@shared/protocol";
+import { AGENT_LABELS, type AgentRun, DEFAULT_PORT, hasParentRunId, type HostSettings, RUN_STATUS_LABELS } from "@shared/protocol";
 import { spawnEnv } from "./agents";
 import { installDelegationBin } from "./delegation";
 import { TaskHub } from "./hub";
@@ -211,7 +211,7 @@ function applyLoginItem(settings: HostSettings): void {
 
 function notifyRunFinished(run: AgentRun): void {
   // A sub-run's answer goes to the agent that asked for it; the user hears about the parent run.
-  if (run.parentRunId || !hub?.settings.notifyOnRunFinish || !Notification.isSupported()) {
+  if (hasParentRunId(run) || !hub?.settings.notifyOnRunFinish || !Notification.isSupported()) {
     return;
   }
   const task = hub.tasks.find((item) => item.id === run.taskId);

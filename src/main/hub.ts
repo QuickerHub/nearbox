@@ -38,6 +38,7 @@ import {
   TASK_STATUSES,
   type TaskStatus,
 } from "@shared/protocol";
+import { adoptDetectedAgents } from "./agent-detect";
 import { detectAgents, listAgentModels } from "./agents";
 import { ensureCursorAgentHttp1 } from "./cursor-http.ts";
 import { readCursorIdeModels } from "./cursor-ide-state.ts";
@@ -189,14 +190,12 @@ export class TaskHub extends EventEmitter {
       overrides[kind] = this.settings.agents[kind]?.command;
     }
     const detected = await detectAgents(overrides);
-    // Catalogs take a few seconds to fetch; keep the last one until the new one arrives.
-    this.agents = detected.map((info) => {
-      const previous = this.agents.find((item) => item.kind === info.kind);
-      return previous?.models
-        ? { ...info, models: previous.models, modelsCheckedAt: previous.modelsCheckedAt, modelsError: previous.modelsError, ideModels: previous.ideModels }
-        : info;
-    });
-    this.changed();
+    // Keep AgentInfo identity (and catalogs) when PATH detection is unchanged.
+    const next = adoptDetectedAgents(this.agents, detected);
+    if (next !== this.agents) {
+      this.agents = next;
+      this.changed();
+    }
     void this.refreshModels(undefined, true);
     return this.agents;
   }

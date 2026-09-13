@@ -3,6 +3,7 @@ import type { RemoteControlToClient, RemoteDisplay, RemoteQuality, RemoteStatus 
 import { DEFAULT_REMOTE_QUALITY } from "@shared/protocol";
 import type { InputSink } from "./input-win";
 import { clampQuality, parseControlMessage, shouldSendFrame, translateInput } from "./remote-input";
+import { remoteStatusFieldsMatch } from "./remote-status";
 
 const WS_OPEN = 1;
 
@@ -48,24 +49,29 @@ export class RemoteControlHub {
   private readonly clients = new Set<RemoteClient>();
   private quality: RemoteQuality = { ...DEFAULT_REMOTE_QUALITY };
   private sourceRunning = false;
+  private cachedStatus: RemoteStatus | null = null;
 
   constructor(options: RemoteControlHubOptions) {
     this.options = options;
   }
 
   status(): RemoteStatus {
+    const supported = this.options.input.supported;
+    const enabled = this.options.getEnabled();
+    const controllers = this.clients.size;
+    // Coalesced snapshots hit this often; skip screen.getPrimaryDisplay when
+    // the remote row would look the same (display size almost never changes).
+    if (remoteStatusFieldsMatch(this.cachedStatus, supported, enabled, controllers) && this.cachedStatus) {
+      return this.cachedStatus;
+    }
     let display: RemoteDisplay | null = null;
     try {
       display = this.options.getDisplay();
     } catch {
       display = null;
     }
-    return {
-      supported: this.options.input.supported,
-      enabled: this.options.getEnabled(),
-      controllers: this.clients.size,
-      display,
-    };
+    this.cachedStatus = { supported, enabled, controllers, display };
+    return this.cachedStatus;
   }
 
   attach(socket: WebSocket, device: { id: string; name: string }): void {

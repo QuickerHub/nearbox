@@ -81,13 +81,29 @@ export function lastOutputLine(output?: string): string {
   if (!output) {
     return "";
   }
-  const lines = output
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  return lines[lines.length - 1] ?? "";
+  // Scan from the end: long shell tails rebuild the dock every second while live.
+  let end = output.length;
+  while (end > 0) {
+    const code = output.charCodeAt(end - 1);
+    if (code !== 10 && code !== 13 && code !== 32 && code !== 9) {
+      break;
+    }
+    end -= 1;
+  }
+  if (end === 0) {
+    return "";
+  }
+  let start = end - 1;
+  while (start >= 0) {
+    const code = output.charCodeAt(start);
+    if (code === 10 || code === 13) {
+      break;
+    }
+    start -= 1;
+  }
+  const line = output.slice(start + 1, end);
+  // Match the old split/trim behavior for leading spaces on the line itself.
+  return line.trim();
 }
 
 export function formatTerminalDuration(from: string | undefined, to?: string): string {

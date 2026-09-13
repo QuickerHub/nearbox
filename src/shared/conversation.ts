@@ -44,3 +44,14 @@ export function isTopLevelActiveRun(run: Pick<AgentRun, "status" | "parentRunId"
   return (run.status === "queued" || run.status === "running") && !hasParentRunId(run);
 }
 
+/** Count queued+running without allocating a filtered array (document title, badges). */
+export function countActiveRuns(runs: readonly Pick<AgentRun, "status">[]): number {
+  let count = 0;
+  for (const run of runs) {
+    if (run.status === "queued" || run.status === "running") {
+      count += 1;
+    }
+  }
+  return count;
+}
+
