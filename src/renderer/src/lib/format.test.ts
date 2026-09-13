@@ -11,9 +11,14 @@ test("formatDuration uses Chinese units and rejects bad dates", () => {
 });
 
 test("formatBytes scales", () => {
+  assert.equal(formatBytes(0), "0 B");
   assert.equal(formatBytes(500), "500 B");
+  assert.equal(formatBytes(1023), "1023 B");
+  assert.equal(formatBytes(1024), "1.0 KB");
   assert.equal(formatBytes(2048), "2.0 KB");
   assert.equal(formatBytes(3 * 1024 * 1024), "3.0 MB");
+  // Cap is MB — larger values stay in megabytes rather than inventing a GB unit.
+  assert.equal(formatBytes(2 * 1024 * 1024 * 1024), "2048.0 MB");
 });
 
 test("formatRelative covers near and far", () => {

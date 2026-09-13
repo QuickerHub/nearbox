@@ -458,6 +458,86 @@ test("a call the client rejected stays rejected when the agent later marks it co
   assert.equal(tools[1]?.error, "安全模式下不执行终端命令");
 });
 
+test("a failed call stays error when the agent later marks it completed without news", () => {
+  const parser = createOutputParser("acp");
+  const events: ParsedEvent[] = [];
+  events.push(
+    ...parser.push({
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      title: "Read",
+      kind: "read",
+      status: "pending",
+    }).events,
+  );
+  events.push(
+    ...parser.push({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "failed",
+      error: "ENOENT",
+    }).events,
+  );
+  events.push(...parser.push({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" }).events);
+  const tools = events.filter((event) => event.tool).map((event) => event.tool!);
+  assert.equal(tools.length, 2);
+  assert.equal(tools[1]?.status, "error");
+  assert.equal(tools[1]?.error, "ENOENT");
+});
+
+test("describeRawOutput merges stdout/stderr and non-zero exit flips status to error", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "s1",
+      title: "`npm test`",
+      kind: "execute",
+      status: "in_progress",
+      rawInput: { command: "npm test" },
+    },
+    {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "s1",
+      status: "completed",
+      rawOutput: { exitCode: 1, stdout: "1 failing\n", stderr: "Error: boom\n" },
+    },
+  ]);
+  const shell = all.events.filter((event) => event.tool?.id === "s1").map((event) => event.tool!);
+  assert.equal(shell.at(-1)?.exitCode, 1);
+  assert.equal(shell.at(-1)?.status, "error");
+  assert.equal(shell.at(-1)?.output, "1 failing\n\nError: boom\n");
+});
+
+test("ACP kind move/fetch map to edit/web and empty rawOutput is a no-op", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "m1",
+      title: "Rename",
+      kind: "move",
+      status: "completed",
+      locations: [{ path: "D:\\p\\a.ts" }],
+      rawOutput: null,
+    },
+    {
+      sessionUpdate: "tool_call",
+      toolCallId: "f1",
+      title: "Get docs",
+      kind: "fetch",
+      status: "completed",
+      rawInput: { url: "https://example.com" },
+      rawOutput: undefined,
+    },
+  ]);
+  const byId = new Map(all.events.filter((event) => event.tool).map((event) => [event.tool!.id, event.tool!]));
+  assert.equal(byId.get("m1")?.kind, "edit");
+  assert.equal(byId.get("m1")?.subject, "a.ts");
+  assert.equal(byId.get("f1")?.kind, "web");
+  assert.equal(byId.get("f1")?.subject, "https://example.com");
+});
+
 test("partial flushes stream text as deltas without losing the whole answer", () => {
   const parser = createOutputParser("acp");
   const events: ParsedEvent[] = [];
