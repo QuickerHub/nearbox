@@ -33,7 +33,10 @@ export function trayPhonesLabel(phones: number): string {
 
 /** Host:port row, or the empty-LAN placeholder. */
 export function trayHostLabel(selectedHost: string | undefined, port: number | undefined): string {
-  return selectedHost ? `${selectedHost}:${port}` : "未发现局域网地址";
+  if (!selectedHost || port == null || !Number.isFinite(port)) {
+    return "未发现局域网地址";
+  }
+  return `${selectedHost}:${port}`;
 }
 
 /**
@@ -54,4 +57,3 @@ export function trayStatusSignature(
 export function trayTooltip(running: number, queued: number, phones: number): string {
   return `Nearbox · ${trayAgentLabel(running, queued)} · ${phonesOnlineLabel(phones)}`;
 }
-

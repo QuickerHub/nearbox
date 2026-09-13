@@ -99,6 +99,10 @@ export class AppUpdater {
     if (this.inflight) {
       return this.inflight;
     }
+    // A concurrent check rebuilds the snapshot and would wipe download progress.
+    if (this.installJob || this.snapshot.downloading) {
+      return this.status();
+    }
     const checkedAt = this.snapshot.checkedAt ? Date.parse(this.snapshot.checkedAt) : 0;
     const now = (this.options.now ?? Date.now)();
     if (!force && checkedAt && now - checkedAt < STALE_MS && !this.snapshot.error) {
@@ -156,11 +160,16 @@ export class AppUpdater {
       throw new Error(`无法检查更新（${response.status}）`);
     }
     const release = (await response.json()) as GithubRelease;
+    const downloading = this.snapshot.downloading;
     this.snapshot = {
       ...statusFromRelease(release, this.options.currentVersion, this.options.packaged),
       checking: false,
-      downloading: false,
-      progress: this.readyVersion && this.readyVersion === stripTagPrefix(release.tag_name ?? "") ? 1 : 0,
+      downloading,
+      progress: downloading
+        ? this.snapshot.progress
+        : this.readyVersion && this.readyVersion === stripTagPrefix(release.tag_name ?? "")
+          ? 1
+          : 0,
       checkedAt: new Date((this.options.now ?? Date.now)()).toISOString(),
     };
     return this.status();

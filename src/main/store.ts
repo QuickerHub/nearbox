@@ -16,7 +16,9 @@ import {
   type Task,
   type TaskNote,
 } from "@shared/protocol";
-import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { backupCorruptStateFile } from "./corrupt-backup";
+import { stripEmptyParentRunId, stripEmptyResumedFromRunId, stripTransientPermissionState } from "./run-normalize";
+import { normalizeSettings } from "./settings-normalize";
 import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
@@ -98,17 +100,12 @@ export class Store {
         sessions: Array.isArray(raw.sessions) ? raw.sessions : base.sessions,
         remoteDevices: Array.isArray(raw.remoteDevices) ? raw.remoteDevices.map(normalizeDevice) : base.remoteDevices,
         files: raw.files && typeof raw.files === "object" ? raw.files : base.files,
-        settings: {
-          ...base.settings,
-          ...(raw.settings ?? {}),
-          agents: { ...(raw.settings?.agents ?? {}) },
-        },
+        settings: normalizeSettings(raw.settings),
         agentModels: normalizeCatalogs(raw.agentModels),
       };
     } catch {
       // Keep the broken file around for inspection instead of silently replacing it.
-      const backup = `${this.file}.corrupt-${Date.now()}`;
-      void rename(this.file, backup).catch(() => undefined);
+      backupCorruptStateFile(this.file);
       return emptyState();
     }
   }
@@ -235,7 +232,7 @@ function normalizeDevice(device: RemoteDevice): RemoteDevice {
 }
 
 function normalizeRun(run: AgentRun): AgentRun {
-  const rest = stripEmptyParentRunId(stripTransientPermissionState(run));
+  const rest = stripEmptyParentRunId(stripEmptyResumedFromRunId(stripTransientPermissionState(run)));
   // Anything that was still in flight when the host died can never finish.
   if (rest.status === "running" || rest.status === "queued") {
     return {
