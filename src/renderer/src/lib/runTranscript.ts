@@ -1,3 +1,4 @@
+import { stripAnsi } from "./format.ts";
 import { countChanges, refineRewriteDiff } from "../../../shared/diff.ts";
 import type { RunEvent, ToolCall, ToolKind, ToolStatus } from "../../../shared/protocol";
 import { describeArgs, describeCursorResult, describeRawResult, isRecord, looseJson } from "../../../shared/tools.ts";
@@ -326,19 +327,25 @@ const CLIP_NOTE_LINE = /^… 已省略 \d+ 个字符$/;
  */
 export function displayTool(tool: ToolCall): ToolCall {
   let next = tool;
-  if (tool.output?.startsWith("{")) {
-    const parsed = wholeJson(tool.output);
+  if (tool.kind === "shell" && tool.output) {
+    const cleaned = stripAnsi(tool.output);
+    if (cleaned !== tool.output) {
+      next = { ...tool, output: cleaned };
+    }
+  }
+  if (next.output?.startsWith("{")) {
+    const parsed = wholeJson(next.output);
     const known = parsed ? describeRawResult(parsed) : null;
     if (known) {
       next = {
-        ...tool,
+        ...next,
         output: known.output,
-        error: tool.error ?? known.error,
-        status: known.status === "error" && tool.status === "ok" ? "error" : tool.status,
+        error: next.error ?? known.error,
+        status: known.status === "error" && next.status === "ok" ? "error" : next.status,
       };
     } else {
-      const content = clippedContent(tool.output);
-      next = content === null ? tool : { ...tool, output: content };
+      const content = clippedContent(next.output);
+      next = content === null ? next : { ...next, output: content };
     }
   }
   return refineDisplayedDiff(next);

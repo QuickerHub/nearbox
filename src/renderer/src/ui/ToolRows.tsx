@@ -1,6 +1,7 @@
 import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { PendingPermission, ToolCall, ToolKind } from "@shared/protocol";
 import { trackPermissionResolve } from "../lib/permissionAsk";
+import { shouldStickToBottom } from "../lib/liveTerminals";
 import { diffLines, displayTool, groupLabel, hasDetail, isFailed, prettyToolName, statusLabel, toolVerb } from "../lib/runTranscript";
 import { Icon, TOOL_ICONS } from "./Icons";
 
@@ -164,10 +165,12 @@ function ShellCard({ tool, pending, queued, onResolve }: { tool: ToolCall } & As
     }
   }, [running, failed, awaiting, pinned]);
   const outputRef = useRef<HTMLPreElement>(null);
+  const stickRef = useRef(true);
   const output = tool.output?.replace(/\s+$/, "") ?? "";
   useEffect(() => {
-    if (running && outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    const node = outputRef.current;
+    if (running && node && stickRef.current) {
+      node.scrollTop = node.scrollHeight;
     }
   }, [output, running]);
   const body = output || tool.error;
@@ -196,7 +199,14 @@ function ShellCard({ tool, pending, queued, onResolve }: { tool: ToolCall } & As
       {open && body ? (
         <div className="shell__body">
           {output ? (
-            <pre ref={outputRef} className={`shell__output${failed ? " shell__output--err" : ""}`}>
+            <pre
+              ref={outputRef}
+              className={`shell__output${failed ? " shell__output--err" : ""}`}
+              onScroll={(event) => {
+                const node = event.currentTarget;
+                stickRef.current = shouldStickToBottom(node.scrollTop, node.scrollHeight, node.clientHeight);
+              }}
+            >
               {output}
               {running ? <span className="shell__cursor" /> : null}
             </pre>

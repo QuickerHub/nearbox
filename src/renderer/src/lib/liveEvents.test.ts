@@ -77,3 +77,10 @@ test("mergeCatchUpHistory with empty history is the HTTP-failure promote path", 
   );
   assert.equal(caught.lastSeq, 3);
 });
+
+test("queueLiveEvent rejects non-finite seq", () => {
+  const batch: Array<{ seq: number }> = [];
+  assert.equal(queueLiveEvent(batch, { seq: Number.NaN }, 0), false);
+  assert.equal(queueLiveEvent(batch, { seq: Number.POSITIVE_INFINITY }, 0), false);
+  assert.deepEqual(batch, []);
+});

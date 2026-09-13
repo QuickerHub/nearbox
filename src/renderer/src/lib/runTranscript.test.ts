@@ -235,3 +235,10 @@ test("advanceTranscript rebuilds when history is replaced", () => {
   assert.equal(cursor.count, 1);
   assert.equal(cursor.items[0]?.type === "text" ? cursor.items[0].text : "", "new");
 });
+
+test("displayTool strips ANSI from shell output only", () => {
+  const shell = displayTool(call("s1", { kind: "shell", command: "ls", output: "\u001b[32mOK\u001b[0m" }));
+  assert.equal(shell.output, "OK");
+  const read = displayTool(call("r1", { kind: "read", subject: "a.ts", output: "\u001b[32mOK\u001b[0m", status: "ok" }));
+  assert.equal(read.output, "\u001b[32mOK\u001b[0m");
+});
