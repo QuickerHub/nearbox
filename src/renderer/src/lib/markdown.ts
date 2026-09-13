@@ -9,7 +9,7 @@ export type MdAlign = "left" | "center" | "right";
 export type MdBlock =
   | { type: "code"; lang: string; body: string }
   | { type: "heading"; level: number; text: string }
-  | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "list"; ordered: boolean; items: string[]; start?: number }
   | { type: "table"; aligns: MdAlign[]; headers: string[]; rows: string[][] }
   | { type: "quote"; blocks: MdBlock[] }
   | { type: "hr" }
@@ -71,12 +71,19 @@ export function parseBlocks(text: string): MdBlock[] {
     }
     if (LIST.test(line)) {
       const ordered = ORDERED.test(line);
+      const startMatch = ordered ? /^\s*(\d+)[.)]\s+/.exec(line) : null;
+      const start = startMatch ? Number(startMatch[1]) : undefined;
       const items: string[] = [];
       while (index < lines.length && LIST.test(lines[index] ?? "")) {
         items.push((lines[index] ?? "").replace(LIST, ""));
         index += 1;
       }
-      blocks.push({ type: "list", ordered, items });
+      blocks.push({
+        type: "list",
+        ordered,
+        items,
+        ...(ordered && start !== undefined && start !== 1 ? { start } : {}),
+      });
       continue;
     }
     if (!line.trim()) {
@@ -223,36 +230,58 @@ export function splitStreamingMarkdown(text: string): { sealed: string; tail: st
     return { sealed: "", tail: "" };
   }
 
-  const fenceOpenAt = openFenceStart(normalized);
-  if (fenceOpenAt >= 0) {
+  const fence = scanFences(normalized);
+  if (fence.openAt >= 0) {
     return {
-      sealed: normalized.slice(0, fenceOpenAt),
-      tail: normalized.slice(fenceOpenAt),
+      sealed: normalized.slice(0, fence.openAt),
+      tail: normalized.slice(fence.openAt),
     };
   }
 
+  // Blank line is the usual paragraph seal; a just-closed fence is also a
+  // completed block and must seal even when the next paragraph has no blank
+  // line yet (otherwise the finished ``` remounts on every token of the tail).
   const blank = normalized.lastIndexOf("\n\n");
-  if (blank < 0) {
+  let sealAt = blank;
+  let tailFrom = blank >= 0 ? blank + 2 : 0;
+  if (fence.closedEnd > sealAt) {
+    let end = fence.closedEnd;
+    if (end > 0 && normalized[end - 1] === "\n") {
+      end -= 1;
+    }
+    if (end > sealAt) {
+      sealAt = end;
+      tailFrom = end < normalized.length && normalized[end] === "\n" ? end + 1 : end;
+    }
+  }
+  if (sealAt < 0) {
     return { sealed: "", tail: normalized };
   }
   return {
-    sealed: normalized.slice(0, blank),
-    tail: normalized.slice(blank + 2),
+    sealed: normalized.slice(0, sealAt),
+    tail: normalized.slice(tailFrom),
   };
 }
 
-/** Index of the opening fence line when the text ends inside an unclosed fence; else -1. */
-function openFenceStart(text: string): number {
+/**
+ * Walk fences: `openAt` when the text ends inside an unclosed fence; else
+ * `closedEnd` is the offset just past the last closing fence line (including
+ * its trailing newline when one follows).
+ */
+function scanFences(text: string): { openAt: number; closedEnd: number } {
   const lines = text.split("\n");
   let open: { char: string; length: number } | null = null;
   let openAt = -1;
+  let closedEnd = -1;
   let offset = 0;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
+    const hasNext = index < lines.length - 1;
     if (open) {
       if (fenceClose(line, open)) {
         open = null;
         openAt = -1;
+        closedEnd = offset + line.length + (hasNext ? 1 : 0);
       }
     } else {
       const started = fenceOpen(line);
@@ -261,7 +290,7 @@ function openFenceStart(text: string): number {
         openAt = offset;
       }
     }
-    offset += line.length + 1;
+    offset += line.length + (hasNext ? 1 : 0);
   }
-  return open ? openAt : -1;
+  return { openAt: open ? openAt : -1, closedEnd };
 }

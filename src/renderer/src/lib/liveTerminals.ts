@@ -1,5 +1,5 @@
 import type { PendingPermission, RunEvent, ToolCall, ToolStatus } from "../../../shared/protocol";
-import { formatDuration } from "./format.ts";
+import { formatDuration, stripAnsi } from "./format.ts";
 
 export type DockTerminalStatus = ToolStatus | "waiting";
 
@@ -77,10 +77,19 @@ export function terminalTitle(terminal: Pick<DockTerminal, "command" | "descript
 }
 
 /** Last non-empty line, so the dock can show what the command is doing. */
+/** True when a scrollable shell view is already pinned near the bottom. */
+export function shouldStickToBottom(scrollTop: number, scrollHeight: number, clientHeight: number, slop = 48): boolean {
+  if (![scrollTop, scrollHeight, clientHeight].every(Number.isFinite)) {
+    return true;
+  }
+  return scrollHeight - scrollTop - clientHeight <= slop;
+}
+
 export function lastOutputLine(output?: string): string {
   if (!output) {
     return "";
   }
+  output = stripAnsi(output);
   // Scan from the end: long shell tails rebuild the dock every second while live.
   let end = output.length;
   while (end > 0) {
@@ -118,7 +127,7 @@ function mergeTerminal(existing: DockTerminal | undefined, tool: ToolCall, at: s
     description: tool.description ?? existing?.description,
     cwd: tool.cwd ?? existing?.cwd,
     status: waiting ? "waiting" : tool.status,
-    output: tool.output ?? existing?.output,
+    output: tool.output !== undefined ? stripAnsi(tool.output) : existing?.output,
     error: tool.error ?? existing?.error,
     exitCode: tool.exitCode ?? existing?.exitCode,
     startedAt: existing?.startedAt || at,

@@ -7,6 +7,7 @@ import {
   formatTerminalDuration,
   isLiveTerminal,
   lastOutputLine,
+  shouldStickToBottom,
   terminalTitle,
 } from "./liveTerminals.ts";
 
@@ -68,4 +69,15 @@ test("labels and the last output line are what the dock shows", () => {
   assert.equal(lastOutputLine("only"), "only");
   assert.equal(lastOutputLine("   \n\t"), "");
   assert.equal(formatTerminalDuration("2026-09-07T00:00:00.000Z", "2026-09-07T00:01:05.000Z"), "1 分 5 秒");
+});
+
+test("lastOutputLine strips ANSI before reading the tip", () => {
+  assert.equal(lastOutputLine("\u001b[32mOK\u001b[0m\n\u001b[1;31mERR\u001b[0m"), "ERR");
+});
+
+test("shouldStickToBottom respects a small slop near the end", () => {
+  assert.equal(shouldStickToBottom(0, 100, 100), true);
+  assert.equal(shouldStickToBottom(50, 200, 100), false); // 50px left > 48 slop
+  assert.equal(shouldStickToBottom(52, 200, 100), true); // exactly 48
+  assert.equal(shouldStickToBottom(0, 500, 100), false);
 });

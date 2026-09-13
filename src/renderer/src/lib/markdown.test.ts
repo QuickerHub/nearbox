@@ -105,3 +105,32 @@ test("splitStreamingMarkdown seals completed paragraphs and open fences", () => 
     tail: "后记",
   });
 });
+
+test("splitStreamingMarkdown seals a closed fence without a blank line", () => {
+  assert.deepEqual(splitStreamingMarkdown("```js\nok\n```\n后记"), {
+    sealed: "```js\nok\n```",
+    tail: "后记",
+  });
+  assert.deepEqual(splitStreamingMarkdown("前言\n\n```\ncode\n```\ntail"), {
+    sealed: "前言\n\n```\ncode\n```",
+    tail: "tail",
+  });
+  // Still-open fence keeps the fence in the tail.
+  assert.deepEqual(splitStreamingMarkdown("```js\nconst x =\n"), {
+    sealed: "",
+    tail: "```js\nconst x =\n",
+  });
+});
+
+test("ordered lists keep their starting number", () => {
+  const blocks = parseBlocks("5. fifth\n6. sixth");
+  assert.equal(blocks[0]?.type, "list");
+  if (blocks[0]?.type !== "list") {
+    return;
+  }
+  assert.equal(blocks[0].ordered, true);
+  assert.equal(blocks[0].start, 5);
+  assert.deepEqual(blocks[0].items, ["fifth", "sixth"]);
+  const fromOne = parseBlocks("1. a\n2. b");
+  assert.equal(fromOne[0]?.type === "list" ? fromOne[0].start : "missing", undefined);
+});

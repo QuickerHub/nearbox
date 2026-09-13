@@ -8,6 +8,7 @@ import {
   formatTerminalDuration,
   isLiveTerminal,
   lastOutputLine,
+  shouldStickToBottom,
   terminalTitle,
 } from "../lib/liveTerminals";
 import { useRunEvents } from "../lib/useRunEvents";
@@ -117,6 +118,7 @@ function TerminalRow({
   onResolve(optionId: string): void | Promise<void>;
 }): JSX.Element {
   const outputRef = useRef<HTMLPreElement>(null);
+  const stickRef = useRef(true);
   const output = terminal.output?.replace(/\s+$/, "") ?? "";
   const body = output || terminal.error;
   const preview = lastOutputLine(output) || terminal.error;
@@ -124,8 +126,9 @@ function TerminalRow({
   const running = terminal.status === "running";
 
   useEffect(() => {
-    if (open && running && outputRef.current) {
-      outputRef.current.scrollTop = outputRef.current.scrollHeight;
+    const node = outputRef.current;
+    if (open && running && node && stickRef.current) {
+      node.scrollTop = node.scrollHeight;
     }
   }, [open, output, running]);
 
@@ -146,7 +149,14 @@ function TerminalRow({
       {open && body ? (
         <div className="term-dock__body">
           {output ? (
-            <pre ref={outputRef} className={`term-dock__output${terminal.status === "error" ? " term-dock__output--err" : ""}`}>
+            <pre
+              ref={outputRef}
+              className={`term-dock__output${terminal.status === "error" ? " term-dock__output--err" : ""}`}
+              onScroll={(event) => {
+                const node = event.currentTarget;
+                stickRef.current = shouldStickToBottom(node.scrollTop, node.scrollHeight, node.clientHeight);
+              }}
+            >
               {output}
               {running ? <span className="shell__cursor" /> : null}
             </pre>

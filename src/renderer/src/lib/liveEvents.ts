@@ -43,7 +43,7 @@ export function mergeCatchUpHistory<T extends Sequenced>(
  * or already sitting in the current batch (duplicate while a timer is pending).
  */
 export function queueLiveEvent<T extends Sequenced>(batch: T[], event: T, lastSeq: number): boolean {
-  if (event.seq <= lastSeq) {
+  if (!Number.isFinite(event.seq) || event.seq <= lastSeq) {
     return false;
   }
   if (batch.some((item) => item.seq === event.seq)) {

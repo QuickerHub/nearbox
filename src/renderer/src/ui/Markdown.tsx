@@ -54,7 +54,7 @@ function renderBlock(block: MdBlock): ReactNode {
     }
     case "list":
       return block.ordered ? (
-        <ol>
+        <ol start={block.start && block.start !== 1 ? block.start : undefined}>
           {block.items.map((item, index) => (
             <li key={index}>{renderInline(item)}</li>
           ))}

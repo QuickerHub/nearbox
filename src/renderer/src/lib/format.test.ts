@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatBytes, formatDuration, formatRelative } from "./format.ts";
+import { formatBytes, formatDuration, formatRelative, stripAnsi } from "./format.ts";
 
 test("formatDuration uses Chinese units and rejects bad dates", () => {
   assert.equal(formatDuration(undefined, undefined), "");
@@ -22,4 +22,10 @@ test("formatRelative covers near and far", () => {
   assert.equal(formatRelative(new Date(now - 5 * 60_000).toISOString()), "5 分钟前");
   assert.equal(formatRelative(undefined), "");
   assert.equal(formatRelative("bogus"), "");
+});
+
+test("stripAnsi drops CSI colour codes", () => {
+  assert.equal(stripAnsi("\u001b[32mOK\u001b[0m"), "OK");
+  assert.equal(stripAnsi("plain"), "plain");
+  assert.equal(stripAnsi("\u001b[1;31mERR\u001b[0m done"), "ERR done");
 });

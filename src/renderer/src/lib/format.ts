@@ -93,3 +93,10 @@ export function dayKey(value: string | undefined): string {
   }
   return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
 }
+
+/** CSI / OSC colour and cursor codes from shell tools — drop before painting. */
+const ANSI = /\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007\u001b]*(?:\u0007|\u001b\\)|[@-Z\\-_])/g;
+
+export function stripAnsi(text: string): string {
+  return text.replace(ANSI, "");
+}
