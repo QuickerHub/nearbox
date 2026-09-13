@@ -9,6 +9,9 @@ export interface CursorBundle {
   viaCmd: false;
 }
 
+/** Bound how many version folders we probe after sorting (hostile versions/ trees). */
+export const MAX_CURSOR_VERSIONS_PROBE = 64;
+
 function versionKey(name: string): number {
   const match = /^(\d{4})\.(\d{1,2})\.(\d{1,2})(?:-(\d{2})-(\d{2})-(\d{2}))?/.exec(name);
   if (!match) {
@@ -29,16 +32,17 @@ export function resolveCursorAgentBundle(shimDir: string): CursorBundle | null {
   if (!existsSync(versionsDir)) {
     return null;
   }
-  const versions = readdirSync(versionsDir, { withFileTypes: true })
+  const candidates = readdirSync(versionsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && /^\d{4}\.\d{1,2}\.\d{1,2}/.test(entry.name))
     .map((entry) => entry.name)
-    .filter((name) => existsSync(join(versionsDir, name, "node.exe")) && existsSync(join(versionsDir, name, "index.js")))
-    .sort((a, b) => versionKey(b) - versionKey(a));
-  const latest = versions[0];
-  if (!latest) {
-    return null;
+    .sort((a, b) => versionKey(b) - versionKey(a))
+    .slice(0, MAX_CURSOR_VERSIONS_PROBE);
+  for (const latest of candidates) {
+    const node = join(versionsDir, latest, "node.exe");
+    const script = join(versionsDir, latest, "index.js");
+    if (existsSync(node) && existsSync(script)) {
+      return { file: node, prefixArgs: [script], display: `${node} ${script}`, viaCmd: false };
+    }
   }
-  const node = join(versionsDir, latest, "node.exe");
-  const script = join(versionsDir, latest, "index.js");
-  return { file: node, prefixArgs: [script], display: `${node} ${script}`, viaCmd: false };
+  return null;
 }

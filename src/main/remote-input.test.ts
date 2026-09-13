@@ -119,3 +119,10 @@ test("control messages are validated before they reach the injector", () => {
     crop: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
   });
 });
+
+test("ping drops non-finite timestamps", () => {
+  assert.deepEqual(parseControlMessage('{"t":"ping","ts":1}'), { t: "ping", ts: 1 });
+  assert.deepEqual(parseControlMessage('{"t":"ping","ts":null}'), { t: "ping", ts: undefined });
+  assert.deepEqual(parseControlMessage('{"t":"ping","ts":1e999}'), { t: "ping", ts: undefined });
+});
+

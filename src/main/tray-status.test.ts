@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   countRunStatuses,
   trayAgentLabel,
+  sanitizeTrayHostLabel,
   trayHostLabel,
   trayPhonesLabel,
   trayStatusSignature,
@@ -44,5 +45,15 @@ test("trayStatusSignature changes only when a status row would change", () => {
 test("trayTooltip joins Chinese status rows", () => {
   assert.equal(trayTooltip(0, 0, 0), "Nearbox · Agent 空闲 · 没有手机在线");
   assert.equal(trayTooltip(1, 2, 3), "Nearbox · Agent：1 运行中 · 2 排队 · 3 台手机在线");
+});
+
+test("trayHostLabel rejects hosts that already contain a colon or whitespace", () => {
+  assert.equal(sanitizeTrayHostLabel("192.168.1.8"), "192.168.1.8");
+  assert.equal(sanitizeTrayHostLabel(" 192.168.1.8 "), "192.168.1.8");
+  assert.equal(sanitizeTrayHostLabel("fe80::1"), undefined);
+  assert.equal(sanitizeTrayHostLabel("evil:injected"), undefined);
+  assert.equal(sanitizeTrayHostLabel("bad host"), undefined);
+  assert.equal(trayHostLabel("evil:injected", 7788), "未发现局域网地址");
+  assert.equal(trayHostLabel("192.168.1.8", 7788), "192.168.1.8:7788");
 });
 

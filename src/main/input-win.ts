@@ -118,6 +118,9 @@ class WindowsInputInjector implements InputSink {
         banner += chunk.toString("utf8");
         if (banner.includes("NB_READY")) {
           child.stdout.off("data", onData);
+          // Keep draining stdout after ready. Without a listener the pipe can
+          // back-pressure and stall the PowerShell helper mid-injection.
+          child.stdout.on("data", () => undefined);
           this.isReady = true;
           if (this.pending.length) {
             this.writeNow(this.pending);

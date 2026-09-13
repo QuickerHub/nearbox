@@ -16,7 +16,8 @@ import {
   type Task,
   type TaskNote,
 } from "@shared/protocol";
-import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { coerceEventCount, stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { MAX_RUNS_KEPT, capRunsOnLoad } from "./store-runs";
 import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
@@ -50,8 +51,6 @@ export interface PersistedState {
   settings: HostSettings;
   agentModels: Partial<Record<AgentKind, ModelCatalog>>;
 }
-
-const MAX_RUNS_KEPT = 300;
 
 function emptyState(): PersistedState {
   return {
@@ -94,7 +93,7 @@ export class Store {
         version: 1,
         tasks: Array.isArray(raw.tasks) ? raw.tasks.map(normalizeTask) : base.tasks,
         projects: Array.isArray(raw.projects) ? raw.projects : base.projects,
-        runs: Array.isArray(raw.runs) ? raw.runs.map(normalizeRun) : base.runs,
+        runs: Array.isArray(raw.runs) ? capRunsOnLoad(raw.runs.map(normalizeRun)) : base.runs,
         sessions: Array.isArray(raw.sessions) ? raw.sessions : base.sessions,
         remoteDevices: Array.isArray(raw.remoteDevices) ? raw.remoteDevices.map(normalizeDevice) : base.remoteDevices,
         files: raw.files && typeof raw.files === "object" ? raw.files : base.files,
@@ -236,6 +235,7 @@ function normalizeDevice(device: RemoteDevice): RemoteDevice {
 
 function normalizeRun(run: AgentRun): AgentRun {
   const rest = stripEmptyParentRunId(stripTransientPermissionState(run));
+  const eventCount = coerceEventCount(rest.eventCount);
   // Anything that was still in flight when the host died can never finish.
   if (rest.status === "running" || rest.status === "queued") {
     return {
@@ -243,7 +243,8 @@ function normalizeRun(run: AgentRun): AgentRun {
       status: "failed",
       error: rest.error ?? "电脑端在运行期间退出了。",
       finishedAt: rest.finishedAt ?? new Date().toISOString(),
+      eventCount,
     };
   }
-  return { ...rest, eventCount: rest.eventCount ?? 0 };
+  return { ...rest, eventCount };
 }

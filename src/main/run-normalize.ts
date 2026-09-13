@@ -37,3 +37,15 @@ export function stripTransientPermissionState<T extends PermissionStateFields>(
   return rest;
 }
 
+/**
+ * `eventCount ?? 0` leaves NaN/Infinity intact (nullish only). Persist a
+ * non-negative integer so UI math and JSON never carry poisoned counts.
+ */
+export function coerceEventCount(value: unknown): number {
+  const num = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(num) || num <= 0) {
+    return 0;
+  }
+  return Math.min(Math.floor(num), 1_000_000_000);
+}
+
