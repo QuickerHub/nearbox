@@ -85,8 +85,11 @@ interface ActiveRun {
   warm?: { host: AgentHost; sessionId: string; stream: NodeJS.Timeout | null };
   /** Bearer token the agent's `nearbox` command uses; valid only while this run is active. */
   token?: string;
-  /** Safe-mode shell: wait here until the user picks allow or reject. */
-  permission?: { resolve(optionId: string | null): void };
+  /** Safe-mode shell asks waiting for the user; only the head is shown as pendingPermission. */
+  permissionQueue: Array<{
+    resolve(optionId: string | null): void;
+    pending: NonNullable<AgentRun["pendingPermission"]>;
+  }>;
 }
 
 export interface RunAttachment {
@@ -195,16 +198,24 @@ export class RunManager extends EventEmitter {
       return false;
     }
     active.cancelled = true;
-    this.settlePermission(active, null);
+    this.settleAllPermissions(active);
     if (active.warm) {
-      // The host serves other conversations too: ask it to stop this turn, and only kill it if it will not listen.
+      // The host serves other conversations too: ask it to stop this turn, and only kill it if it will not listen
+      // and nobody else is using it. Killing would cancel every other warm session on the same process.
       const { host, sessionId } = active.warm;
       this.append(run, "status", `${reason}，正在通知 Agent 停止…`);
       host.cancel(sessionId);
       setTimeout(() => {
-        if (this.active.get(runId) === active) {
-          host.kill();
+        if (this.active.get(runId) !== active) {
+          return;
         }
+        const shared = [...this.active.values()].some((other) => other !== active && other.warm?.host === host);
+        if (shared) {
+          this.append(run, "status", "Agent 未及时停止；常驻进程仍保留供其他会话使用。");
+          this.finish(active, null, undefined);
+          return;
+        }
+        host.kill();
       }, CANCEL_GRACE_MS).unref();
       return true;
     }
@@ -223,7 +234,7 @@ export class RunManager extends EventEmitter {
   resolvePermission(runId: string, optionId: string): boolean {
     const state = this.active.get(runId);
     const pending = state?.run.pendingPermission;
-    if (!state?.permission || !pending) {
+    if (!state || !state.permissionQueue.length || !pending) {
       return false;
     }
     const picked = pending.options.find((option) => option.optionId === optionId);
@@ -297,6 +308,7 @@ export class RunManager extends EventEmitter {
       stderrLines: 0,
       lastStderr: "",
       timer: null,
+      permissionQueue: [],
     };
     this.active.set(run.id, state);
     this.eventCache.set(run.id, this.eventCache.get(run.id) ?? []);
@@ -803,32 +815,58 @@ export class RunManager extends EventEmitter {
       );
     }
     return new Promise((resolve) => {
-      state.permission = { resolve };
-      state.run.pendingPermission = {
+      const pending = {
         toolCallId: described.toolCallId,
         title: described.title,
         command: described.command,
         options: choices,
       };
-      this.options.onRunChanged(state.run);
+      state.permissionQueue.push({ resolve, pending });
+      // Parallel tool calls may ask more than once; show the head and keep the rest queued.
+      if (state.permissionQueue.length === 1) {
+        state.run.pendingPermission = pending;
+        this.options.onRunChanged(state.run);
+      }
     });
   }
 
   private settlePermission(state: ActiveRun, optionId: string | null): void {
-    const waiter = state.permission;
-    state.permission = undefined;
-    if (state.run.pendingPermission) {
-      delete state.run.pendingPermission;
-      this.options.onRunChanged(state.run);
+    const waiter = state.permissionQueue.shift();
+    if (!waiter) {
+      if (state.run.pendingPermission) {
+        delete state.run.pendingPermission;
+        this.options.onRunChanged(state.run);
+      }
+      return;
     }
-    waiter?.resolve(optionId);
+    waiter.resolve(optionId);
+    const next = state.permissionQueue[0];
+    if (next) {
+      state.run.pendingPermission = next.pending;
+    } else {
+      delete state.run.pendingPermission;
+    }
+    this.options.onRunChanged(state.run);
+  }
+
+  /** Cancel every queued ask (run finished or user stopped the turn). */
+  private settleAllPermissions(state: ActiveRun): void {
+    if (!state.permissionQueue.length && !state.run.pendingPermission) {
+      return;
+    }
+    const waiters = state.permissionQueue.splice(0);
+    delete state.run.pendingPermission;
+    this.options.onRunChanged(state.run);
+    for (const waiter of waiters) {
+      waiter.resolve(null);
+    }
   }
 
   private finish(state: ActiveRun, exitCode: number | null, forcedError: string | undefined): void {
     if (!this.active.has(state.run.id)) {
       return;
     }
-    this.settlePermission(state, null);
+    this.settleAllPermissions(state);
     const run = state.run;
     if (state.timer) {
       clearTimeout(state.timer);

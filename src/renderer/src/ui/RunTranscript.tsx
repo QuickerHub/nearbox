@@ -1,6 +1,6 @@
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { PendingPermission, RunEvent } from "@shared/protocol";
-import { buildTranscript, summarizeTranscript, toolVerb, type WorkRow } from "../lib/runTranscript";
+import { advanceTranscript, createTranscriptCursor, summarizeTranscript, toolVerb, type Transcript, type WorkRow } from "../lib/runTranscript";
 import { Icon } from "./Icons";
 import { Markdown } from "./Markdown";
 import { PermissionAsk, ToolGroupRow, ToolRow } from "./ToolRows";
@@ -25,7 +25,14 @@ interface RunTranscriptProps {
  * it finishes it folds down to a single line, like Cursor does.
  */
 export function RunTranscript({ events, active, durationLabel, usageLabel, failed, defaultOpen, pending, onResolve }: RunTranscriptProps): JSX.Element {
-  const transcript = useMemo(() => summarizeTranscript(buildTranscript(events)), [events]);
+  const cursorRef = useRef(createTranscriptCursor());
+  const previousRef = useRef<Transcript | null>(null);
+  const transcript = useMemo(() => {
+    cursorRef.current = advanceTranscript(cursorRef.current, events);
+    const next = summarizeTranscript(cursorRef.current.items, previousRef.current);
+    previousRef.current = next;
+    return next;
+  }, [events]);
   const { work, answer, toolCount, running } = transcript;
   const busyWith = running.at(-1);
   const attached = Boolean(pending?.toolCallId && workHasTool(work, pending.toolCallId));
@@ -82,7 +89,7 @@ function workHasTool(work: WorkRow[], toolCallId: string): boolean {
   });
 }
 
-function WorkItem({
+const WorkItem = memo(function WorkItem({
   row,
   failed,
   pending,
@@ -113,7 +120,7 @@ function WorkItem({
     case "raw":
       return <LinesFold label="未识别的输出" lines={row.lines} tone="muted" initiallyOpen={false} />;
   }
-}
+});
 
 function WorkFold({
   live,

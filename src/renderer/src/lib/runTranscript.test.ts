@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { RunEvent, RunEventKind, ToolCall } from "../../../shared/protocol.ts";
-import { buildTranscript, diffLines, displayTool, groupLabel, summarizeTranscript, toolVerb } from "./runTranscript.ts";
+import { advanceTranscript, buildTranscript, createTranscriptCursor, diffLines, displayTool, groupLabel, summarizeTranscript, toolVerb } from "./runTranscript.ts";
 
 function ev(seq: number, kind: RunEventKind, text: string, tool?: ToolCall, delta?: boolean): RunEvent {
   return { seq, at: "2026-09-06T00:00:00.000Z", kind, text, ...(tool ? { tool } : {}), ...(delta ? { delta } : {}) };
@@ -212,4 +212,26 @@ test("old whole-file diffs (every line removed, then every line added) are re-di
     diffLines(clipped).map((line) => line.tag),
     ["del", "del", "add", "note"],
   );
+});
+
+test("advanceTranscript applies only the suffix and keeps earlier item identity", () => {
+  const first = [ev(1, "tool", "读取 a.ts", call("c1", { kind: "read", subject: "a.ts", status: "ok" })), ev(2, "text", "Hi", undefined, true)];
+  let cursor = advanceTranscript(createTranscriptCursor(), first);
+  const toolItem = cursor.items[0];
+  assert.equal(toolItem?.type, "tool");
+  cursor = advanceTranscript(cursor, [...first, ev(3, "text", " there", undefined, true)]);
+  assert.equal(cursor.items[0], toolItem);
+  assert.equal(cursor.items[1]?.type === "text" ? cursor.items[1].text : "", "Hi there");
+  const summary = summarizeTranscript(cursor.items);
+  cursor = advanceTranscript(cursor, [...first, ev(3, "text", " there", undefined, true), ev(4, "text", "!", undefined, true)]);
+  const again = summarizeTranscript(cursor.items, summary);
+  assert.equal(again.work, summary.work);
+  assert.equal(again.answer, "Hi there!");
+});
+
+test("advanceTranscript rebuilds when history is replaced", () => {
+  let cursor = advanceTranscript(createTranscriptCursor(), [ev(1, "text", "old")]);
+  cursor = advanceTranscript(cursor, [ev(10, "text", "new")]);
+  assert.equal(cursor.count, 1);
+  assert.equal(cursor.items[0]?.type === "text" ? cursor.items[0].text : "", "new");
 });

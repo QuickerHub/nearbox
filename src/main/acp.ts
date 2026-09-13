@@ -28,6 +28,8 @@ const INITIALIZE_TIMEOUT_MS = 30_000;
 /** Creating or loading a session starts the MCP servers, which can take a while the first time. */
 const SESSION_TIMEOUT_MS = 180_000;
 const SET_MODEL_TIMEOUT_MS = 30_000;
+/** session/list is cheap to reuse while flicking tasks; avoid an RPC per loadSession. */
+const LIST_SESSIONS_TTL_MS = 5_000;
 const STDERR_TAIL_LINES = 20;
 
 export interface HostLaunch {
@@ -298,6 +300,7 @@ export class AgentHost extends EventEmitter {
   private readonly loading = new Map<string, Promise<AcpSession>>();
   private readonly prompts = new Map<string, ActivePrompt>();
   private readonly stderrTail: string[] = [];
+  private listedSessions: { at: number; sessions: ListedSession[] } | null = null;
   private idleTimer: NodeJS.Timeout | null = null;
   private exited = false;
   private readonly log: (message: string) => void;
@@ -341,6 +344,7 @@ export class AgentHost extends EventEmitter {
       this.sessions.clear();
       this.loading.clear();
       this.prompts.clear();
+      this.listedSessions = null;
       this.emit("exit", code);
     });
     this.ready = Promise.race([
@@ -382,6 +386,7 @@ export class AgentHost extends EventEmitter {
     await this.ready;
     this.touch();
     const result = await this.connection.request<Record<string, unknown>>("session/new", { cwd, mcpServers: [] }, SESSION_TIMEOUT_MS);
+    this.listedSessions = null;
     const session = this.remember(String(result.sessionId ?? ""), cwd, result);
     if (!session.sessionId) {
       throw new Error("Agent 没有返回会话 id");
@@ -393,7 +398,10 @@ export class AgentHost extends EventEmitter {
    * Sessions the agent can load, newest first. Conversations started by
    * one-shot `-p` runs are not among them, so this is checked before a load.
    */
-  async listSessions(): Promise<ListedSession[]> {
+  async listSessions(force = false): Promise<ListedSession[]> {
+    if (!force && this.listedSessions && Date.now() - this.listedSessions.at < LIST_SESSIONS_TTL_MS) {
+      return this.listedSessions.sessions;
+    }
     await this.ready;
     const result = await this.connection.request<Record<string, unknown>>("session/list", {}, SET_MODEL_TIMEOUT_MS);
     const out: ListedSession[] = [];
@@ -407,7 +415,9 @@ export class AgentHost extends EventEmitter {
         });
       }
     }
-    return out.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+    const sessions = out.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+    this.listedSessions = { at: Date.now(), sessions };
+    return sessions;
   }
 
   /**
@@ -477,6 +487,7 @@ export class AgentHost extends EventEmitter {
 
   kill(): void {
     this.clearIdle();
+    this.listedSessions = null;
     killTree(this.child);
   }
 
