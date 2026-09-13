@@ -21,25 +21,25 @@ export function toolKindOf(rawName: string): ToolKind {
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .replace(/[\s-]+/g, "_")
     .toLowerCase();
-  if (/^(shell|bash|run_command|run_terminal_cmd|command_execution|execute|terminal|powershell|cmd|exec)$/.test(id)) {
+  if (/^(shell|bash|run_command|run_terminal_cmd|run_terminal|command_execution|execute|terminal|powershell|cmd|exec)$/.test(id)) {
     return "shell";
   }
-  if (/^(read|read_file|readfile|view|cat|view_file|read_files)$/.test(id)) {
+  if (/^(read|read_file|readfile|view|cat|view_file|read_files|open_file|openfile)$/.test(id)) {
     return "read";
   }
-  if (/^(write|write_file|writefile|create_file|create|save_file)$/.test(id)) {
+  if (/^(write|write_file|writefile|create_file|create|save_file|overwrite_file|overwritefile)$/.test(id)) {
     return "write";
   }
-  if (/^(edit|edit_file|editfile|str_replace|strreplace|str_replace_editor|apply_patch|multi_edit|multiedit|search_replace|patch|notebook_edit)$/.test(id)) {
+  if (/^(edit|edit_file|editfile|str_replace|strreplace|str_replace_editor|apply_patch|multi_edit|multiedit|search_replace|patch|notebook_edit|edit_notebook|editnotebook)$/.test(id)) {
     return "edit";
   }
-  if (/^(delete|delete_file|deletefile|remove|rm)$/.test(id)) {
+  if (/^(delete|delete_file|deletefile|delete_files|remove|remove_file|rm)$/.test(id)) {
     return "delete";
   }
   if (/^(glob|find_files|file_search|find)$/.test(id)) {
     return "glob";
   }
-  if (/^(grep|search|codebase_search|sem_search|semsearch|ripgrep|grep_search|search_files|search_code)$/.test(id)) {
+  if (/^(grep|search|codebase_search|sem_search|semsearch|semantic_search|ripgrep|grep_search|search_files|search_code)$/.test(id)) {
     return "grep";
   }
   if (/^(ls|list_dir|list|list_directory|listdir|tree)$/.test(id)) {
@@ -60,7 +60,7 @@ export function toolKindOf(rawName: string): ToolKind {
   return "other";
 }
 
-const PATH_KEYS = ["path", "file_path", "filePath", "target_file", "targetFile", "relativeWorkspacePath", "relative_workspace_path", "file", "filename", "notebook_path"];
+const PATH_KEYS = ["path", "file_path", "filePath", "target_file", "targetFile", "relativeWorkspacePath", "relative_workspace_path", "file", "filename", "notebook_path", "uri"];
 const DIR_KEYS = ["targetDirectory", "target_directory", "workingDirectory", "working_directory", "cwd", "dir", "directory", "path"];
 const PATTERN_KEYS = ["globPattern", "glob_pattern", "pattern", "query", "regex", "search"];
 const WEB_KEYS = ["query", "url", "search_term", "searchTerm", "q"];
@@ -80,7 +80,11 @@ export function describeArgs(
   }
   switch (kind) {
     case "shell": {
-      const command = pickString(args, ["command", "cmd", "script"]);
+      // Prefer explicit command strings; argv/args are common when the CLI lists tokens.
+      const command =
+        pickString(args, ["command", "cmd", "script", "arguments"]) ||
+        argvText(args.argv) ||
+        argvText(args.args);
       call.command = command || undefined;
       call.subject = command || undefined;
       call.cwd = pickString(args, DIR_KEYS.filter((key) => key !== "path")) || undefined;
@@ -90,7 +94,7 @@ export function describeArgs(
     case "write":
     case "edit":
     case "delete": {
-      const path = pickString(args, PATH_KEYS);
+      const path = stripFileUri(pickString(args, PATH_KEYS));
       call.subject = path ? basenameOf(path) : undefined;
       call.files = path ? [path] : undefined;
       break;
@@ -169,7 +173,12 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
     }
     case "edit":
     case "write": {
-      const raw = typeof body.diffString === "string" ? body.diffString.trim() : "";
+      const raw =
+        typeof body.diffString === "string"
+          ? body.diffString.trim()
+          : typeof body.diff_string === "string"
+            ? body.diff_string.trim()
+            : "";
       if (raw) {
         // Refine before clipping: a whole-file dump is huge, the real hunk usually is not.
         const refined = refineRewriteDiff(raw);
@@ -178,8 +187,18 @@ export function describeCursorResult(kind: ToolKind, result: unknown): Partial<T
         patch.linesAdded = counts.added;
         patch.linesRemoved = counts.removed;
       } else {
-        patch.linesAdded = typeof body.linesAdded === "number" ? body.linesAdded : undefined;
-        patch.linesRemoved = typeof body.linesRemoved === "number" ? body.linesRemoved : undefined;
+        patch.linesAdded =
+          typeof body.linesAdded === "number"
+            ? body.linesAdded
+            : typeof body.lines_added === "number"
+              ? body.lines_added
+              : undefined;
+        patch.linesRemoved =
+          typeof body.linesRemoved === "number"
+            ? body.linesRemoved
+            : typeof body.lines_removed === "number"
+              ? body.lines_removed
+              : undefined;
       }
       if (typeof body.path === "string" && body.path) {
         patch.files = [body.path];
@@ -312,6 +331,35 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+
+/** Join argv-style token lists for shell display. */
+export function argvText(value: unknown): string {
+  if (!Array.isArray(value) || !value.length) {
+    return "";
+  }
+  if (!value.every((item) => typeof item === "string" || typeof item === "number" || typeof item === "boolean")) {
+    return "";
+  }
+  return value.map(String).join(" ").trim();
+}
+
+/** Drop a file:// prefix so UI subjects stay as ordinary paths. */
+export function stripFileUri(value: string): string {
+  if (!value || !/^file:/i.test(value)) {
+    return value;
+  }
+  try {
+    const parsed = new URL(value);
+    let path = decodeURIComponent(parsed.pathname || "");
+    if (/^\/[A-Za-z]:\//.test(path)) {
+      path = path.slice(1);
+    }
+    return path || value;
+  } catch {
+    return value.replace(/^file:\/\/\/?/i, "");
+  }
 }
 
 export function pickString(record: Record<string, unknown>, keys: string[]): string {

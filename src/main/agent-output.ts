@@ -510,7 +510,7 @@ function parseStreamJson(data: Record<string, unknown>, out: ParseResult, { sink
       const rawName = Object.keys(call).find((key) => key.endsWith("ToolCall")) ?? Object.keys(call)[0] ?? "tool";
       const payload = isRecord(call[rawName]) ? (call[rawName] as Record<string, unknown>) : {};
       const args = isRecord(payload.args) ? payload.args : {};
-      const id = String(data.call_id ?? payload.toolCallId ?? args.toolCallId ?? `tool-${events.length}`);
+      const id = String(data.call_id ?? data.tool_call_id ?? data.callId ?? payload.toolCallId ?? args.toolCallId ?? `tool-${events.length}`);
       if (subtype === "started") {
         sink.tool(events, track(id, describeArgs(rawName, args, typeof payload.description === "string" ? payload.description : undefined)));
       } else if (subtype === "completed") {
@@ -589,7 +589,7 @@ function parseCodex(data: Record<string, unknown>, out: ParseResult, { sink, tra
         }
         return;
       case "command_execution": {
-        const command = String(item.command ?? "");
+        const command = String(item.command ?? item.cmd ?? "");
         const exitCode = typeof item.exit_code === "number" ? item.exit_code : undefined;
         const output = typeof item.aggregated_output === "string" ? item.aggregated_output : "";
         sink.tool(
@@ -715,7 +715,7 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
     }
     case "tool_call":
     case "tool_use": {
-      const id = String(data.toolCallId ?? data.id ?? `tool-${events.length}`);
+      const id = String(data.toolCallId ?? data.tool_call_id ?? data.toolCallID ?? data.id ?? `tool-${events.length}`);
       const title = String(data.title ?? data.name ?? data.tool ?? "tool").replace(/^`(.*)`$/s, "$1");
       const rawInput = isRecord(data.rawInput) ? data.rawInput : isRecord(data.input) ? data.input : {};
       const described = describeArgs(title, rawInput, undefined, acpKind(String(data.kind ?? ""), title));
@@ -735,7 +735,7 @@ function parseAcp(data: Record<string, unknown>, out: ParseResult, { sink, track
     }
     case "tool_call_update":
     case "tool_result": {
-      const id = String(data.toolCallId ?? data.id ?? "");
+      const id = String(data.toolCallId ?? data.tool_call_id ?? data.toolCallID ?? data.id ?? "");
       const previous = tools.get(id);
       // cursor-agent announces a call first and fills in what it is about (title, arguments, files) a moment later.
       const rawInput = isRecord(data.rawInput) && Object.keys(data.rawInput).length ? data.rawInput : undefined;

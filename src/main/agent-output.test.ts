@@ -488,6 +488,53 @@ test("partial flushes stream text as deltas without losing the whole answer", ()
   assert.equal(tail.result, "Done.");
 });
 
+test("ACP and cursor keep tool_call_id aliases; Codex reads cmd", () => {
+  const acp = createOutputParser("acp");
+  const started = acp.push({
+    type: "tool_call",
+    tool_call_id: "snake-1",
+    title: "Read",
+    kind: "read",
+    status: "in_progress",
+    rawInput: { path: "/tmp/a.ts" },
+  });
+  assert.equal(started.events[0]?.tool?.id, "snake-1");
+  const done = acp.push({
+    type: "tool_call_update",
+    tool_call_id: "snake-1",
+    status: "completed",
+    content: [{ type: "content", content: { type: "text", text: "body" } }],
+  });
+  assert.equal(done.events[0]?.tool?.id, "snake-1");
+  assert.equal(done.events[0]?.tool?.output, "body");
+
+  const cursor = createOutputParser("cursor");
+  const call = cursor.push({
+    type: "tool_call",
+    subtype: "started",
+    tool_call_id: "c-snake",
+    tool_call: { shellToolCall: { args: { command: "pwd" } } },
+  });
+  assert.equal(call.events[0]?.tool?.id, "c-snake");
+  assert.equal(call.events[0]?.tool?.command, "pwd");
+
+  const codex = createOutputParser("codex");
+  const item = codex.push({
+    type: "item.completed",
+    item: {
+      id: "item_cmd",
+      type: "command_execution",
+      cmd: "echo hi",
+      aggregated_output: "hi\n",
+      exit_code: 0,
+      status: "completed",
+    },
+  });
+  assert.equal(item.events[0]?.tool?.command, "echo hi");
+  assert.equal(item.events[0]?.tool?.subject, "echo hi");
+  assert.equal(item.events[0]?.tool?.output, "hi\n");
+});
+
 test("non-JSON lines are kept as raw output", () => {
   const parser = createOutputParser("codex");
   const all = feedAll(parser, ["warning: something odd", "{not json"]);
