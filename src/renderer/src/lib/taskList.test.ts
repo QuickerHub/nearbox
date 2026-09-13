@@ -82,6 +82,27 @@ test("a turn waiting for permission needs the user, even on a delegated sub-run"
   assert.equal(items[0]?.run.id, "child");
 });
 
+test("attention permission uses the first waiting run of the task", () => {
+  const tasks = [task({ id: "t1" })];
+  const runs = [
+    run({
+      id: "first",
+      taskId: "t1",
+      status: "running",
+      finishedAt: undefined,
+      pendingPermission: { toolCallId: "a", title: "a", options: [] },
+    }),
+    run({
+      id: "second",
+      taskId: "t1",
+      status: "running",
+      finishedAt: undefined,
+      pendingPermission: { toolCallId: "b", title: "b", options: [] },
+    }),
+  ];
+  assert.equal(attentionFor(tasks, runs, {})[0]?.run.id, "first");
+});
+
 test("a finished turn is news until the task is opened; cancelled and done are not", () => {
   const tasks = [task({ id: "ok" }), task({ id: "bad" }), task({ id: "stopped" }), task({ id: "closed", status: "done" }), task({ id: "busy" })];
   const runs = [

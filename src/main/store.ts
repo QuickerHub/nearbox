@@ -16,7 +16,7 @@ import {
   type Task,
   type TaskNote,
 } from "@shared/protocol";
-import { stripEmptyParentRunId } from "./run-normalize";
+import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
 
 export interface PairedSession {
   token: string;
@@ -227,8 +227,7 @@ function normalizeDevice(device: RemoteDevice): RemoteDevice {
 }
 
 function normalizeRun(run: AgentRun): AgentRun {
-  const { pendingPermission: _pending, ...raw } = run;
-  const rest = stripEmptyParentRunId(raw);
+  const rest = stripEmptyParentRunId(stripTransientPermissionState(run));
   // Anything that was still in flight when the host died can never finish.
   if (rest.status === "running" || rest.status === "queued") {
     return {

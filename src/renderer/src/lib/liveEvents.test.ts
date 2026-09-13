@@ -33,3 +33,24 @@ test("queueLiveEvent drops stale and in-batch duplicate seqs", () => {
     [1, 2],
   );
 });
+
+test("mergeCatchUpHistory drops duplicate buffered seqs and sorts extras", () => {
+  const history = [{ seq: 1 }, { seq: 2 }];
+  const buffered = [{ seq: 2 }, { seq: 4 }, { seq: 3 }, { seq: 4 }];
+  const caught = mergeCatchUpHistory(history, buffered);
+  assert.deepEqual(
+    caught.events.map((event) => event.seq),
+    [1, 2, 3, 4],
+  );
+  assert.equal(caught.lastSeq, 4);
+});
+
+test("mergeCatchUpHistory dedupes within an empty-history buffer", () => {
+  const caught = mergeCatchUpHistory<{ seq: number }>([], [{ seq: 5 }, { seq: 5 }, { seq: 6 }]);
+  assert.deepEqual(
+    caught.events.map((event) => event.seq),
+    [5, 6],
+  );
+  assert.equal(caught.lastSeq, 6);
+});
+

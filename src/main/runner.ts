@@ -46,6 +46,7 @@ import {
 } from "./agents";
 import { remoteCwdPreflight, remoteDevicePreflight } from "./remote-preflight";
 import { localPreflightFailure, shouldAttemptWarm, warmFallbackStatus } from "./run-start";
+import { markCancelling } from "./cancel-escalation";
 import { startWarmCancelOnHost } from "./warm-cancel-host";
 import { drainPermissionQueue, pendingPermissionView, settlePermissionHead } from "./permission-queue";
 import { type DelegationConfig, withDelegationPath } from "./delegation";
@@ -200,7 +201,10 @@ export class RunManager extends EventEmitter {
     if (!active) {
       return false;
     }
-    active.cancelled = true;
+    // Second Stop (or parent+self cascade) must not stack warm grace timers / kills.
+    if (!markCancelling(active)) {
+      return true;
+    }
     this.settleAllPermissions(active);
     if (active.warm) {
       // The host serves other conversations too: ask it to stop this turn, and only kill it if it will not listen

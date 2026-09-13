@@ -16,3 +16,16 @@ export type WarmCancelAfterSoft =
 export function warmCancelAfterSoftGrace(sharedHost: boolean): WarmCancelAfterSoft {
   return sharedHost ? { action: "abandon-keep-host" } : { action: "force-then-kill" };
 }
+
+/**
+ * Mark a run as cancelling. Returns false when a cancel is already in flight
+ * so warm grace timers / kill paths are not stacked by a second Stop click.
+ */
+export function markCancelling(state: { cancelled: boolean }): boolean {
+  if (state.cancelled) {
+    return false;
+  }
+  state.cancelled = true;
+  return true;
+}
+
