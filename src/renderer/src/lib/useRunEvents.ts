@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { RunEvent } from "@shared/protocol";
 import type { ClientHandle } from "./client";
+import { mergeCatchUpHistory, queueLiveEvent } from "./liveEvents";
 
 /** Coalesce streamed events so the transcript rebuilds a few times a second, not per token. */
 const LIVE_FLUSH_MS = 50;
@@ -44,14 +45,9 @@ export function useRunEvents(client: ClientHandle, runId: string | undefined, en
         buffered.push(event);
         return;
       }
-      if (event.seq <= lastSeq) {
+      if (!queueLiveEvent(liveBatch, event, lastSeq)) {
         return;
       }
-      // Drop duplicates that arrived while a previous batch was still queued.
-      if (liveBatch.some((item) => item.seq === event.seq)) {
-        return;
-      }
-      liveBatch.push(event);
       if (flushTimer === null) {
         flushTimer = window.setTimeout(flushLive, LIVE_FLUSH_MS);
       }
@@ -62,12 +58,11 @@ export function useRunEvents(client: ClientHandle, runId: string | undefined, en
         if (disposed) {
           return;
         }
-        lastSeq = history[history.length - 1]?.seq ?? 0;
-        const merged = [...history, ...buffered.filter((event) => event.seq > lastSeq)];
-        lastSeq = merged[merged.length - 1]?.seq ?? lastSeq;
+        const caught = mergeCatchUpHistory(history, buffered);
+        lastSeq = caught.lastSeq;
         buffered = [];
         caughtUp = true;
-        setEvents(merged);
+        setEvents(caught.events);
       })
       .catch(() => {
         if (!disposed) {
