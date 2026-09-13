@@ -959,8 +959,8 @@ export class TaskHub extends EventEmitter {
     }
   }
 
-  resolvePermission(runId: string, optionId: string): void {
-    if (!this.runner.resolvePermission(runId, optionId)) {
+  resolvePermission(runId: string, optionId: string, askId: string): void {
+    if (!this.runner.resolvePermission(runId, optionId, askId)) {
       fail("现在没有需要确认的命令。");
     }
   }

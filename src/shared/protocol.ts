@@ -234,6 +234,12 @@ export interface PermissionChoice {
 /** Live only: the agent is waiting for you to allow or reject a command. */
 export interface PendingPermission {
   toolCallId: string;
+  /**
+   * Unique per queued ask. Resolve must send this back so a stale UI click
+   * cannot settle the next FIFO head when agents reuse optionIds like
+   * "allow-once".
+   */
+  askId: string;
   title: string;
   command?: string;
   options: PermissionChoice[];

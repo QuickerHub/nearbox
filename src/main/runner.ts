@@ -55,7 +55,7 @@ import {
   warmStartupSessionToClose,
 } from "./cancel-escalation";
 import { startWarmCancelOnHost } from "./warm-cancel-host";
-import { drainPermissionQueue, pendingPermissionView, settlePermissionHead } from "./permission-queue";
+import { drainPermissionQueue, pendingPermissionView, settlePermissionHeadIfAsk } from "./permission-queue";
 import { type DelegationConfig, withDelegationPath } from "./delegation";
 import { activeDescendants, nextRunnable } from "./scheduler";
 import {
@@ -253,11 +253,16 @@ export class RunManager extends EventEmitter {
     return true;
   }
 
-  /** Answer a safe-mode command prompt. `optionId` must be one the agent offered. */
-  resolvePermission(runId: string, optionId: string): boolean {
+  /** Answer a safe-mode command prompt. `optionId` must be one the agent offered; `askId` must be the head ask. */
+  resolvePermission(runId: string, optionId: string, askId: string): boolean {
     const state = this.active.get(runId);
     const pending = state?.run.pendingPermission;
     if (!state || !state.permissionQueue.length || !pending) {
+      return false;
+    }
+    // Bind to this ask — agents reuse optionIds like "allow-once", so a stale
+    // click must not settle the next FIFO head.
+    if (!askId || pending.askId !== askId) {
       return false;
     }
     const picked = pending.options.find((option) => option.optionId === optionId);
@@ -270,7 +275,10 @@ export class RunManager extends EventEmitter {
         state.parser.push({ sessionUpdate: "tool_call_update", toolCallId: pending.toolCallId, status: "rejected", error: "你拒绝了这条命令" }),
       );
     }
-    this.settlePermission(state, optionId);
+    if (!settlePermissionHeadIfAsk(state.permissionQueue, askId, optionId)) {
+      return false;
+    }
+    this.syncPendingPermission(state);
     return true;
   }
 
@@ -921,6 +929,7 @@ export class RunManager extends EventEmitter {
     return new Promise((resolve) => {
       const pending = {
         toolCallId: described.toolCallId,
+        askId: randomBytes(8).toString("hex"),
         title: described.title,
         command: described.command,
         options: choices,
@@ -929,11 +938,6 @@ export class RunManager extends EventEmitter {
       // Parallel tool calls may ask more than once; show the head and keep the rest queued.
       this.syncPendingPermission(state);
     });
-  }
-
-  private settlePermission(state: ActiveRun, optionId: string | null): void {
-    settlePermissionHead(state.permissionQueue, optionId);
-    this.syncPendingPermission(state);
   }
 
   /** Cancel every queued ask (run finished or user stopped the turn). */

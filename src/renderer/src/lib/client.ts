@@ -48,7 +48,7 @@ export interface ClientHandle {
   dispatch(taskId: string, input: DispatchInput): Promise<AgentRun>;
   runEvents(runId: string, after?: number): Promise<RunEvent[]>;
   cancelRun(runId: string): Promise<void>;
-  resolvePermission(runId: string, optionId: string): Promise<void>;
+  resolvePermission(runId: string, optionId: string, askId: string): Promise<void>;
   replyRun(runId: string, text: string): Promise<AgentRun>;
   addProject(input: { path: string; name?: string; defaultAgent?: AgentKind | null; deviceId?: string | null }): Promise<Project>;
   updateProject(id: string, patch: { name?: string; defaultAgent?: AgentKind | null }): Promise<Project>;
@@ -249,7 +249,7 @@ export async function connectClient(
       return result.events;
     },
     cancelRun: (runId) => post(`/api/runs/${encodeURIComponent(runId)}/cancel`).then(() => undefined),
-    resolvePermission: (runId, optionId) => post(`/api/runs/${encodeURIComponent(runId)}/permission`, { optionId }).then(() => undefined),
+    resolvePermission: (runId, optionId, askId) => post(`/api/runs/${encodeURIComponent(runId)}/permission`, { optionId, askId }).then(() => undefined),
     replyRun: (runId, text) => post(`/api/runs/${encodeURIComponent(runId)}/reply`, { text }),
     addProject: (input) => post("/api/projects", input),
     updateProject: (id, body) => patch(`/api/projects/${encodeURIComponent(id)}`, body),
