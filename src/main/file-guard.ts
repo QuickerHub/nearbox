@@ -55,17 +55,24 @@ const FORBIDDEN_EXTENSIONS = [
   ".apk",
 ];
 
+const MAX_FILE_NAME_LENGTH = 180;
+
 export function sanitizeFileName(raw: string | undefined, fallback: string): string {
   const leaf = basename((raw ?? "").replaceAll("\\", "/")).trim();
   const cleaned = leaf.replace(/[<>:"/|?*\u0000-\u001f]/g, "_").replace(/\.+$/g, "").trim();
   const stem = cleaned || fallback;
   const ext = extname(stem);
-  const name = stem.slice(0, stem.length - ext.length) || fallback;
-  const upper = name.toUpperCase();
-  if (WINDOWS_RESERVED.has(upper)) {
-    return `${name}_${fallback}${ext}`;
+  let name = stem.slice(0, stem.length - ext.length) || fallback;
+  if (WINDOWS_RESERVED.has(name.toUpperCase())) {
+    name = `${name}_${fallback}`;
   }
-  return `${name}${ext}`.slice(0, 180);
+  // Truncate the stem only — a blind slice(0, 180) used to chop `.exe` off a
+  // long name so assertAllowedFile saw a harmless extension.
+  if (name.length + ext.length <= MAX_FILE_NAME_LENGTH) {
+    return `${name}${ext}`;
+  }
+  const maxName = Math.max(1, MAX_FILE_NAME_LENGTH - ext.length);
+  return `${name.slice(0, maxName)}${ext}`;
 }
 
 export function assertAllowedFile(fileName: string, mediaType: string): void {

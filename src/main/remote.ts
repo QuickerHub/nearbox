@@ -132,6 +132,21 @@ export class RemoteControlHub {
     }
   }
 
+  /** Forget / unpair: drop that phone's remote-control socket so it cannot keep driving input. */
+  dropDevice(deviceId: string, message = "这台设备已从电脑端移除。"): void {
+    for (const client of [...this.clients]) {
+      if (client.deviceId !== deviceId) {
+        continue;
+      }
+      sendJson(client.socket, { t: "error", message });
+      try {
+        client.socket.close();
+      } catch {
+        /* detach runs on close */
+      }
+    }
+  }
+
   /** Called when the user flips the setting off: drop everyone immediately. */
   refreshEnabled(): void {
     if (!this.options.getEnabled()) {
