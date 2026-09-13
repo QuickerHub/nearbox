@@ -61,15 +61,18 @@ export function formatDuration(from: string | undefined, to: string | undefined)
   }
   const start = new Date(from).getTime();
   const end = to ? new Date(to).getTime() : Date.now();
+  if (Number.isNaN(start) || Number.isNaN(end)) {
+    return "";
+  }
   const seconds = Math.max(0, Math.round((end - start) / 1000));
   if (seconds < 60) {
-    return `${seconds}s`;
+    return `${seconds} 秒`;
   }
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) {
-    return `${minutes}m ${seconds % 60}s`;
+    return `${minutes} 分 ${seconds % 60} 秒`;
   }
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
 }
 
 export function formatBytes(value: number): string {
