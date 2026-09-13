@@ -45,7 +45,7 @@ import {
 } from "./agents";
 import { remoteCwdPreflight, remoteDevicePreflight } from "./remote-preflight";
 import { localPreflightFailure, shouldAttemptWarm, warmFallbackStatus } from "./run-start";
-import { CANCEL_GRACE_MS, FORCE_CANCEL_GRACE_MS, warmCancelAfterSoftGrace } from "./cancel-escalation";
+import { startWarmCancelOnHost } from "./warm-cancel-host";
 import { drainPermissionQueue, pendingPermissionView, settlePermissionHead } from "./permission-queue";
 import { type DelegationConfig, withDelegationPath } from "./delegation";
 import { activeDescendants, nextRunnable } from "./scheduler";
@@ -206,32 +206,21 @@ export class RunManager extends EventEmitter {
       // and nobody else is using it. Killing would cancel every other warm session on the same process.
       const { host, sessionId } = active.warm;
       this.append(run, "status", `${reason}，正在通知 Agent 停止…`);
-      host.cancel(sessionId);
-      setTimeout(() => {
-        if (this.active.get(runId) !== active) {
-          return;
-        }
-        const shared = [...this.active.values()].some((other) => other !== active && other.warm?.host === host);
-        const next = warmCancelAfterSoftGrace(shared);
-        if (next.action === "abandon-keep-host") {
-          // Drop the wedged prompt locally so the shared host is not stuck busy forever.
-          host.abandonPrompt(sessionId);
+      startWarmCancelOnHost(host, sessionId, (ms, fn) => {
+        setTimeout(fn, ms).unref();
+      }, {
+        // Already settled above so the permission UI clears before the status line.
+        settlePermissions: () => undefined,
+        isStillActive: () => this.active.get(runId) === active,
+        isSharedHost: () => [...this.active.values()].some((other) => other !== active && other.warm?.host === host),
+        onAbandonKeepHost: () => {
           this.append(run, "status", "Agent 未及时停止；常驻进程仍保留供其他会话使用。");
           this.finish(active, null, undefined);
-          return;
-        }
-        // Session-scoped force: cancel the in-flight prompt RPC before killing the process.
-        this.append(run, "status", "Agent 未及时停止，正在强制取消本轮…");
-        host.forceCancel(sessionId);
-        setTimeout(() => {
-          if (this.active.get(runId) !== active) {
-            return;
-          }
-          // Local reject finishes the turn even if the agent ignored $/cancel_request.
-          host.abandonPrompt(sessionId);
-          host.kill();
-        }, FORCE_CANCEL_GRACE_MS).unref();
-      }, CANCEL_GRACE_MS).unref();
+        },
+        onForceCancel: () => {
+          this.append(run, "status", "Agent 未及时停止，正在强制取消本轮…");
+        },
+      });
       return true;
     }
     this.append(run, "status", `${reason}，正在停止进程…`);

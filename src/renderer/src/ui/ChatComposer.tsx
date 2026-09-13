@@ -18,6 +18,7 @@ import {
   idePrefForFamily,
   type HostSnapshot,
   type IdeModelPref,
+  type Project,
   isTopLevelActiveRun,
   MAX_FILES_PER_MESSAGE,
   type ModelFamily,
@@ -239,6 +240,13 @@ export function ChatComposer({
     setPreview((current) => (current?.key === key ? null : current));
   }, []);
 
+  // Stable chip picks so memoised menus survive snapshot ticks that only change runs/events.
+  const onPickProject = useCallback((projectId: string) => onChips({ projectId }), [onChips]);
+  const onPickAgent = useCallback((agent: AgentKind | "", access?: AgentAccess) => onChips({ agent, access }), [onChips]);
+  const onPickDelegate = useCallback((delegate: boolean) => onChips({ delegate }), [onChips]);
+  const onPickAccess = useCallback((access: AgentAccess) => onChips({ access }), [onChips]);
+  const onPickModel = useCallback((model: string) => onChips({ model }), [onChips]);
+
   const placeholder = task
     ? !chips.agent
       ? "补充说明、贴截图…"
@@ -327,18 +335,27 @@ export function ChatComposer({
         />
         <div className="composer__bar">
           <div className="composer__chips">
-            <ProjectMenu snapshot={snapshot} client={client} projectId={project?.id ?? ""} onPick={(projectId) => onChips({ projectId })} />
+            <ProjectMenu projects={snapshot.projects} client={client} projectId={project?.id ?? ""} onPick={onPickProject} />
             <AgentMenu
-              snapshot={snapshot}
+              agents={snapshot.agents}
               agent={chips.agent}
               access={chips.access}
               delegate={chips.delegate}
               remoteProject={Boolean(project?.deviceId)}
-              onPick={(agent, access) => onChips({ agent, access })}
-              onDelegate={(delegate) => onChips({ delegate })}
+              onPick={onPickAgent}
+              onDelegate={onPickDelegate}
             />
-            {chips.agent && desktop ? <AccessMenu agent={chips.agent} access={chips.access} onPick={(access) => onChips({ access })} /> : null}
-            {chips.agent ? <ModelMenu snapshot={snapshot} client={client} agent={chips.agent} model={chips.model} onPick={(model) => onChips({ model })} /> : null}
+            {chips.agent && desktop ? <AccessMenu agent={chips.agent} access={chips.access} onPick={onPickAccess} /> : null}
+            {chips.agent ? (
+              <ModelMenu
+                client={client}
+                agent={chips.agent}
+                agentInfo={agentInfo}
+                settingsModel={snapshot.settings.agents[chips.agent]?.model ?? ""}
+                model={chips.model}
+                onPick={onPickModel}
+              />
+            ) : null}
           </div>
           <div className="composer__actions">
             {usage || chips.agent ? <ContextMeter usage={usage} busy={Boolean(activeRun) && !usage} /> : null}
@@ -444,13 +461,13 @@ function revokePreview(item: DraftAttachment): void {
   }
 }
 
-function ProjectMenu({
-  snapshot,
+const ProjectMenu = memo(function ProjectMenu({
+  projects: projectList,
   client,
   projectId,
   onPick,
 }: {
-  snapshot: HostSnapshot;
+  projects: readonly Project[];
   client: ClientHandle;
   projectId: string;
   onPick(projectId: string): void;
@@ -459,8 +476,8 @@ function ProjectMenu({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const desktop = window.nearboxDesktop;
-  const project = snapshot.projects.find((item) => item.id === projectId);
-  const projects = [...snapshot.projects].sort(
+  const project = projectList.find((item) => item.id === projectId);
+  const projects = [...projectList].sort(
     (a, b) => Date.parse(b.lastUsedAt ?? b.createdAt) - Date.parse(a.lastUsedAt ?? a.createdAt),
   );
 
@@ -547,7 +564,7 @@ function ProjectMenu({
       )}
     </Menu>
   );
-}
+});
 
 /** What each access level means in practice differs per CLI; cursor-agent reviews shell in safe mode. */
 const ACCESS_NOTES: Partial<Record<AgentKind, Record<AgentAccess, string>>> = {
@@ -555,7 +572,7 @@ const ACCESS_NOTES: Partial<Record<AgentKind, Record<AgentAccess, string>>> = {
 };
 const DEFAULT_ACCESS_NOTES: Record<AgentAccess, string> = { safe: "危险命令会先问你", full: "任何命令直接执行" };
 
-function AccessMenu({
+const AccessMenu = memo(function AccessMenu({
   agent,
   access,
   onPick,
@@ -595,10 +612,10 @@ function AccessMenu({
       )}
     </Menu>
   );
-}
+});
 
-function AgentMenu({
-  snapshot,
+const AgentMenu = memo(function AgentMenu({
+  agents,
   agent,
   access,
   delegate,
@@ -606,7 +623,7 @@ function AgentMenu({
   onPick,
   onDelegate,
 }: {
-  snapshot: HostSnapshot;
+  agents: readonly AgentInfo[];
   agent: AgentKind | "";
   access: AgentAccess;
   delegate: boolean;
@@ -616,9 +633,9 @@ function AgentMenu({
   onDelegate(delegate: boolean): void;
 }): JSX.Element {
   const label = agent ? `${AGENT_LABELS[agent]}${delegate && !remoteProject ? " · 可委派" : ""}` : "只记录";
-  const anyAvailable = snapshot.agents.some((item) => item.available);
+  const anyAvailable = agents.some((item) => item.available);
   const notes = (agent && ACCESS_NOTES[agent]) || DEFAULT_ACCESS_NOTES;
-  const others = snapshot.agents.filter((info) => info.available && info.kind !== agent).map((info) => AGENT_LABELS[info.kind]);
+  const others = agents.filter((info) => info.available && info.kind !== agent).map((info) => AGENT_LABELS[info.kind]);
   return (
     <Menu icon={agent ? "bolt" : "edit"} label={label} tone={agent ? (access === "full" ? "warn" : "default") : "muted"} title="谁来执行">
       {(close) => (
@@ -634,7 +651,7 @@ function AgentMenu({
               close();
             }}
           />
-          {snapshot.agents.map((info) => (
+          {agents.map((info) => (
             <MenuItem
               key={info.kind}
               icon="bolt"
@@ -691,7 +708,7 @@ function AgentMenu({
       )}
     </Menu>
   );
-}
+});
 
 /** Catalogs longer than this get a search box. */
 const SEARCHABLE_FROM = 8;
@@ -700,22 +717,22 @@ const SEARCHABLE_FROM = 8;
  * Which model the chosen agent runs with. Appears next to the agent chip once
  * an agent is picked; "默认" hands the choice back to the settings, then the CLI.
  */
-function ModelMenu({
-  snapshot,
+const ModelMenu = memo(function ModelMenu({
   client,
   agent,
+  agentInfo: info,
+  settingsModel: settingsDefault,
   model,
   onPick,
 }: {
-  snapshot: HostSnapshot;
   client: ClientHandle;
   agent: AgentKind;
+  agentInfo: AgentInfo | undefined;
+  settingsModel: string;
   model: string;
   onPick(model: string): void;
 }): JSX.Element {
-  const info = snapshot.agents.find((item) => item.kind === agent);
   const models = modelsForAgent(agent, info);
-  const settingsDefault = snapshot.settings.agents[agent]?.model ?? "";
   const cliDefault = models.find((item) => item.isDefault);
   // A model the CLI itself listed is a safe pick; anything else (typed, or dropped since) gets flagged.
   const unlisted = Boolean(model) && Boolean(info?.models?.length) && !models.some((item) => item.id === model);
@@ -787,7 +804,7 @@ function ModelMenu({
       )}
     </Menu>
   );
-}
+});
 
 function ModelPanel({
   agent,

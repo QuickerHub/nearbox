@@ -280,7 +280,7 @@ export function App(): JSX.Element {
     return () => window.clearTimeout(timer);
   }, [client, warmKey]);
 
-  const onChips = (patch: Partial<ComposerChips>) => {
+  const onChips = useCallback((patch: Partial<ComposerChips>) => {
     if (!client) {
       return;
     }
@@ -321,7 +321,7 @@ export function App(): JSX.Element {
     if (patch.delegate !== undefined) {
       setPrefs({ delegate: patch.delegate });
     }
-  };
+  }, [client, task, setPrefs, chips.agent, prefs.access, prefs.models, snapshot?.settings]);
 
   /**
    * One message from the composer becomes: a task (text as title/details, files
