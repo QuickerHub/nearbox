@@ -19,3 +19,15 @@ test("assertAllowedFile rejects executables and scripts", () => {
   assert.doesNotThrow(() => assertAllowedFile("note.md", "text/markdown"));
   assert.doesNotThrow(() => assertAllowedFile("shot.png", "image/png"));
 });
+
+test("assertAllowedFile strips media-type parameters before the executable check", () => {
+  assert.throws(
+    () => assertAllowedFile("ok.bin", "application/x-msdownload; charset=binary"),
+    /可执行文件/,
+  );
+  assert.throws(
+    () => assertAllowedFile("ok.bin", "APPLICATION/X-MSDOS-PROGRAM ; name=x"),
+    /可执行文件/,
+  );
+  assert.doesNotThrow(() => assertAllowedFile("note.md", "text/markdown; charset=utf-8"));
+});
