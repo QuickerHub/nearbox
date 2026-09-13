@@ -20,8 +20,9 @@ Merge **FIFO from #2 upward**. Do **not** merge #1 onto main.
 | **#11** | `opt/local-batch-11` | tray run-count/labels + skip unchanged Menu, `hasParentRunId` / RunBlock null-safety, dock duration dedupe |
 | **#12** | `opt/local-batch-12` | `sameUsage` hot path, remote status reuse, agent-detect identity, `lastOutputLine` scan, `countActiveRuns` + hasParentRunId sweep |
 | **#13** | `opt/local-batch-13` | Chinese CLI result durations, shared phone count/label, strip empty `parentRunId` on load, scheduler `hasParentRunId`, project run counts |
+| **#14** | `opt/local-batch-14` | shared `findLast`, Map `sessionIdAlongChain`, project recency helpers, live tray tooltip, one-pass task open/done |
 
-Exact order: **#2 → #3 → #4 → #5 → #6 → #7 → #8 → #9 → #10 → #11 → #12 → #13**.
+Exact order: **#2 → #3 → #4 → #5 → #6 → #7 → #8 → #9 → #10 → #11 → #12 → #13 → #14**.
 
 Each batch branch was cut from the previous (`opt/local-batch-N` from `opt/local-batch-(N-1)`), so merging in order is a fast-forward-friendly stack onto `main`.
 
@@ -40,4 +41,4 @@ Overlapping fixes (warm session-first model mapping, live event batching, run-st
 
 ## Backlogs
 
-Per-batch next-hour notes live under `docs/backlog-local-batch-*.md` (latest: `docs/backlog-local-batch-13.md` after #13 lands).
+Per-batch next-hour notes live under `docs/backlog-local-batch-*.md` (latest: `docs/backlog-local-batch-14.md` after #14 lands).
