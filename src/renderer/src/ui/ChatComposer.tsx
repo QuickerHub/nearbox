@@ -39,6 +39,7 @@ import { type DraftAttachment, extractFiles, stageFiles, stageNotice } from "../
 import type { ClientHandle } from "../lib/client";
 import { formatBytes, formatRelative } from "../lib/format";
 import { conversationRun, planSend, type SendAction, type SendPlan } from "../lib/plan";
+import { compareProjectsByRecency } from "../lib/projects";
 import { Lightbox } from "./Attachments";
 import { ContextMeter } from "./bits";
 import { Icon, type IconName } from "./Icons";
@@ -477,9 +478,7 @@ const ProjectMenu = memo(function ProjectMenu({
   const [error, setError] = useState<string | null>(null);
   const desktop = window.nearboxDesktop;
   const project = projectList.find((item) => item.id === projectId);
-  const projects = [...projectList].sort(
-    (a, b) => Date.parse(b.lastUsedAt ?? b.createdAt) - Date.parse(a.lastUsedAt ?? a.createdAt),
-  );
+  const projects = [...projectList].sort(compareProjectsByRecency);
 
   const add = async (candidate: string, close: () => void) => {
     const value = candidate.trim();
