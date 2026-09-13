@@ -20,14 +20,31 @@ Merge **FIFO from #2 upward**. Do **not** merge #1 onto main.
 | **#11** | `opt/local-batch-11` | tray run-count/labels + skip unchanged Menu, `hasParentRunId` / RunBlock null-safety, dock duration dedupe |
 | **#12** | `opt/local-batch-12` | `sameUsage` hot path, remote status reuse, agent-detect identity, `lastOutputLine` scan, `countActiveRuns` + hasParentRunId sweep |
 | **#13** | `opt/local-batch-13` | Chinese CLI result durations, shared phone count/label, strip empty `parentRunId` on load, scheduler `hasParentRunId`, project run counts |
+| **#14** | `opt/local-batch-14` | shared `findLast`, Map `sessionIdAlongChain`, project recency helpers, live tray tooltip, one-pass task open/done |
+| **#15** | `opt/local-batch-15` | `topLevelActiveRun` / shared `isRunActive`, attention permission index, one-pass section group, all-project run counts, `firstLine` scan |
+| **#16** | `opt/local-batch-16` | shared Chinese `duration`, `topLevelTurnsForTask`, attention indexes one-pass, `partitionImages`, plan `findLast`, projectRuns `isRunActive` |
+| **#17** | `opt/local-batch-17` | **docs only**: #16 must-fix review + **STOP** recommendation (pause micro-opt stacking) |
 
-Exact order: **#2 → #3 → #4 → #5 → #6 → #7 → #8 → #9 → #10 → #11 → #12 → #13**.
+Exact order: **#2 → #3 → #4 → #5 → #6 → #7 → #8 → #9 → #10 → #11 → #12 → #13 → #14 → #15 → #16 → #17**.
 
 Each batch branch was cut from the previous (`opt/local-batch-N` from `opt/local-batch-(N-1)`), so merging in order is a fast-forward-friendly stack onto `main`.
 
+## Verified merge state (2026-09-13)
+
+- **`main`**: #2 → #13 merged (`7e69346` Merge pull request #13). #14–#16 are **not** on `main`.
+- **#14** (`opt/local-batch-14`): **open**, mergeable, stacked on #13.
+- **#15** (`opt/local-batch-15`): **open**, stacked on #14.
+- **#16** (`opt/local-batch-16`): **open**, stacked on #15 — must-fix review: **merge with nits** (no code fixes).
+- **#17** (`opt/local-batch-17`): this batch (docs / STOP), stacked on #16.
+- **#1** (`opt/local-batch-1`): **closed** as superseded (2026-09-13). Keep FIFO permission queue from #2.
+
+## STOP — pause micro-opt stacking
+
+After #17, **do not** open another local batch for one-pass filters, shared one-liner helpers, or alloc micro-opts on tiny lists. Resume only for measured user-visible bugs, missing tests on risky paths, or clear UX defects. See `docs/backlog-local-batch-17.md`.
+
 ## PR #1 is superseded
 
-**Close `opt/local-batch-1` / PR #1 without merging.**
+**PR #1 (`opt/local-batch-1`) is already closed** without merging.
 
 Overlapping fixes (warm session-first model mapping, live event batching, run-start try/catch, string JSON-RPC response ids, conversation tests) were re-landed on the #2→#5 stack.
 
@@ -40,4 +57,4 @@ Overlapping fixes (warm session-first model mapping, live event batching, run-st
 
 ## Backlogs
 
-Per-batch next-hour notes live under `docs/backlog-local-batch-*.md` (latest: `docs/backlog-local-batch-13.md` after #13 lands).
+Per-batch next-hour notes live under `docs/backlog-local-batch-*.md` (latest: `docs/backlog-local-batch-17.md` after #17 lands).

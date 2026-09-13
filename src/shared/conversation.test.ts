@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentRun } from "./protocol.ts";
-import { canContinueRun, countActiveRuns, hasParentRunId, isTopLevelActiveRun, sessionIdAlongChain } from "./conversation.ts";
+import {
+  canContinueRun,
+  countActiveRuns,
+  hasParentRunId,
+  isRunActive,
+  isTopLevelActiveRun,
+  sessionIdAlongChain,
+  topLevelActiveRun,
+  topLevelTurnsForTask,
+} from "./conversation.ts";
 
 const actor = { id: "desktop", name: "PC", role: "desktop" as const };
 
@@ -80,3 +89,42 @@ test("countActiveRuns tallies queued and running", () => {
     3,
   );
 });
+
+test("topLevelActiveRun picks the first top-level queued/running turn", () => {
+  const child = run("child", { status: "running", parentRunId: "parent" });
+  const queued = run("queued", { status: "queued" });
+  const later = run("later", { status: "running" });
+  const other = run("other", { taskId: "t2", status: "running" });
+  const runs = [child, queued, later, other];
+  assert.equal(topLevelActiveRun(runs, "t1")?.id, "queued");
+  assert.equal(topLevelActiveRun(runs, "t2")?.id, "other");
+  assert.equal(topLevelActiveRun(runs, "missing"), undefined);
+  assert.equal(topLevelActiveRun([run("done")], "t1"), undefined);
+});
+
+test("isRunActive is queued or running", () => {
+  assert.equal(isRunActive(run("a", { status: "running" })), true);
+  assert.equal(isRunActive(run("b", { status: "queued" })), true);
+  assert.equal(isRunActive(run("c", { status: "succeeded" })), false);
+  assert.equal(isRunActive(run("d", { status: "failed" })), false);
+  assert.equal(isRunActive(run("e", { status: "cancelled" })), false);
+});
+
+test("topLevelTurnsForTask keeps only the task's own turns", () => {
+  const runs = [
+    run("a"),
+    run("child", { parentRunId: "a", agent: "grok" }),
+    run("b"),
+    run("other", { taskId: "t2" }),
+  ];
+  assert.deepEqual(
+    topLevelTurnsForTask(runs, "t1").map((item) => item.id),
+    ["a", "b"],
+  );
+  assert.deepEqual(
+    topLevelTurnsForTask(runs, "t2").map((item) => item.id),
+    ["other"],
+  );
+  assert.deepEqual(topLevelTurnsForTask(runs, "missing"), []);
+});
+

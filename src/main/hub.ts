@@ -39,6 +39,7 @@ import {
   type TaskStatus,
 } from "@shared/protocol";
 import { adoptDetectedAgents } from "./agent-detect";
+import { findLast } from "../shared/findLast";
 import { detectAgents, listAgentModels } from "./agents";
 import { ensureCursorAgentHttp1 } from "./cursor-http.ts";
 import { readCursorIdeModels } from "./cursor-ide-state.ts";
@@ -148,7 +149,7 @@ export class TaskHub extends EventEmitter {
       if (!this.agents.find((item) => item.kind === kind)?.available) {
         continue;
       }
-      const recent = [...this.runs].reverse().find((run) => run.agent === kind && !run.deviceId && run.sessionId && existsSync(run.cwd));
+      const recent = findLast(this.runs, (run) => run.agent === kind && !run.deviceId && Boolean(run.sessionId) && existsSync(run.cwd));
       this.runner.warm(kind, recent?.cwd, recent?.sessionId);
     }
   }
@@ -857,7 +858,7 @@ export class TaskHub extends EventEmitter {
     };
     if (input.continue) {
       // "Same conversation" for a parent means the newest sub-run it gave this agent in this project.
-      const previous = [...this.runs].reverse().find((item) => item.parentRunId === parent.id && item.agent === agent && item.projectId === project.id);
+      const previous = findLast(this.runs, (item) => item.parentRunId === parent.id && item.agent === agent && item.projectId === project.id);
       if (previous && canContinueRun(this.runs, previous)) {
         run.resumedFromRunId = previous.id;
         run.cwd = previous.cwd;

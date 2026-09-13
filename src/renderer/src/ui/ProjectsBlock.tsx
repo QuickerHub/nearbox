@@ -2,7 +2,8 @@ import { useState } from "react";
 import { AGENT_KINDS, AGENT_LABELS, type AgentKind, type HostSnapshot } from "@shared/protocol";
 import type { ClientHandle } from "../lib/client";
 import { formatRelative } from "../lib/format";
-import { countProjectRuns } from "../lib/projectRuns";
+import { countAllProjectRuns, projectRunCount } from "../lib/projectRuns";
+import { compareProjectsByRecency } from "../lib/projects";
 import { Icon } from "./Icons";
 
 interface ProjectsBlockProps {
@@ -34,9 +35,8 @@ export function ProjectsBlock({ snapshot, client }: ProjectsBlockProps): JSX.Ele
     }
   };
 
-  const projects = [...snapshot.projects].sort(
-    (a, b) => Date.parse(b.lastUsedAt ?? b.createdAt) - Date.parse(a.lastUsedAt ?? a.createdAt),
-  );
+  const projects = [...snapshot.projects].sort(compareProjectsByRecency);
+  const runCounts = countAllProjectRuns(snapshot.runs);
 
   return (
     <section className="settings__block">
@@ -83,7 +83,7 @@ export function ProjectsBlock({ snapshot, client }: ProjectsBlockProps): JSX.Ele
       ) : (
         <div className="project-list">
           {projects.map((project) => {
-            const { active: running, total } = countProjectRuns(snapshot.runs, project.id);
+            const { active: running, total } = projectRunCount(runCounts, project.id);
             return (
               <article className="project-card" key={project.id}>
                 <div className="project-card__head">
