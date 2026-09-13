@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { AGENT_KINDS, AGENT_LABELS, type AgentInfo, type DevicePlatform, type RemoteDevice, type RemoteDirListing } from "@shared/protocol";
 import { COMMAND_NAMES } from "./agents";
 import { killTree as killLocal } from "./kill";
-import { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
+import { adoptProbeIdentity, assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
 
 export { assertSafeRemotePath, describeTarget, explainSshFailure } from "./ssh-explain";
 
@@ -233,11 +233,12 @@ export async function probeDevice(target: SshTarget): Promise<ProbeResult> {
   }
   const winJson = extractJson(windows.stdout);
   if (winJson) {
+    const identity = adoptProbeIdentity(winJson.user, winJson.home);
     return {
       platform: "windows",
       hostName: String(winJson.hostName ?? ""),
-      user: String(winJson.user ?? ""),
-      home: String(winJson.home ?? ""),
+      user: identity.user,
+      home: identity.home,
       agents: agentsFromMap(asStringMap(winJson.agents)),
     };
   }
@@ -248,11 +249,12 @@ export async function probeDevice(target: SshTarget): Promise<ProbeResult> {
   const posixJson = extractJson(posix.stdout);
   if (posixJson) {
     const uname = String(posixJson.uname ?? "").toLowerCase();
+    const identity = adoptProbeIdentity(posixJson.user, posixJson.home);
     return {
       platform: uname.includes("darwin") ? "macos" : uname.includes("linux") ? "linux" : "unknown",
       hostName: String(posixJson.hostName ?? ""),
-      user: String(posixJson.user ?? ""),
-      home: String(posixJson.home ?? ""),
+      user: identity.user,
+      home: identity.home,
       agents: agentsFromMap(asStringMap(posixJson.agents)),
     };
   }

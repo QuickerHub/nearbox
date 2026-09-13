@@ -1,35 +1,12 @@
 import { createWriteStream } from "node:fs";
-import { mkdir, rename, unlink } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
+import { copyFile, mkdir, unlink } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { IncomingMessage } from "node:http";
 import { isImageMediaType } from "@shared/protocol";
-import { assertAllowedFile, sanitizeFileName } from "./file-guard";
+import { assertAllowedFile, sanitizeFileName, uniquePath } from "./file-guard";
 
-export { assertAllowedFile, sanitizeFileName } from "./file-guard";
-
-export async function uniquePath(directory: string, fileName: string): Promise<string> {
-  const ext = extname(fileName);
-  const stem = fileName.slice(0, fileName.length - ext.length);
-  let candidate = join(directory, fileName);
-  for (let index = 1; index < 1000; index += 1) {
-    try {
-      await mkdir(directory, { recursive: true });
-      const handle = await import("node:fs/promises").then((fs) =>
-        fs.open(candidate, "wx"),
-      );
-      await handle.close();
-      await unlink(candidate);
-      return candidate;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
-        throw error;
-      }
-      candidate = join(directory, `${stem} (${index})${ext}`);
-    }
-  }
-  throw new Error("无法生成不冲突的文件名。");
-}
+export { assertAllowedFile, isServableInboxFile, sanitizeFileName, uniquePath } from "./file-guard";
 
 export async function receiveToInbox(options: {
   request: IncomingMessage;
@@ -46,6 +23,7 @@ export async function receiveToInbox(options: {
 
   const tempPath = join(options.stagingDir, `${Date.now().toString(16)}-${Math.random().toString(16).slice(2)}.part`);
   let received = 0;
+  let target: string | undefined;
   try {
     await pipeline(
       options.request,
@@ -62,8 +40,11 @@ export async function receiveToInbox(options: {
       createWriteStream(tempPath, { flags: "wx" }),
     );
 
-    const target = await uniquePath(options.inboxDir, fileName);
-    await rename(tempPath, target);
+    target = await uniquePath(options.inboxDir, fileName);
+    // copyFile overwrites the reserved empty file on Windows too; rename-over-existing
+    // fails with EPERM there, and unlinking the reservation first re-opens a name race.
+    await copyFile(tempPath, target);
+    await unlink(tempPath).catch(() => undefined);
     return {
       storedName: basename(target),
       byteLength: received,
@@ -71,6 +52,9 @@ export async function receiveToInbox(options: {
     };
   } catch (error) {
     await unlink(tempPath).catch(() => undefined);
+    if (target) {
+      await unlink(target).catch(() => undefined);
+    }
     throw error;
   }
 }
