@@ -20,6 +20,23 @@ export function stripEmptyParentRunId<T extends ParentRunFields>(run: T): T {
   return rest as T;
 }
 
+export type ResumedFromFields = { resumedFromRunId?: string | null };
+
+/**
+ * Drop null/empty `resumedFromRunId` the same way as parent ids. A blank resume
+ * link after a crash would otherwise linger on disk and confuse chain walks.
+ */
+export function stripEmptyResumedFromRunId<T extends ResumedFromFields>(run: T): T {
+  if (run.resumedFromRunId) {
+    return run;
+  }
+  if (run.resumedFromRunId === undefined) {
+    return run;
+  }
+  const { resumedFromRunId: _drop, ...rest } = run;
+  return rest as T;
+}
+
 export type PermissionStateFields = {
   pendingPermission?: unknown;
   pendingPermissionQueued?: number;
@@ -36,4 +53,3 @@ export function stripTransientPermissionState<T extends PermissionStateFields>(
   const { pendingPermission: _pending, pendingPermissionQueued: _queued, ...rest } = run;
   return rest;
 }
-

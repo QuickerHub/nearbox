@@ -133,7 +133,12 @@ class WindowsInputInjector implements InputSink {
         resolve(false);
       });
       child.on("exit", () => {
+        const sawReady = this.isReady;
         this.teardown();
+        // Exit before NB_READY left ready() hanging forever; settle it as failed.
+        if (!sawReady) {
+          resolve(false);
+        }
       });
     });
     return this.readyPromise;
