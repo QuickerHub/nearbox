@@ -106,11 +106,14 @@ export class AcpConnection extends EventEmitter {
     input.on("error", () => undefined);
   }
 
-  request<T = unknown>(method: string, params: unknown, timeoutMs?: number): Promise<T> {
+  request<T = unknown>(method: string, params: unknown, timeoutMs?: number, out?: { id: number }): Promise<T> {
     if (this.closed) {
       return Promise.reject(new Error("连接已关闭"));
     }
     const id = this.nextId++;
+    if (out) {
+      out.id = id;
+    }
     return new Promise<T>((resolve, reject) => {
       const entry: Pending = {
         method,
@@ -130,6 +133,11 @@ export class AcpConnection extends EventEmitter {
 
   notify(method: string, params: unknown): void {
     this.write({ jsonrpc: "2.0", method, params });
+  }
+
+  /** Ask the peer to abort an in-flight request (ACP `$/cancel_request`). */
+  cancelRequest(id: number): void {
+    this.notify("$/cancel_request", { id });
   }
 
   respond(id: number | string, result: unknown): void {
@@ -200,12 +208,15 @@ export class AcpConnection extends EventEmitter {
       }
       return;
     }
-    if (hasId && typeof message.id === "number") {
-      const entry = this.pending.get(message.id);
+    if (hasId) {
+      // Agents usually echo the numeric id we sent; some JSON-RPC stacks stringify it.
+      const rawId = message.id as number | string;
+      const id = typeof rawId === "number" ? rawId : Number(rawId);
+      const entry = Number.isInteger(id) ? this.pending.get(id) : undefined;
       if (!entry) {
         return;
       }
-      this.pending.delete(message.id);
+      this.pending.delete(id);
       if (entry.timer) {
         clearTimeout(entry.timer);
       }
@@ -279,6 +290,8 @@ export interface HostOptions {
 
 interface ActivePrompt {
   handlers: PromptHandlers;
+  /** JSON-RPC id of the in-flight `session/prompt` request. */
+  requestId: number;
 }
 
 /**
@@ -464,13 +477,21 @@ export class AgentHost extends EventEmitter {
     if (this.prompts.has(sessionId)) {
       throw new Error("这个会话已经有一轮在进行中");
     }
-    this.prompts.set(sessionId, { handlers });
-    this.clearIdle();
-    try {
-      const result = await this.connection.request<Record<string, unknown>>("session/prompt", {
+    const requestId = { id: 0 };
+    // request() fills `requestId.id` synchronously before the first await.
+    const pending = this.connection.request<Record<string, unknown>>(
+      "session/prompt",
+      {
         sessionId,
         prompt: [{ type: "text", text }],
-      });
+      },
+      undefined,
+      requestId,
+    );
+    this.prompts.set(sessionId, { handlers, requestId: requestId.id });
+    this.clearIdle();
+    try {
+      const result = await pending;
       return { stopReason: String(result?.stopReason ?? "end_turn"), usage: result?.usage ?? result?._meta };
     } finally {
       this.prompts.delete(sessionId);
@@ -483,6 +504,18 @@ export class AgentHost extends EventEmitter {
     if (this.prompts.has(sessionId)) {
       this.connection.notify("session/cancel", { sessionId });
     }
+  }
+
+  /**
+   * Force-cancel the in-flight prompt via `$/cancel_request` when `session/cancel`
+   * was ignored. Keeps the host process up for other sessions.
+   */
+  forceCancel(sessionId: string): void {
+    const prompt = this.prompts.get(sessionId);
+    if (!prompt?.requestId) {
+      return;
+    }
+    this.connection.cancelRequest(prompt.requestId);
   }
 
   kill(): void {
