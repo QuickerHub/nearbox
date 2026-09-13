@@ -1,4 +1,4 @@
-import { createWriteStream, existsSync } from "node:fs";
+import { createWriteStream, existsSync, statSync } from "node:fs";
 import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AppUpdateStatus } from "@shared/protocol";
@@ -7,6 +7,10 @@ import { isNewerVersion, stripTagPrefix } from "../shared/version.ts";
 export const DEFAULT_RELEASE_REPO = "QuickerHub/nearbox";
 const STALE_MS = 60 * 60 * 1000;
 const RELEASES_PAGE = "https://github.com/QuickerHub/nearbox/releases/latest";
+/** Hang the GitHub latest lookup at most this long (Node 22 AbortSignal.timeout). */
+export const UPDATE_CHECK_TIMEOUT_MS = 20_000;
+/** Hang an installer download at most this long. */
+export const UPDATE_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface GithubReleaseAsset {
   name: string;
@@ -148,6 +152,7 @@ export class AppUpdater {
         "User-Agent": "Nearbox",
         "X-GitHub-Api-Version": "2022-11-28",
       },
+      signal: AbortSignal.timeout(UPDATE_CHECK_TIMEOUT_MS),
     });
     if (response.status === 403) {
       throw new Error("GitHub 查询次数用完了，过一会儿再试。");
@@ -183,12 +188,25 @@ export class AppUpdater {
 
   private async download(version: string, url: string): Promise<string> {
     if (this.readyFile && this.readyVersion === version && existsSync(this.readyFile)) {
-      return this.readyFile;
+      // A prior crash can leave a 0-byte placeholder that would otherwise be "ready".
+      try {
+        if (statSync(this.readyFile).size > 0) {
+          return this.readyFile;
+        }
+      } catch {
+        /* re-download */
+      }
+      this.readyFile = null;
+      this.readyVersion = null;
     }
     await mkdir(this.options.cacheDir, { recursive: true });
     const dest = join(this.options.cacheDir, `Nearbox-${version}-win-x64.exe`);
     this.snapshot = { ...this.snapshot, downloading: true, progress: 0, error: undefined };
-    const response = await this.fetchImpl(url, { headers: { "User-Agent": "Nearbox" }, redirect: "follow" });
+    const response = await this.fetchImpl(url, {
+      headers: { "User-Agent": "Nearbox" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(UPDATE_DOWNLOAD_TIMEOUT_MS),
+    });
     if (!response.ok || !response.body) {
       throw new Error(`下载失败（${response.status}）`);
     }

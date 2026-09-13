@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import test from "node:test";
 import { promisify } from "node:util";
-import { createInputInjector } from "./input-win.ts";
+import { createInputInjector, MAX_READY_BANNER_CHARS } from "./input-win.ts";
 import { moveCommand } from "./remote-input.ts";
 
 const execFileAsync = promisify(execFile);
@@ -74,4 +74,9 @@ test("unsupported platforms get a silent no-op sink", () => {
   assert.equal(injector.supported, false);
   injector.send(["M 0 0"]);
   injector.dispose();
+});
+
+test("ready banner scan is capped", () => {
+  assert.ok(MAX_READY_BANNER_CHARS >= 1024);
+  assert.ok(MAX_READY_BANNER_CHARS <= 64 * 1024);
 });

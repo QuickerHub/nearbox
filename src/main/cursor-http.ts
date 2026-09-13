@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -54,6 +54,26 @@ export function preferHttp1InCliConfig(raw: unknown): { next: Record<string, unk
 let ensured = false;
 
 /**
+ * Write cli-config.json via tmp+rename so a crash mid-write cannot leave a
+ * truncated JSON that breaks cursor-agent (and every subsequent ensure).
+ */
+export function writeCliConfigAtomic(path: string, contents: string): void {
+  const tmp = `${path}.tmp-${process.pid}`;
+  try {
+    writeFileSync(tmp, contents, "utf8");
+    renameSync(tmp, path);
+  } catch (error) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* tmp may not exist */
+    }
+    throw error;
+  }
+}
+
+
+/**
  * Make sure the next cursor-agent process uses HTTP/1.1. Returns true when
  * the file was just flipped, so a host started under HTTP/2 should be recycled.
  */
@@ -69,7 +89,7 @@ export function ensureCursorAgentHttp1(env: NodeJS.ProcessEnv = process.env, hom
     }
     const { next, changed } = preferHttp1InCliConfig(raw);
     if (changed) {
-      writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+      writeCliConfigAtomic(path, `${JSON.stringify(next, null, 2)}\n`);
     }
     ensured = true;
     return changed;
