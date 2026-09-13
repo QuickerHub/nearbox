@@ -18,7 +18,7 @@ interface RunTranscriptProps {
   pending?: PendingPermission;
   /** Asks waiting behind `pending`. */
   queued?: number;
-  onResolve?(optionId: string): void;
+  onResolve?(optionId: string): void | Promise<void>;
 }
 
 /**
@@ -102,7 +102,7 @@ const WorkItem = memo(function WorkItem({
   failed: boolean;
   pending?: PendingPermission;
   queued?: number;
-  onResolve?(optionId: string): void;
+  onResolve?(optionId: string): void | Promise<void>;
 }): JSX.Element | null {
   switch (row.type) {
     case "thinking":

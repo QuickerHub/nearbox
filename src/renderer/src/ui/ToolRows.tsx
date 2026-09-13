@@ -1,5 +1,6 @@
 import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { PendingPermission, ToolCall, ToolKind } from "@shared/protocol";
+import { trackPermissionResolve } from "../lib/permissionAsk";
 import { diffLines, displayTool, groupLabel, hasDetail, isFailed, prettyToolName, statusLabel, toolVerb } from "../lib/runTranscript";
 import { Icon, TOOL_ICONS } from "./Icons";
 
@@ -7,7 +8,7 @@ interface AskProps {
   pending?: PendingPermission;
   /** Asks waiting behind `pending`. */
   queued?: number;
-  onResolve?(optionId: string): void;
+  onResolve?(optionId: string): void | Promise<void>;
 }
 
 /**
@@ -64,7 +65,7 @@ export function PermissionAsk({
   pending: PendingPermission;
   /** Asks waiting behind this one; shown as a subtle hint. */
   queued?: number;
-  onResolve(optionId: string): void;
+  onResolve(optionId: string): void | Promise<void>;
 }): JSX.Element {
   const [busy, setBusy] = useState(false);
   // FIFO head swap reuses this component; clear busy so the next ask is clickable.
@@ -86,8 +87,8 @@ export function PermissionAsk({
             className={`perm-ask__btn${option.kind.startsWith("allow") ? " perm-ask__btn--allow" : " perm-ask__btn--deny"}`}
             disabled={busy}
             onClick={() => {
-              setBusy(true);
-              onResolve(option.optionId);
+              // Failed resolve (stale askId, gone, network) must unlock; success stays busy until askId changes.
+              trackPermissionResolve(setBusy, () => onResolve(option.optionId));
             }}
           >
             {option.label}
