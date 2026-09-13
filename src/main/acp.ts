@@ -10,6 +10,7 @@ import type { AgentAccess, AgentKind } from "../shared/protocol";
 import type { ResolvedCommand } from "./agent-output";
 import { resolveCursorAgentBundle } from "./cursor-bundle.ts";
 import { killTree } from "./kill.ts";
+import { MAX_LOADED_SESSIONS, sessionsToPrune, shouldCloseSessionsBeforeIdleKill } from "./idle-session.ts";
 
 // A warm agent process speaking ACP (Agent Client Protocol: JSON-RPC 2.0, one
 // message per line over stdio). Starting an agent CLI costs 10-15 s on a
@@ -262,6 +263,8 @@ export interface AcpSession {
   cwd: string;
   /** The model id the agent will use next, in its own parameterised form. */
   currentModelId?: string;
+  /** Wall time this session was last opened, loaded, or prompted. */
+  lastUsedAt: number;
 }
 
 export interface PermissionOption {
@@ -525,6 +528,10 @@ export class AgentHost extends EventEmitter {
       requestId,
     );
     this.prompts.set(sessionId, { handlers, requestId: requestId.id });
+    const loaded = this.sessions.get(sessionId);
+    if (loaded) {
+      loaded.lastUsedAt = Date.now();
+    }
     this.clearIdle();
     try {
       const result = await pending;
@@ -615,11 +622,28 @@ export class AgentHost extends EventEmitter {
       sessionId,
       cwd,
       currentModelId: models && typeof models.currentModelId === "string" ? models.currentModelId : undefined,
+      lastUsedAt: Date.now(),
     };
     if (sessionId) {
       this.sessions.set(sessionId, session);
+      this.pruneLoadedSessions(sessionId);
     }
     return session;
+  }
+
+  /** Close LRU unused sessions when the host is holding too many. */
+  private pruneLoadedSessions(keepId: string): void {
+    if (!this.supportsSessionClose || this.sessions.size <= MAX_LOADED_SESSIONS) {
+      return;
+    }
+    const loaded = [...this.sessions.values()].map((session) => ({
+      sessionId: session.sessionId,
+      lastUsedAt: session.lastUsedAt,
+    }));
+    const busyIds = new Set(this.prompts.keys());
+    for (const sessionId of sessionsToPrune(loaded, { keepId, busyIds, max: MAX_LOADED_SESSIONS })) {
+      void this.closeSession(sessionId);
+    }
   }
 
   private onNotification(method: string, params: Record<string, unknown>): void {
@@ -670,12 +694,28 @@ export class AgentHost extends EventEmitter {
       return;
     }
     this.idleTimer = setTimeout(() => {
-      if (!this.busy) {
-        this.log(`[${this.kind}] host idle for ${HOST_IDLE_MINUTES} min, stopping`);
-        this.kill();
-      }
+      void this.onIdleTimeout();
     }, HOST_IDLE_MINUTES * 60_000);
     this.idleTimer.unref();
+  }
+
+  /** Release loaded sessions (when advertised) then stop the process. */
+  private async onIdleTimeout(): Promise<void> {
+    if (this.busy || this.exited) {
+      return;
+    }
+    this.log(`[${this.kind}] host idle for ${HOST_IDLE_MINUTES} min, stopping`);
+    if (shouldCloseSessionsBeforeIdleKill(this.supportsSessionClose, this.sessions.size)) {
+      for (const sessionId of [...this.sessions.keys()]) {
+        if (this.busy || this.exited) {
+          return;
+        }
+        await this.closeSession(sessionId);
+      }
+    }
+    if (!this.busy && !this.exited) {
+      this.kill();
+    }
   }
 
   private clearIdle(): void {

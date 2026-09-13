@@ -45,6 +45,8 @@ import {
 } from "./agents";
 import { remoteCwdPreflight, remoteDevicePreflight } from "./remote-preflight";
 import { localPreflightFailure, shouldAttemptWarm, warmFallbackStatus } from "./run-start";
+import { CANCEL_GRACE_MS, FORCE_CANCEL_GRACE_MS, warmCancelAfterSoftGrace } from "./cancel-escalation";
+import { pendingPermissionView, settlePermissionHead } from "./permission-queue";
 import { type DelegationConfig, withDelegationPath } from "./delegation";
 import { activeDescendants, nextRunnable } from "./scheduler";
 import {
@@ -67,10 +69,6 @@ const MAX_CACHED_RUNS = 30;
 const SUMMARY_CHARS = 12_000;
 /** How often streamed text is pushed to the UI while the agent is writing. */
 const STREAM_FLUSH_MS = 120;
-/** Soft cancel first; if the turn ignores it, try $/cancel_request then kill (sole-user only). */
-const CANCEL_GRACE_MS = 10_000;
-/** Extra wait after $/cancel_request before taking the host process down. */
-const FORCE_CANCEL_GRACE_MS = 3_000;
 
 interface ActiveRun {
   run: AgentRun;
@@ -214,7 +212,8 @@ export class RunManager extends EventEmitter {
           return;
         }
         const shared = [...this.active.values()].some((other) => other !== active && other.warm?.host === host);
-        if (shared) {
+        const next = warmCancelAfterSoftGrace(shared);
+        if (next.action === "abandon-keep-host") {
           // Drop the wedged prompt locally so the shared host is not stuck busy forever.
           host.abandonPrompt(sessionId);
           this.append(run, "status", "Agent 未及时停止；常驻进程仍保留供其他会话使用。");
@@ -869,12 +868,7 @@ export class RunManager extends EventEmitter {
   }
 
   private settlePermission(state: ActiveRun, optionId: string | null): void {
-    const waiter = state.permissionQueue.shift();
-    if (!waiter) {
-      this.syncPendingPermission(state);
-      return;
-    }
-    waiter.resolve(optionId);
+    settlePermissionHead(state.permissionQueue, optionId);
     this.syncPendingPermission(state);
   }
 
@@ -892,14 +886,13 @@ export class RunManager extends EventEmitter {
 
   /** Publish the head ask (if any) and how many more wait behind it. */
   private syncPendingPermission(state: ActiveRun): void {
-    const head = state.permissionQueue[0];
     const before = state.run.pendingPermission;
     const beforeQueued = state.run.pendingPermissionQueued ?? 0;
-    if (head) {
-      state.run.pendingPermission = head.pending;
-      const queued = state.permissionQueue.length - 1;
-      if (queued > 0) {
-        state.run.pendingPermissionQueued = queued;
+    const view = pendingPermissionView(state.permissionQueue);
+    if (view.pending) {
+      state.run.pendingPermission = view.pending;
+      if (view.queued && view.queued > 0) {
+        state.run.pendingPermissionQueued = view.queued;
       } else {
         delete state.run.pendingPermissionQueued;
       }

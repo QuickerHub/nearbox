@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { AGENT_LABELS, type AgentRun, type HostSnapshot, projectDisplayName, type Task } from "@shared/protocol";
 import { formatRelative } from "../lib/format";
 import {
@@ -48,7 +48,7 @@ interface TaskListProps {
 
 /**
  * Every task is a conversation; this is the list of them. Two boards at the
- * top mirror what needs the user and what is running; below, every task keeps
+ * top mirror what needs the user and what is in progress; below, every task keeps
  * its row in its project's section (or the inbox), so nothing jumps around
  * when a turn starts or ends.
  */
@@ -141,6 +141,7 @@ export function TaskList({ snapshot, seen, selectedTaskId, onSelect, compact }: 
               <span className="task-group__name">需要你</span>
               <span className="task-group__count muted">{attention.length}</span>
             </div>
+            <p className="task-board__hint muted">点开后任务仍在下方列表里，不会搬走。</p>
             {attention.map((item) => (
               <BoardItem
                 key={item.task.id}
@@ -158,9 +159,10 @@ export function TaskList({ snapshot, seen, selectedTaskId, onSelect, compact }: 
         {!searching && running.length ? (
           <section className="task-group task-board">
             <div className="task-group__head">
-              <span className="task-group__name">运行中</span>
+              <span className="task-group__name">进行中</span>
               <span className="task-group__count muted">{running.length}</span>
             </div>
+            <p className="task-board__hint muted">含正在跑和排队；稳定位置仍在下方对应段。</p>
             {running.map((task) => (
               <BoardItem
                 key={task.id}
@@ -208,7 +210,7 @@ export function TaskList({ snapshot, seen, selectedTaskId, onSelect, compact }: 
 }
 
 /** One line: status dot, title, who is on it, when it last moved. The project is the section it sits in. */
-function TaskRow({
+const TaskRow = memo(function TaskRow({
   task,
   active,
   latest,
@@ -237,10 +239,10 @@ function TaskRow({
       <span className="task-row__time">{formatRelative(task.updatedAt)}</span>
     </button>
   );
-}
+});
 
-/** A row on the 需要你 / 运行中 boards: two lines, because these cross projects and say why they are here. */
-function BoardItem({
+/** A row on the 需要你 / 进行中 boards: two lines, because these cross projects and say why they are here. */
+const BoardItem = memo(function BoardItem({
   task,
   run,
   reason,
@@ -250,7 +252,7 @@ function BoardItem({
 }: {
   task: Task;
   run: AgentRun;
-  /** Why the task is on the 需要你 board; undefined on the 运行中 board. */
+  /** Why the task is on the 需要你 board; undefined on the 进行中 board. */
   reason?: AttentionReason;
   projectName?: string;
   selected: boolean;
@@ -278,4 +280,4 @@ function BoardItem({
       </span>
     </button>
   );
-}
+});
