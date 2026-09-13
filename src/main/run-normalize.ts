@@ -20,6 +20,27 @@ export function stripEmptyParentRunId<T extends ParentRunFields>(run: T): T {
   return rest as T;
 }
 
+export type SessionIdFields = { sessionId?: string | null };
+
+/**
+ * Drop null/empty/whitespace-only `sessionId`. A blank id is truthy for
+ * `if (run.sessionId)` and poisons `sessionIdAlongChain` resume (CLI gets "   ").
+ */
+export function stripEmptySessionId<T extends SessionIdFields>(run: T): T {
+  const raw = run.sessionId;
+  if (raw === undefined) {
+    return run;
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    if (raw === raw.trim()) {
+      return run;
+    }
+    return { ...run, sessionId: raw.trim() };
+  }
+  const { sessionId: _drop, ...rest } = run;
+  return rest as T;
+}
+
 export type PermissionStateFields = {
   pendingPermission?: unknown;
   pendingPermissionQueued?: number;
@@ -36,4 +57,3 @@ export function stripTransientPermissionState<T extends PermissionStateFields>(
   const { pendingPermission: _pending, pendingPermissionQueued: _queued, ...rest } = run;
   return rest;
 }
-

@@ -16,7 +16,9 @@ import {
   type Task,
   type TaskNote,
 } from "@shared/protocol";
-import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { stripEmptyParentRunId, stripEmptySessionId, stripTransientPermissionState } from "./run-normalize";
+import { coerceExitCode } from "./store-exit-code";
+import { coerceTaskStatus } from "./store-task-status";
 import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
@@ -160,6 +162,7 @@ function normalizeTask(task: Task): Task {
     ...task,
     details: task.details ?? "",
     priority: task.priority ?? "normal",
+    status: coerceTaskStatus(task.status),
     notes: Array.isArray(task.notes) ? task.notes.map(normalizeNote) : [],
   };
 }
@@ -235,7 +238,11 @@ function normalizeDevice(device: RemoteDevice): RemoteDevice {
 }
 
 function normalizeRun(run: AgentRun): AgentRun {
-  const rest = stripEmptyParentRunId(stripTransientPermissionState(run));
+  const stripped = stripEmptySessionId(stripEmptyParentRunId(stripTransientPermissionState(run)));
+  const { exitCode: _rawExit, ...withoutExit } = stripped as AgentRun & { exitCode?: unknown };
+  const exitCode = coerceExitCode(stripped.exitCode);
+  const rest: AgentRun =
+    exitCode === undefined ? (withoutExit as AgentRun) : { ...(withoutExit as AgentRun), exitCode };
   // Anything that was still in flight when the host died can never finish.
   if (rest.status === "running" || rest.status === "queued") {
     return {
@@ -243,6 +250,7 @@ function normalizeRun(run: AgentRun): AgentRun {
       status: "failed",
       error: rest.error ?? "电脑端在运行期间退出了。",
       finishedAt: rest.finishedAt ?? new Date().toISOString(),
+      eventCount: rest.eventCount ?? 0,
     };
   }
   return { ...rest, eventCount: rest.eventCount ?? 0 };

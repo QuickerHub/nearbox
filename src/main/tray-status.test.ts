@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   countRunStatuses,
+  sanitizeTrayHostLabel,
   trayAgentLabel,
   trayHostLabel,
   trayPhonesLabel,
@@ -34,15 +35,25 @@ test("tray labels stay Chinese and idle when empty", () => {
   assert.equal(trayHostLabel("192.168.1.8", 7788), "192.168.1.8:7788");
 });
 
+test("sanitizeTrayHostLabel rejects URL fragment/query characters", () => {
+  assert.equal(sanitizeTrayHostLabel("192.168.1.8"), "192.168.1.8");
+  assert.equal(sanitizeTrayHostLabel("host#lan"), undefined);
+  assert.equal(sanitizeTrayHostLabel("host?x=1"), undefined);
+  assert.equal(sanitizeTrayHostLabel(""), undefined);
+  assert.equal(sanitizeTrayHostLabel(undefined), undefined);
+  assert.equal(trayHostLabel("pc#1", 7788), "未发现局域网地址");
+  assert.equal(trayHostLabel("pc?x", 7788), "未发现局域网地址");
+});
+
 test("trayStatusSignature changes only when a status row would change", () => {
   const a = trayStatusSignature("192.168.1.8", 7788, 1, 0, 0);
   assert.equal(trayStatusSignature("192.168.1.8", 7788, 1, 0, 0), a);
   assert.notEqual(trayStatusSignature("192.168.1.8", 7788, 1, 1, 0), a);
   assert.notEqual(trayStatusSignature(undefined, 7788, 1, 0, 0), a);
+  assert.equal(trayStatusSignature("h#x", 7788, 1, 0, 0), trayStatusSignature(undefined, 7788, 1, 0, 0));
 });
 
 test("trayTooltip joins Chinese status rows", () => {
   assert.equal(trayTooltip(0, 0, 0), "Nearbox · Agent 空闲 · 没有手机在线");
   assert.equal(trayTooltip(1, 2, 3), "Nearbox · Agent：1 运行中 · 2 排队 · 3 台手机在线");
 });
-

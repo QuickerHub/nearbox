@@ -67,7 +67,13 @@ ${CSHARP}
 [Console]::Out.WriteLine('NB_READY')
 while(($line=[Console]::In.ReadLine()) -ne $null){ [Nb]::Do($line) }`;
 
+/** Drop further stdin writes while the pipe is already backed up. */
+export function shouldAcceptInjectorWrite(writableNeedDrain: boolean): boolean {
+  return !writableNeedDrain;
+}
+
 function powershellPath(): string {
+
   const root = process.env.SystemRoot || process.env.windir || "C:\\Windows";
   return join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 }
@@ -140,8 +146,17 @@ class WindowsInputInjector implements InputSink {
   }
 
   private writeNow(commands: string[]): void {
+    const stdin = this.child?.stdin;
+    if (!stdin || !shouldAcceptInjectorWrite(stdin.writableNeedDrain)) {
+      return;
+    }
     try {
-      this.child?.stdin.write(`${commands.join("\n")}\n`);
+      const ok = stdin.write(`${commands.join("\n")}\n`);
+      // write() returning false means the buffer is full; further floods would
+      // grow Node's queue without bound until PowerShell catches up.
+      if (!ok) {
+        stdin.once("drain", () => undefined);
+      }
     } catch {
       this.teardown();
     }
