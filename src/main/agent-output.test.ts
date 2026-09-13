@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildInvocation, createOutputParser, type ParsedEvent, quoteForCmd, toolKindOf, versionKey } from "./agent-output.ts";
+import {
+  buildInvocation,
+  createOutputParser,
+  formatMsDuration,
+  type ParsedEvent,
+  quoteForCmd,
+  toolKindOf,
+  versionKey,
+} from "./agent-output.ts";
 import type { TokenUsage } from "../shared/usage.ts";
 
 const request = {
@@ -163,7 +171,7 @@ test("cursor-agent stream-json coalesces thinking deltas and surfaces the result
   assert.equal(tools[1]?.tool?.output, "x");
   assert.ok(!all.events.some((event) => event.kind === "status"));
   assert.equal(all.events.at(-1)?.kind, "result");
-  assert.equal(all.events.at(-1)?.text, "完成 · 5s · 30.4k / 256k");
+  assert.equal(all.events.at(-1)?.text, "完成 · 5 秒 · 30.4k / 256k");
   assert.equal(all.usage?.inputTokens, 18420);
   assert.equal(all.usage?.cacheReadTokens, 12000);
   assert.equal(all.usage?.contextWindow, 256_000);
@@ -271,7 +279,7 @@ test("claude result usage is shown as context used / window", () => {
   assert.equal(all.usage?.inputTokens, 2100);
   assert.equal(all.usage?.cacheReadTokens, 18000);
   assert.equal(all.usage?.contextWindow, 200_000);
-  assert.equal(all.events.at(-1)?.text, "完成 · 1s · 20.1k / 200k");
+  assert.equal(all.events.at(-1)?.text, "完成 · 1 秒 · 20.1k / 200k");
 });
 
 test("claude login failure is reported as an error result", () => {
@@ -525,3 +533,11 @@ function collect(parser: ReturnType<typeof createOutputParser>, steps: (() => Re
   usage = tail.usage ?? usage;
   return { events, sessionId, modelLabel, sessionTitle, result, isError, usage };
 }
+
+test("formatMsDuration uses Chinese units", () => {
+  assert.equal(formatMsDuration(400), "400 毫秒");
+  assert.equal(formatMsDuration(1200), "1 秒");
+  assert.equal(formatMsDuration(4835), "5 秒");
+  assert.equal(formatMsDuration(125_000), "2 分 5 秒");
+  assert.equal(formatMsDuration(3_725_000), "1 小时 2 分");
+});
