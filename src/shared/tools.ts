@@ -330,8 +330,35 @@ export function basenameOf(path: string): string {
   return index >= 0 ? cleaned.slice(index + 1) || cleaned : cleaned;
 }
 
+/** First non-empty line, without splitting the whole string. */
 export function firstLine(text: string): string {
-  return text.replace(/\r\n/g, "\n").split("\n").find((line) => line.trim())?.trim() ?? "";
+  let start = 0;
+  const n = text.length;
+  while (start < n) {
+    let end = start;
+    while (end < n) {
+      const code = text.charCodeAt(end);
+      if (code === 10) {
+        break;
+      }
+      if (code === 13 && text.charCodeAt(end + 1) === 10) {
+        break;
+      }
+      end += 1;
+    }
+    const line = text.slice(start, end).trim();
+    if (line) {
+      return line;
+    }
+    if (end < n && text.charCodeAt(end) === 13) {
+      end += 1;
+    }
+    if (end < n && text.charCodeAt(end) === 10) {
+      end += 1;
+    }
+    start = end;
+  }
+  return "";
 }
 
 export function compact(value: unknown): string {
