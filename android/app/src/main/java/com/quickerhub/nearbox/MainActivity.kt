@@ -266,8 +266,13 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "邀请不完整", Toast.LENGTH_SHORT).show()
             return
         }
+        val port = portText?.toIntOrNull() ?: LanScanner.HTTP_PORT
+        if (port !in 1..65535) {
+            Toast.makeText(this, "邀请不完整", Toast.LENGTH_SHORT).show()
+            return
+        }
         binding.hostInput.setText(safeHost)
-        tryOpen(Target(safeHost, portText?.toIntOrNull() ?: LanScanner.HTTP_PORT, tokenValue))
+        tryOpen(Target(safeHost, port, tokenValue))
     }
 
     // ------------------------------------------------------------------ connecting

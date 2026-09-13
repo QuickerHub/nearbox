@@ -82,3 +82,26 @@ export function assertAllowedFile(fileName: string, mediaType: string): void {
     throw Object.assign(new Error("出于安全考虑，不接收可执行文件。"), { code: "FILE_FORBIDDEN" });
   }
 }
+
+/**
+ * Inbox folder leaf for a paired device display name. Never "." / ".." and
+ * never empty, so `join(inboxDir, segment)` cannot climb out of the inbox tree.
+ */
+export function safeInboxSegment(raw: string): string {
+  const cleaned = raw.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").trim() || "phone";
+  const leaf = cleaned.slice(0, 60);
+  return leaf === "." || leaf === ".." ? "phone" : leaf;
+}
+
+/**
+ * Upload `name` query values are already decoded by `URLSearchParams` /
+ * `URL.pathname`. Calling `decodeURIComponent` again breaks names that contain
+ * a literal `%` (e.g. `100%done.jpg` → URIError) or double-decodes `%XX`.
+ */
+export function uploadNameFromQuery(raw: string | null | undefined): string {
+  if (raw == null) {
+    return "file";
+  }
+  const name = String(raw);
+  return name.trim() ? name : "file";
+}
