@@ -27,3 +27,13 @@ test("remoteStatusFieldsMatch skips display lookup when core fields match", () =
   assert.equal(remoteStatusFieldsMatch(base, true, true, 1), false);
   assert.equal(remoteStatusFieldsMatch(null, true, true, 0), false);
 });
+
+test("reuseRemoteStatus adopts next when cache is missing", () => {
+  const next = { ...base, controllers: 4 };
+  assert.equal(reuseRemoteStatus(undefined, next), next);
+  assert.equal(reuseRemoteStatus(null, next), next);
+  const cached = { ...base, display: { width: 1280, height: 720 } };
+  const changedDisplay = { ...base, display: { width: 1920, height: 1080 } };
+  assert.notEqual(reuseRemoteStatus(cached, changedDisplay), cached);
+  assert.equal(remoteStatusSignature(changedDisplay), "1|1|0|1920x1080");
+});

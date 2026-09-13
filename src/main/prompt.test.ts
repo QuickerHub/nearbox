@@ -62,3 +62,24 @@ test("a delegated prompt says who is asking and where to work; follow-ups carry 
   assert.match(first, /项目「nearbox」（D:\\source\\nearbox）/);
   assert.equal(buildDelegatedPrompt("再检查一遍", "Cursor Agent", project, true), "再检查一遍");
 });
+
+test("delegationSection with one target reuses it for both examples", () => {
+  const lines = delegationSection([{ kind: "grok", label: "Grok Build" }], 60);
+  assert.ok(lines.some((line) => line.includes("nearbox ask grok \"")));
+  assert.ok(lines.some((line) => line.includes("nearbox ask grok --file")));
+  assert.ok(lines.some((line) => line.includes("60 秒")));
+});
+
+test("attachmentSection is empty without files and tags images", () => {
+  assert.deepEqual(attachmentSection([], false), []);
+  const local = attachmentSection(
+    [
+      { name: "a.png", path: "C:\\a.png", mediaType: "image/png" },
+      { name: "b.txt", path: "C:\\b.txt", mediaType: "text/plain" },
+    ],
+    false,
+  );
+  assert.equal(local[0], "## 附件（本机路径，可直接读取）");
+  assert.ok(local.some((line) => line.includes("图片：C:\\a.png")));
+  assert.ok(local.some((line) => line.includes("文件：C:\\b.txt")));
+});

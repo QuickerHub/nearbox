@@ -26,3 +26,11 @@ test("compareProjectsByRecency sorts newest first", () => {
   const sorted = [...projects].sort(compareProjectsByRecency);
   assert.deepEqual(sorted.map((p) => p.id), ["b", "a"]);
 });
+
+test("compareProjectsByRecency is stable when timestamps match", () => {
+  const a = { id: "a", createdAt: "2026-01-01T00:00:00.000Z" };
+  const b = { id: "b", createdAt: "2026-01-01T00:00:00.000Z" };
+  assert.equal(compareProjectsByRecency(a, b), 0);
+  assert.equal(projectRecency({ createdAt: "bogus", lastUsedAt: "also-bogus" }), 0);
+  assert.equal(projectRecency({ createdAt: "2026-01-01T00:00:00.000Z", lastUsedAt: "bogus" }), 0, "invalid lastUsedAt does not fall back");
+});

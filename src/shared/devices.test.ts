@@ -20,3 +20,7 @@ test("phonesOnlineLabel matches tray / board Chinese copy", () => {
   assert.equal(phonesOnlineLabel(1), "1 台手机在线");
   assert.equal(phonesOnlineLabel(3), "3 台手机在线");
 });
+
+test("countOnlinePhones treats missing online as offline", () => {
+  assert.equal(countOnlinePhones([{ role: "phone" }, { role: "phone", online: true }]), 1);
+});
