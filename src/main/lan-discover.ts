@@ -4,7 +4,7 @@ import net from "node:net";
 import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import type { DeviceCandidate, DevicePlatform } from "@shared/protocol";
-import { isPrivateLanAddress } from "./network";
+import { isNearbySshConfigHost, isPrivateLanAddress } from "./network";
 
 const SSH_PORT = 22;
 const CONNECT_TIMEOUT_MS = 700;
@@ -92,28 +92,9 @@ export function readSshConfigHosts(): SshConfigHost[] {
   }
 }
 
-/** Tailscale and friends hand out 100.64.0.0/10; those are reachable like a LAN. */
-function isCgnatAddress(address: string): boolean {
-  const parts = address.split(".").map(Number);
-  return parts.length === 4 && parts[0] === 100 && parts[1]! >= 64 && parts[1]! <= 127;
-}
-
-function isIpv4(value: string): boolean {
-  return /^\d{1,3}(\.\d{1,3}){3}$/.test(value);
-}
-
 /** Hosts from ~/.ssh/config that plausibly sit on the local network. */
 export function nearbySshConfigHosts(): SshConfigHost[] {
-  return readSshConfigHosts().filter((host) => {
-    if (host.proxied) {
-      return false;
-    }
-    const name = host.hostName;
-    if (isIpv4(name)) {
-      return isPrivateLanAddress(name) || isCgnatAddress(name);
-    }
-    return !name.includes(".") || name.endsWith(".local") || name.endsWith(".lan");
-  });
+  return readSshConfigHosts().filter(isNearbySshConfigHost);
 }
 
 export interface PortProbe {
