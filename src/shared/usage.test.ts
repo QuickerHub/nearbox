@@ -89,3 +89,34 @@ test("sameUsage compares fields without JSON.stringify", () => {
   assert.equal(sameUsage(a, { ...a, outputTokens: 6 }), false);
   assert.equal(sameUsage(a, mergeUsage(a, { inputTokens: 100, outputTokens: 5 })), true);
 });
+
+test("parseUsage reads _meta / tokenUsage wrappers and stringly numbers", () => {
+  assert.deepEqual(
+    parseUsage({ _meta: { usage: { prompt_tokens: "12", completion_tokens: "3", reasoning_tokens: "7" } } }),
+    { inputTokens: 12, outputTokens: 3, reasoningTokens: 7 },
+  );
+  assert.deepEqual(parseUsage({ tokenUsage: { inputTokens: 9, outputTokens: 1 } }), { inputTokens: 9, outputTokens: 1 });
+  assert.equal(parseUsage({ _meta: { usage: { inputTokens: 0, outputTokens: 0 } } }), undefined);
+});
+
+test("mergeUsage with no previous returns next; contextUsed prefers totalTokens when richer", () => {
+  const next = { inputTokens: 50, outputTokens: 10, totalTokens: 80 };
+  assert.equal(mergeUsage(undefined, next), next);
+  assert.equal(contextUsed(next), 70);
+});
+
+test("inferContextWindow covers more families and sized suffixes", () => {
+  assert.equal(inferContextWindow("claude-sonnet-4-6"), 200_000);
+  assert.equal(inferContextWindow("claude-haiku-4"), 200_000);
+  assert.equal(inferContextWindow("composer-2.5-fast"), 200_000);
+  assert.equal(inferContextWindow("gpt-5-codex"), 256_000);
+  assert.equal(inferContextWindow("window=1m"), 1_000_000);
+  assert.equal(inferContextWindow("ctx: 128k"), 128_000);
+});
+
+test("contextWindowFromModelUsage ignores non-records and empty windows", () => {
+  assert.equal(contextWindowFromModelUsage(null), undefined);
+  assert.equal(contextWindowFromModelUsage({ a: 1 }), undefined);
+  assert.equal(contextWindowFromModelUsage({ a: { contextWindow: 0 }, b: { context_window: 100_000 } }), 100_000);
+});
+

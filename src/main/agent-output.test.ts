@@ -497,6 +497,55 @@ test("non-JSON lines are kept as raw output", () => {
   );
 });
 
+test("ACP plan updates become a todo tool row", () => {
+  const parser = createOutputParser("acp");
+  const all = pushAll(parser, [
+    {
+      sessionUpdate: "plan",
+      entries: [
+        { content: "读代码", status: "completed" },
+        { content: "改测试", status: "in_progress" },
+        { content: "提交", status: "pending" },
+      ],
+    },
+  ]);
+  const plan = all.events.find((event) => event.tool?.name === "plan")?.tool;
+  assert.equal(plan?.kind, "todo");
+  assert.equal(plan?.status, "ok");
+  assert.equal(plan?.subject, "3 项");
+  assert.equal(plan?.output, "☑ 读代码\n◐ 改测试\n☐ 提交");
+});
+
+test("ACP end stopReason cancelled and max_turns are not errors", () => {
+  const cancelled = pushAll(createOutputParser("acp"), [{ sessionUpdate: "end", stopReason: "cancelled" }]);
+  assert.equal(cancelled.isError, false);
+  assert.equal(cancelled.events.at(-1)?.text, "已取消");
+
+  const capped = pushAll(createOutputParser("acp"), [{ sessionUpdate: "end", stopReason: "max_turns" }]);
+  assert.equal(capped.isError, false);
+  assert.match(capped.events.at(-1)?.text ?? "", /^完成/);
+
+  const failed = pushAll(createOutputParser("acp"), [{ sessionUpdate: "end", stopReason: "error" }]);
+  assert.equal(failed.isError, true);
+  assert.match(failed.events.at(-1)?.text ?? "", /结束 \(error\)/);
+});
+
+test("quoteForCmd quotes cmd metacharacters", () => {
+  assert.equal(quoteForCmd("a&b"), '"a&b"');
+  assert.equal(quoteForCmd("a|b"), '"a|b"');
+  assert.equal(quoteForCmd("a<b>"), '"a<b>"');
+  assert.equal(quoteForCmd("100%"), '"100%"');
+  assert.equal(quoteForCmd("a^b"), '"a^b"');
+  assert.equal(quoteForCmd("a(b)"), '"a(b)"');
+});
+
+test("versionKey sorts cursor-agent version folders and ignores junk", () => {
+  assert.ok(versionKey("2026.9.13-12-00-00-abcd") > versionKey("2026.9.12-23-59-59-zzzz"));
+  assert.ok(versionKey("2026.9.13") > versionKey("2026.8.31"));
+  assert.equal(versionKey("not-a-version"), 0);
+  assert.equal(versionKey(""), 0);
+});
+
 function direct() {
   return { file: "tool.exe", prefixArgs: [], display: "", viaCmd: false };
 }
