@@ -690,7 +690,9 @@ export class RunManager extends EventEmitter {
         if (decision.action === "ask") {
           return this.askPermission(state, toolCall, options);
         }
-        const id = String(toolCall.toolCallId ?? "");
+        // tool_call_id is the snake_case form some hosts send on permission requests.
+        const idRaw = toolCall.toolCallId ?? toolCall.tool_call_id;
+        const id = typeof idRaw === "string" ? idRaw.trim() : idRaw != null ? String(idRaw) : "";
         if (decision.rejected && id) {
           this.absorb(
             state,

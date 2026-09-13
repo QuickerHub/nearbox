@@ -544,7 +544,7 @@ export class AgentHost extends EventEmitter {
     this.clearIdle();
     try {
       const result = await pending;
-      return { stopReason: String(result?.stopReason ?? "end_turn"), usage: result?.usage ?? result?._meta };
+      return { stopReason: promptStopReason(result), usage: result?.usage ?? result?._meta };
     } finally {
       this.prompts.delete(sessionId);
       this.touch();
@@ -676,9 +676,7 @@ export class AgentHost extends EventEmitter {
     const sessionId = String(request.params.sessionId ?? "");
     const active = this.prompts.get(sessionId);
     const toolCall = request.params.toolCall && typeof request.params.toolCall === "object" ? (request.params.toolCall as Record<string, unknown>) : {};
-    const options = Array.isArray(request.params.options)
-      ? request.params.options.filter((item): item is PermissionOption => Boolean(item) && typeof item === "object" && typeof (item as PermissionOption).optionId === "string")
-      : [];
+    const options = normalizePermissionOptions(request.params.options);
     let optionId: string | null = null;
     try {
       optionId = active ? await active.handlers.onPermission(toolCall, options) : null;
@@ -847,7 +845,8 @@ export type PermissionDecision = { action: "select"; optionId: string | null; re
 
 /** Allow/deny pair the UI can show; prefers once over always. */
 export function reviewOptions(options: PermissionOption[]): { allow?: PermissionOption; reject?: PermissionOption } {
-  const kinds = new Map(options.map((option) => [option.kind, option]));
+  // Agents mostly use allow_once; a few spell the kind with hyphens like the optionId.
+  const kinds = new Map(options.map((option) => [normalizePermissionKind(option.kind), option]));
   return {
     allow: kinds.get("allow_once") ?? kinds.get("allow_always"),
     reject: kinds.get("reject_once") ?? kinds.get("reject_always"),
@@ -855,8 +854,51 @@ export function reviewOptions(options: PermissionOption[]): { allow?: Permission
 }
 
 export function isExecuteTool(toolCall: Record<string, unknown>): boolean {
-  const kind = String(toolCall.kind ?? "");
-  return kind === "execute" || kind === "shell";
+  // ACP `kind: terminal` is a shell tool; case variants show up in the wild.
+  const kind = String(toolCall.kind ?? "").trim().toLowerCase();
+  return kind === "execute" || kind === "shell" || kind === "terminal";
+}
+
+/** Accept `optionId` or snake_case `option_id`, and keep a usable kind string. */
+export function normalizePermissionOptions(raw: unknown): PermissionOption[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const out: PermissionOption[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const optionId =
+      typeof record.optionId === "string" && record.optionId.trim()
+        ? record.optionId.trim()
+        : typeof record.option_id === "string" && record.option_id.trim()
+          ? record.option_id.trim()
+          : "";
+    if (!optionId) {
+      continue;
+    }
+    const kindRaw = typeof record.kind === "string" ? record.kind : "";
+    const name = typeof record.name === "string" ? record.name : undefined;
+    out.push({ optionId, kind: kindRaw || "allow_once", name });
+  }
+  return out;
+}
+
+function normalizePermissionKind(kind: string): string {
+  return kind.trim().toLowerCase().replace(/-/g, "_");
+}
+
+/** `session/prompt` results: stopReason (ACP) or stop_reason. */
+export function promptStopReason(result: Record<string, unknown> | null | undefined): string {
+  if (result && typeof result.stopReason === "string" && result.stopReason.trim()) {
+    return result.stopReason.trim();
+  }
+  if (result && typeof result.stop_reason === "string" && result.stop_reason.trim()) {
+    return result.stop_reason.trim();
+  }
+  return "end_turn";
 }
 
 /**
