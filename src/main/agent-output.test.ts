@@ -488,6 +488,20 @@ test("partial flushes stream text as deltas without losing the whole answer", ()
   assert.equal(tail.result, "Done.");
 });
 
+test("ACP session_update snake_case and soft-stop leftovers", () => {
+  const parser = createOutputParser("acp");
+  const chunk = pushAll(parser, [{ session_update: "agent_message_chunk", content: { type: "text", text: "hi" } }]);
+  assert.equal(chunk.events.some((event) => event.kind === "text" && event.text === "hi"), true);
+
+  const blank = pushAll(createOutputParser("acp"), [{ sessionUpdate: "end", stopReason: "   " }]);
+  assert.equal(blank.isError, false);
+  assert.match(blank.events.at(-1)?.text ?? "", /^完成/);
+
+  const capped = pushAll(createOutputParser("acp"), [{ sessionUpdate: "end", stopReason: "max_request" }]);
+  assert.equal(capped.isError, false);
+  assert.match(capped.events.at(-1)?.text ?? "", /已达轮次上限/);
+});
+
 test("non-JSON lines are kept as raw output", () => {
   const parser = createOutputParser("codex");
   const all = feedAll(parser, ["warning: something odd", "{not json"]);

@@ -223,7 +223,7 @@ export class AcpConnection extends EventEmitter {
     }
     const hasId = typeof message.id === "number" || typeof message.id === "string";
     if (typeof message.method === "string") {
-      const params = message.params && typeof message.params === "object" ? (message.params as Record<string, unknown>) : {};
+      const params = rpcParamsOf(message.params);
       if (hasId) {
         this.emit("request", { id: message.id as number | string, method: message.method, params } satisfies RpcIncomingRequest);
       } else {
@@ -243,15 +243,45 @@ export class AcpConnection extends EventEmitter {
       if (entry.timer) {
         clearTimeout(entry.timer);
       }
-      if (message.error && typeof message.error === "object") {
-        const error = message.error as Partial<JsonRpcError>;
-        const detail = error.data && typeof error.data === "object" && typeof (error.data as { message?: unknown }).message === "string" ? (error.data as { message: string }).message : undefined;
-        entry.reject(new RpcError(Number(error.code ?? -1), detail ?? String(error.message ?? "请求失败"), error.data));
+      if (message.error !== undefined && message.error !== null) {
+        entry.reject(rpcErrorOf(message.error));
       } else {
         entry.resolve(message.result);
       }
     }
   }
+}
+
+/** JSON-RPC params: object, or a JSON object string some stacks send. */
+export function rpcParamsOf(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw === "string" && raw.trim().startsWith("{")) {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Fall through to empty params.
+    }
+  }
+  return {};
+}
+
+/** Turn a JSON-RPC `error` field (object or primitive) into an RpcError. */
+export function rpcErrorOf(error: unknown): RpcError {
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    const record = error as Partial<JsonRpcError>;
+    const detail =
+      record.data && typeof record.data === "object" && typeof (record.data as { message?: unknown }).message === "string"
+        ? (record.data as { message: string }).message
+        : undefined;
+    return new RpcError(Number(record.code ?? -1), detail ?? String(record.message ?? "请求失败"), record.data);
+  }
+  // A few stacks send a bare string/number instead of `{ code, message }`.
+  return new RpcError(-1, error === undefined || error === null ? "请求失败" : String(error));
 }
 
 // ---------------------------------------------------------------------------
@@ -675,7 +705,7 @@ export class AgentHost extends EventEmitter {
   private async answerPermission(request: RpcIncomingRequest): Promise<void> {
     const sessionId = String(request.params.sessionId ?? "");
     const active = this.prompts.get(sessionId);
-    const toolCall = request.params.toolCall && typeof request.params.toolCall === "object" ? (request.params.toolCall as Record<string, unknown>) : {};
+    const toolCall = permissionToolCallOf(request.params);
     const options = Array.isArray(request.params.options)
       ? request.params.options.filter((item): item is PermissionOption => Boolean(item) && typeof item === "object" && typeof (item as PermissionOption).optionId === "string")
       : [];
@@ -874,8 +904,18 @@ export function choosePermission(access: AgentAccess, toolCall: Record<string, u
   return { action: "select", optionId: reject?.optionId ?? null, rejected: true };
 }
 
+/**
+ * Permission request body: camelCase `toolCall` or snake_case `tool_call`.
+ * Missing this made safe-mode shell asks look like file edits (auto-allow).
+ */
+export function permissionToolCallOf(params: Record<string, unknown>): Record<string, unknown> {
+  const raw = params.toolCall ?? params.tool_call;
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+}
+
 export function describePermission(toolCall: Record<string, unknown>): { toolCallId: string; title: string; command?: string } {
-  const raw = toolCall.rawInput && typeof toolCall.rawInput === "object" ? (toolCall.rawInput as Record<string, unknown>) : {};
+  const rawCandidate = toolCall.rawInput ?? toolCall.raw_input;
+  const raw = rawCandidate && typeof rawCandidate === "object" && !Array.isArray(rawCandidate) ? (rawCandidate as Record<string, unknown>) : {};
   const command = [raw.command, toolCall.command, raw.commandLine].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim();
   const title = [toolCall.title, command, toolCall.kind].find((value): value is string => typeof value === "string" && value.trim().length > 0)?.trim() ?? "命令";
   return { toolCallId: String(toolCall.toolCallId ?? ""), title, command };
