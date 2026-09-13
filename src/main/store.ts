@@ -8,7 +8,6 @@ import {
   type AgentRun,
   DEFAULT_SETTINGS,
   type DeviceInfo,
-  type FileMeta,
   type HostSettings,
   type IdeModelPref,
   type Project,
@@ -17,6 +16,9 @@ import {
   type TaskNote,
 } from "@shared/protocol";
 import { stripEmptyParentRunId, stripTransientPermissionState } from "./run-normalize";
+import { sanitizeDeviceAgents, coerceDevicePort } from "./store-device-agents";
+import { normalizeNoteRow } from "./store-note-normalize";
+import { coerceTaskPriority } from "./store-priority";
 import { enqueueWrite } from "./write-chain";
 
 export interface PairedSession {
@@ -156,21 +158,21 @@ export class Store {
 }
 
 function normalizeTask(task: Task): Task {
+  const notes: TaskNote[] = [];
+  if (Array.isArray(task.notes)) {
+    for (const item of task.notes) {
+      const note = normalizeNoteRow(item);
+      if (note) {
+        notes.push(note as TaskNote);
+      }
+    }
+  }
   return {
     ...task,
     details: task.details ?? "",
-    priority: task.priority ?? "normal",
-    notes: Array.isArray(task.notes) ? task.notes.map(normalizeNote) : [],
+    priority: coerceTaskPriority(task.priority),
+    notes,
   };
-}
-
-/** Notes written before messages could carry several files had a single `file`. */
-function normalizeNote(note: TaskNote & { file?: FileMeta }): TaskNote {
-  const { file, ...rest } = note;
-  if (!file) {
-    return rest;
-  }
-  return { ...rest, files: Array.isArray(rest.files) && rest.files.length ? rest.files : [file] };
 }
 
 /** Only well-formed catalogs survive a reload; anything odd is simply fetched again. */
@@ -225,13 +227,20 @@ function normalizeCatalogs(value: unknown): Partial<Record<AgentKind, ModelCatal
 
 function normalizeDevice(device: RemoteDevice): RemoteDevice {
   // Whether it is reachable is re-established on demand; what it reported last time is still useful.
-  return {
+  const port = coerceDevicePort(device.port);
+  const next: RemoteDevice = {
     ...device,
     platform: device.platform ?? "unknown",
     status: "unknown",
     error: undefined,
-    agents: Array.isArray(device.agents) ? device.agents : [],
+    agents: sanitizeDeviceAgents(device.agents) as RemoteDevice["agents"],
   };
+  if (port === undefined) {
+    delete next.port;
+  } else {
+    next.port = port;
+  }
+  return next;
 }
 
 function normalizeRun(run: AgentRun): AgentRun {

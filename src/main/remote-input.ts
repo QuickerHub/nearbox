@@ -277,11 +277,16 @@ export function clampQuality(
   patch: Partial<RemoteQuality> | undefined,
   base: RemoteQuality,
 ): RemoteQuality {
+  // A poisoned in-memory base (NaN from an older parse path) must not stick when
+  // the client omits a field — fall back to the same defaults clampInt would use.
+  const safeQuality = Number.isFinite(base.quality) ? base.quality : 72;
+  const safeFps = Number.isFinite(base.fps) ? base.fps : 12;
+  const safeMaxWidth = Number.isFinite(base.maxWidth) ? base.maxWidth : 1920;
   const crop = patch && "crop" in patch ? clampCrop(patch.crop) : base.crop;
   const next: RemoteQuality = {
-    quality: patch?.quality === undefined ? base.quality : clampInt(patch.quality, 20, 95, base.quality),
-    fps: patch?.fps === undefined ? base.fps : clampInt(patch.fps, 1, 30, base.fps),
-    maxWidth: patch?.maxWidth === undefined ? base.maxWidth : clampInt(patch.maxWidth, 480, 3840, base.maxWidth),
+    quality: patch?.quality === undefined ? safeQuality : clampInt(patch.quality, 20, 95, safeQuality),
+    fps: patch?.fps === undefined ? safeFps : clampInt(patch.fps, 1, 30, safeFps),
+    maxWidth: patch?.maxWidth === undefined ? safeMaxWidth : clampInt(patch.maxWidth, 480, 3840, safeMaxWidth),
   };
   if (crop) {
     next.crop = crop;

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { join } from "node:path";
+import { resolvePowershellPath } from "./powershell-home.ts";
 
 /**
  * Injects mouse/keyboard input into the local desktop. On Windows this drives a
@@ -68,8 +68,7 @@ ${CSHARP}
 while(($line=[Console]::In.ReadLine()) -ne $null){ [Nb]::Do($line) }`;
 
 function powershellPath(): string {
-  const root = process.env.SystemRoot || process.env.windir || "C:\\Windows";
-  return join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  return resolvePowershellPath();
 }
 
 class WindowsInputInjector implements InputSink {

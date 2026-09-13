@@ -3,6 +3,7 @@ import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { AppUpdateStatus } from "@shared/protocol";
 import { isNewerVersion, stripTagPrefix } from "../shared/version.ts";
+import { coerceReleaseNotes, resolveReleaseHtmlUrl } from "./updater-html-url.ts";
 
 export const DEFAULT_RELEASE_REPO = "QuickerHub/nearbox";
 const STALE_MS = 60 * 60 * 1000;
@@ -47,8 +48,8 @@ export function statusFromRelease(release: GithubRelease, current: string, packa
     current,
     latest,
     newer: latest ? isNewerVersion(latest, current) : false,
-    notes: (release.body ?? "").trim().slice(0, 400),
-    htmlUrl: release.html_url ?? RELEASES_PAGE,
+    notes: coerceReleaseNotes(release.body),
+    htmlUrl: resolveReleaseHtmlUrl(release.html_url, RELEASES_PAGE),
     exeUrl: assets.exeUrl,
     apkUrl: assets.apkUrl,
     packaged,
